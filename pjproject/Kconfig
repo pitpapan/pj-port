@@ -1,0 +1,13 @@
+menuconfig PJPROJECT
+	bool "PJPROJECT"
+	help
+	  Enable PJPROJECT components for Zephyr applications.
+
+if PJPROJECT
+
+config PJLIB
+	bool "PJLIB"
+	help
+	  Enable the PJLIB base library.
+
+endif # PJPROJECT

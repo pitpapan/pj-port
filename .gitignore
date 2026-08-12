@@ -2,3 +2,5 @@ build-phase0-mimxrt1064
 build-phase0-qemu
 build-stage2-qemu
 build-stage2-mimxrt1064
+build-stage3-enabled
+build-stage3-disabled

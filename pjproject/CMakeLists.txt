@@ -1,3 +1,14 @@
+if(DEFINED ZEPHYR_BASE)
+  if(CONFIG_PJPROJECT AND CONFIG_PJLIB)
+    message(STATUS "PJPROJECT Zephyr module: PJLIB enabled")
+    # Stage 3 integration marker. Stage 4 replaces this with the PJLIB
+    # library target and its explicit source list.
+    add_custom_target(pjlib)
+  endif()
+
+  return()
+endif()
+
 cmake_minimum_required(VERSION 3.28...4.0)
 
 # Read version from version.mak
