@@ -69,6 +69,10 @@
 #  include <fcntl.h>
 #endif
 
+#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+#  include <zephyr/kernel.h>
+#endif
+
 #define THIS_FILE   "os_core_unix.c"
 
 #define SIGNATURE1  0xDEAFBEEF
@@ -189,6 +193,26 @@ static int initialized;
     static pj_thread_desc main_thread_desc;
     static long thread_tls_id;
     static pj_mutex_t critical_section;
+#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+    /* Zephyr's pthread TLS only accepts pthread-created threads, while PJLIB
+     * must also register the kernel-created application main thread. Keep a
+     * PJLIB-owned table keyed by the native thread and invalidate values with
+     * generations when a TLS key is reused.
+     */
+#   define PJ_ZEPHYR_TLS_MAX_KEYS 32
+#   define PJ_ZEPHYR_TLS_MAX_THREADS 16
+    struct zephyr_tls_thread
+    {
+        k_tid_t thread;
+        void *values[PJ_ZEPHYR_TLS_MAX_KEYS];
+        unsigned value_generation[PJ_ZEPHYR_TLS_MAX_KEYS];
+    };
+    static struct k_spinlock zephyr_tls_lock;
+    static unsigned long zephyr_tls_keys;
+    static unsigned zephyr_tls_generation[PJ_ZEPHYR_TLS_MAX_KEYS];
+    static struct zephyr_tls_thread
+        zephyr_tls_threads[PJ_ZEPHYR_TLS_MAX_THREADS];
+#endif
 #else
 #   define MAX_THREADS 32
     static int tls_flag[MAX_THREADS];
@@ -199,6 +223,9 @@ static unsigned atexit_count;
 static void (*atexit_func[32])(void);
 
 static pj_status_t init_mutex(pj_mutex_t *mutex, const char *name, int type);
+#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+static void zephyr_tls_clear_thread(void);
+#endif
 /*
  * pj_init(void).
  * Init PJLIB!
@@ -315,6 +342,10 @@ PJ_DEF(void) pj_shutdown()
         pj_thread_local_free(thread_tls_id);
         thread_tls_id = -1;
     }
+
+#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+    zephyr_tls_clear_thread();
+#endif
 
     /* Ticket #1132: Assertion when (re)starting PJLIB on different thread */
     pj_bzero(main_thread_desc, sizeof(pj_thread_desc));
@@ -786,6 +817,10 @@ static void *thread_main(void *param)
     /* Done. */
     PJ_LOG(6,(rec->obj_name, "Thread quitting"));
 
+#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+    zephyr_tls_clear_thread();
+#endif
+
     return result;
 }
 
@@ -1067,8 +1102,13 @@ PJ_DEF(pj_status_t) pj_thread_unregister()
         return status;
     //else if ((result = pthread_detach(rec->thread)) != 0)
     //    return PJ_RETURN_OS_ERROR(result);
-    else
-        return pj_thread_local_set(thread_tls_id, NULL);
+    else {
+        status = pj_thread_local_set(thread_tls_id, NULL);
+#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+        zephyr_tls_clear_thread();
+#endif
+        return status;
+    }
 #else
     pj_assert(!"No multithreading support!");
     return PJ_EINVALIDOP;
@@ -1410,6 +1450,29 @@ PJ_DEF(void) pj_atomic_add( pj_atomic_t *atomic_var,
 PJ_DEF(pj_status_t) pj_thread_local_alloc(long *p_index)
 {
 #if PJ_HAS_THREADS
+#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+    unsigned i;
+    k_spinlock_key_t lock_key;
+
+    PJ_ASSERT_RETURN(p_index != NULL, PJ_EINVAL);
+
+    lock_key = k_spin_lock(&zephyr_tls_lock);
+    for (i = 0; i < PJ_ZEPHYR_TLS_MAX_KEYS; ++i) {
+        unsigned long bit = 1UL << i;
+
+        if ((zephyr_tls_keys & bit) == 0) {
+            zephyr_tls_keys |= bit;
+            if (++zephyr_tls_generation[i] == 0)
+                ++zephyr_tls_generation[i];
+            *p_index = (long)i;
+            k_spin_unlock(&zephyr_tls_lock, lock_key);
+            return PJ_SUCCESS;
+        }
+    }
+
+    k_spin_unlock(&zephyr_tls_lock, lock_key);
+    return PJ_ETOOMANY;
+#else
     pthread_key_t key;
     int rc;
 
@@ -1421,6 +1484,7 @@ PJ_DEF(pj_status_t) pj_thread_local_alloc(long *p_index)
 
     *p_index = key;
     return PJ_SUCCESS;
+#endif
 #else
     int i;
     for (i=0; i<MAX_THREADS; ++i) {
@@ -1445,7 +1509,19 @@ PJ_DEF(void) pj_thread_local_free(long index)
 {
     PJ_CHECK_STACK();
 #if PJ_HAS_THREADS
+#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+    if (index >= 0 && index < PJ_ZEPHYR_TLS_MAX_KEYS) {
+        unsigned long bit = 1UL << index;
+        k_spinlock_key_t lock_key = k_spin_lock(&zephyr_tls_lock);
+
+        if (++zephyr_tls_generation[index] == 0)
+            ++zephyr_tls_generation[index];
+        zephyr_tls_keys &= ~bit;
+        k_spin_unlock(&zephyr_tls_lock, lock_key);
+    }
+#else
     pthread_key_delete(index);
+#endif
 #else
     tls_flag[index] = 0;
 #endif
@@ -1460,8 +1536,50 @@ PJ_DEF(pj_status_t) pj_thread_local_set(long index, void *value)
     //beginning before main thread is initialized.
     //PJ_CHECK_STACK();
 #if PJ_HAS_THREADS
+#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+    struct zephyr_tls_thread *entry = NULL;
+    k_tid_t current;
+    k_spinlock_key_t lock_key;
+    unsigned i;
+
+    if (index < 0 || index >= PJ_ZEPHYR_TLS_MAX_KEYS)
+        return PJ_EINVAL;
+
+    current = k_current_get();
+    lock_key = k_spin_lock(&zephyr_tls_lock);
+    if ((zephyr_tls_keys & (1UL << index)) == 0) {
+        k_spin_unlock(&zephyr_tls_lock, lock_key);
+        return PJ_EINVAL;
+    }
+
+    for (i = 0; i < PJ_ZEPHYR_TLS_MAX_THREADS; ++i) {
+        if (zephyr_tls_threads[i].thread == current) {
+            entry = &zephyr_tls_threads[i];
+            break;
+        }
+        if (!entry && zephyr_tls_threads[i].thread == NULL)
+            entry = &zephyr_tls_threads[i];
+    }
+
+    if (!entry) {
+        k_spin_unlock(&zephyr_tls_lock, lock_key);
+        return PJ_ETOOMANY;
+    }
+
+    if (entry->thread == NULL) {
+        entry->thread = current;
+        pj_bzero(entry->values, sizeof(entry->values));
+        pj_bzero(entry->value_generation, sizeof(entry->value_generation));
+    }
+
+    entry->values[index] = value;
+    entry->value_generation[index] = zephyr_tls_generation[index];
+    k_spin_unlock(&zephyr_tls_lock, lock_key);
+    return PJ_SUCCESS;
+#else
     int rc=pthread_setspecific(index, value);
     return rc==0 ? PJ_SUCCESS : PJ_RETURN_OS_ERROR(rc);
+#endif
 #else
     pj_assert(index >= 0 && index < MAX_THREADS);
     tls[index] = value;
@@ -1475,12 +1593,62 @@ PJ_DEF(void*) pj_thread_local_get(long index)
     //by PJ_CHECK_STACK() itself!!!
     //PJ_CHECK_STACK();
 #if PJ_HAS_THREADS
+#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+    k_tid_t current;
+    k_spinlock_key_t lock_key;
+    void *value = NULL;
+    unsigned i;
+
+    if (index < 0 || index >= PJ_ZEPHYR_TLS_MAX_KEYS)
+        return NULL;
+
+    current = k_current_get();
+    lock_key = k_spin_lock(&zephyr_tls_lock);
+    if ((zephyr_tls_keys & (1UL << index)) != 0) {
+        for (i = 0; i < PJ_ZEPHYR_TLS_MAX_THREADS; ++i) {
+            struct zephyr_tls_thread *entry = &zephyr_tls_threads[i];
+
+            if (entry->thread == current &&
+                entry->value_generation[index] ==
+                    zephyr_tls_generation[index])
+            {
+                value = entry->values[index];
+                break;
+            }
+        }
+    }
+    k_spin_unlock(&zephyr_tls_lock, lock_key);
+    return value;
+#else
     return pthread_getspecific(index);
+#endif
 #else
     pj_assert(index >= 0 && index < MAX_THREADS);
     return tls[index];
 #endif
 }
+
+#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+static void zephyr_tls_clear_thread(void)
+{
+    k_tid_t current = k_current_get();
+    k_spinlock_key_t lock_key = k_spin_lock(&zephyr_tls_lock);
+    unsigned i;
+
+    for (i = 0; i < PJ_ZEPHYR_TLS_MAX_THREADS; ++i) {
+        struct zephyr_tls_thread *entry = &zephyr_tls_threads[i];
+
+        if (entry->thread == current) {
+            entry->thread = NULL;
+            pj_bzero(entry->values, sizeof(entry->values));
+            pj_bzero(entry->value_generation, sizeof(entry->value_generation));
+            break;
+        }
+    }
+
+    k_spin_unlock(&zephyr_tls_lock, lock_key);
+}
+#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 PJ_DEF(void) pj_enter_critical_section(void)

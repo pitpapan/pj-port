@@ -7,6 +7,8 @@ int posix_probe_run(void);
 
 int main(void)
 {
+	pj_status_t status;
+
 	printk("PJLIB minimal Zephyr application started\n");
 
 #if defined(CONFIG_PJLIB_STAGE5_PROBE)
@@ -17,5 +19,16 @@ int main(void)
 
 	printk("Stage 5 POSIX runtime probes: PASSED\n");
 #endif
+
+	status = pj_init();
+	if (status != PJ_SUCCESS) {
+		printk("PJLIB initialization failed: %d\n", status);
+		return 1;
+	}
+
+	printk("PJLIB initialization successful\n");
+	pj_shutdown();
+	printk("PJLIB shutdown successful\n");
+
 	return 0;
 }
