@@ -34,6 +34,10 @@
 
 #endif
 
+#if defined(PJ_HAS_STRINGS_H) && PJ_HAS_STRINGS_H != 0
+#   include <strings.h>
+#endif
+
 /* For sprintf family */
 #include <stdio.h>
 

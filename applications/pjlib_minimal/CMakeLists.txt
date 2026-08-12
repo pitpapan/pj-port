@@ -8,3 +8,4 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(pjlib_minimal)
 
 target_sources(app PRIVATE src/main.c)
+target_sources_ifdef(CONFIG_PJLIB_STAGE5_PROBE app PRIVATE src/posix_probe.c)

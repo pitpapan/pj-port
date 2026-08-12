@@ -61,7 +61,11 @@ const pj_uint16_t PJ_AF_IRDA    = 0xFFFF;
 const pj_uint16_t PJ_SOCK_STREAM= SOCK_STREAM;
 const pj_uint16_t PJ_SOCK_DGRAM = SOCK_DGRAM;
 const pj_uint16_t PJ_SOCK_RAW   = SOCK_RAW;
+#ifdef SOCK_RDM
 const pj_uint16_t PJ_SOCK_RDM   = SOCK_RDM;
+#else
+const pj_uint16_t PJ_SOCK_RDM   = 0xFFFF;
+#endif
 
 #if defined(SOCK_CLOEXEC)
 const int PJ_SOCK_CLOEXEC = SOCK_CLOEXEC;
@@ -202,9 +206,17 @@ const pj_uint16_t PJ_IP_DROP_MEMBERSHIP = 0xFFFF;
 #endif
 
 /* recv() and send() flags */
+#ifdef MSG_OOB
 const int PJ_MSG_OOB            = MSG_OOB;
+#else
+const int PJ_MSG_OOB            = 0xFFFF;
+#endif
 const int PJ_MSG_PEEK           = MSG_PEEK;
+#ifdef MSG_DONTROUTE
 const int PJ_MSG_DONTROUTE      = MSG_DONTROUTE;
+#else
+const int PJ_MSG_DONTROUTE      = 0xFFFF;
+#endif
 
 
 #if 0
@@ -953,5 +965,4 @@ PJ_DEF(pj_status_t) pj_sock_accept( pj_sock_t serverfd,
     }
 }
 #endif  /* PJ_HAS_TCP */
-
 

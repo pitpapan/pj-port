@@ -116,6 +116,15 @@
 #   define PJ_WIN32 1
 #   include <pj/compat/os_win32.h>
 
+#elif (defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0) || defined(__ZEPHYR__)
+    /*
+     * Zephyr RTOS. Reusing POSIX/BSD implementation files does not make the
+     * target Linux or another Unix platform.
+     */
+#   undef PJ_ZEPHYR
+#   define PJ_ZEPHYR        1
+#   include <pj/compat/os_zephyr.h>
+
 #elif defined(PJ_LINUX) || defined(linux) || defined(__linux)
     /*
      * Linux
@@ -1751,4 +1760,3 @@ PJ_END_DECL
 
 
 #endif  /* __PJ_CONFIG_H__ */
-

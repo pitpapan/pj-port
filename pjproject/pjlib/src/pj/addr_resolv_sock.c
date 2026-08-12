@@ -41,6 +41,7 @@
 
 PJ_DEF(pj_status_t) pj_gethostbyname(const pj_str_t *hostname, pj_hostent *phe)
 {
+#if !defined(PJ_HAS_GETHOSTBYNAME) || PJ_HAS_GETHOSTBYNAME!=0
     struct hostent *he;
     char copy[PJ_MAX_HOSTNAME];
 
@@ -68,6 +69,72 @@ PJ_DEF(pj_status_t) pj_gethostbyname(const pj_str_t *hostname, pj_hostent *phe)
     phe->h_addr_list = he->h_addr_list;
 
     return PJ_SUCCESS;
+#elif defined(PJ_SOCK_HAS_GETADDRINFO) && PJ_SOCK_HAS_GETADDRINFO!=0
+    enum { MAX_ADDRESSES = 8 };
+    static char canonical_name[PJ_MAX_HOSTNAME];
+    static struct in_addr addresses[MAX_ADDRESSES];
+    static char *address_list[MAX_ADDRESSES + 1];
+    static char *alias_list[1];
+    struct addrinfo hint, *result, *item;
+    char copy[PJ_MAX_HOSTNAME];
+    unsigned count = 0;
+    int rc;
+
+    PJ_ASSERT_RETURN(hostname && phe, PJ_EINVAL);
+    if (!hostname->ptr || hostname->slen >= PJ_MAX_HOSTNAME)
+        return hostname->slen >= PJ_MAX_HOSTNAME ? PJ_ENAMETOOLONG : PJ_EINVAL;
+
+    pj_memcpy(copy, hostname->ptr, hostname->slen);
+    copy[hostname->slen] = '\0';
+
+    pj_bzero(&hint, sizeof(hint));
+    hint.ai_family = AF_INET;
+    hint.ai_socktype = SOCK_STREAM;
+    hint.ai_flags = AI_CANONNAME;
+
+    rc = getaddrinfo(copy, NULL, &hint, &result);
+    if (rc != 0)
+        return PJ_ERESOLVE;
+
+    pj_ansi_strxcpy(canonical_name, copy, sizeof(canonical_name));
+    for (item = result; item && count < MAX_ADDRESSES; item = item->ai_next) {
+        const struct sockaddr_in *address;
+
+        if (item->ai_family != AF_INET ||
+            item->ai_addrlen < sizeof(struct sockaddr_in))
+        {
+            continue;
+        }
+
+        if (count == 0 && item->ai_canonname) {
+            pj_ansi_strxcpy(canonical_name, item->ai_canonname,
+                            sizeof(canonical_name));
+        }
+
+        address = (const struct sockaddr_in *)item->ai_addr;
+        addresses[count] = address->sin_addr;
+        address_list[count] = (char *)&addresses[count];
+        ++count;
+    }
+    address_list[count] = NULL;
+    alias_list[0] = NULL;
+    freeaddrinfo(result);
+
+    if (count == 0)
+        return PJ_ERESOLVE;
+
+    phe->h_name = canonical_name;
+    phe->h_aliases = alias_list;
+    phe->h_addrtype = AF_INET;
+    phe->h_length = sizeof(struct in_addr);
+    phe->h_addr_list = address_list;
+
+    return PJ_SUCCESS;
+#else
+    PJ_UNUSED_ARG(hostname);
+    PJ_UNUSED_ARG(phe);
+    return PJ_ENOTSUP;
+#endif
 }
 
 /* Resolve IPv4/IPv6 address */
@@ -562,4 +629,3 @@ PJ_DEF(pj_status_t) pj_getaddrinfo(int af, const pj_str_t *nodename,
     }
 #endif  /* PJ_SOCK_HAS_GETADDRINFO */
 }
-

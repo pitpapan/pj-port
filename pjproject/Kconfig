@@ -10,4 +10,11 @@ config PJLIB
 	help
 	  Enable the PJLIB base library.
 
+config PJLIB_STAGE5_PROBE
+	bool "PJLIB Stage 5 POSIX capability probe"
+	depends on !PJLIB
+	help
+	  Build the isolated compile-time and runtime POSIX capability probe used
+	  during PJLIB Zephyr port development.
+
 endif # PJPROJECT

@@ -1,9 +1,70 @@
 if(DEFINED ZEPHYR_BASE)
   if(CONFIG_PJPROJECT AND CONFIG_PJLIB)
     message(STATUS "PJPROJECT Zephyr module: PJLIB enabled")
-    # Stage 3 integration marker. Stage 4 replaces this with the PJLIB
-    # library target and its explicit source list.
-    add_custom_target(pjlib)
+
+    # Portable PJLIB core. Keep this list explicit so platform backends cannot
+    # be pulled in accidentally as new files are added upstream.
+    set(PJLIB_COMMON_SOURCES
+      pjlib/src/pj/activesock.c
+      pjlib/src/pj/array.c
+      pjlib/src/pj/atomic_slist.c
+      pjlib/src/pj/atomic_queue.cpp
+      pjlib/src/pj/config.c
+      pjlib/src/pj/ctype.c
+      pjlib/src/pj/errno.c
+      pjlib/src/pj/except.c
+      pjlib/src/pj/fifobuf.c
+      pjlib/src/pj/guid.c
+      pjlib/src/pj/hash.c
+      pjlib/src/pj/ip_helper_generic.c
+      pjlib/src/pj/list.c
+      pjlib/src/pj/lock.c
+      pjlib/src/pj/log.c
+      pjlib/src/pj/os_info.c
+      pjlib/src/pj/os_time_common.c
+      pjlib/src/pj/os_timestamp_common.c
+      pjlib/src/pj/pool.c
+      pjlib/src/pj/pool_buf.c
+      pjlib/src/pj/pool_caching.c
+      pjlib/src/pj/pool_dbg.c
+      pjlib/src/pj/rand.c
+      pjlib/src/pj/rbtree.c
+      pjlib/src/pj/sock_common.c
+      pjlib/src/pj/sock_qos_common.c
+      pjlib/src/pj/ssl_sock_common.c
+      pjlib/src/pj/string.c
+      pjlib/src/pj/timer.c
+      pjlib/src/pj/types.c
+      pjlib/src/pj/unittest.c
+    )
+
+    # One implementation is selected for each platform-dependent family.
+    # Stage 4 deliberately starts with PJLIB's existing POSIX/BSD backends;
+    # Stage 5 will supply and validate the Zephyr platform configuration.
+    set(PJLIB_PLATFORM_SOURCES
+      pjlib/src/pj/addr_resolv_sock.c
+      pjlib/src/pj/file_access_unistd.c
+      pjlib/src/pj/file_io_ansi.c
+      pjlib/src/pj/guid_simple.c
+      pjlib/src/pj/ioqueue_select.c
+      pjlib/src/pj/log_writer_stdout.c
+      pjlib/src/pj/os_core_unix.c
+      pjlib/src/pj/os_error_unix.c
+      pjlib/src/pj/os_time_unix.c
+      pjlib/src/pj/os_timestamp_posix.c
+      pjlib/src/pj/pool_policy_malloc.c
+      pjlib/src/pj/sock_bsd.c
+      pjlib/src/pj/sock_qos_bsd.c
+      pjlib/src/pj/sock_select.c
+    )
+
+    zephyr_library_named(pjlib)
+    zephyr_library_sources(
+      ${PJLIB_COMMON_SOURCES}
+      ${PJLIB_PLATFORM_SOURCES}
+    )
+    zephyr_library_include_directories(pjlib/include)
+    zephyr_include_directories(pjlib/include)
   endif()
 
   return()

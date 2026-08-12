@@ -40,6 +40,10 @@
 #include <pj/errno.h>
 #include <pj/rand.h>
 
+#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+#  include <fcntl.h>
+#endif
+
 
 /* Only build when the backend is using select(). */
 #if PJ_IOQUEUE_IMP == PJ_IOQUEUE_IMP_SELECT
@@ -48,8 +52,13 @@
 /* Now that we have access to OS'es <sys/select>, lets check again that
  * PJ_IOQUEUE_MAX_HANDLES is not greater than FD_SETSIZE
  */
-#if PJ_IOQUEUE_MAX_HANDLES > FD_SETSIZE
-#   error "PJ_IOQUEUE_MAX_HANDLES cannot be greater than FD_SETSIZE"
+#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+_Static_assert(PJ_IOQUEUE_MAX_HANDLES <= FD_SETSIZE,
+               "PJ_IOQUEUE_MAX_HANDLES cannot be greater than FD_SETSIZE");
+#else
+#  if PJ_IOQUEUE_MAX_HANDLES > FD_SETSIZE
+#    error "PJ_IOQUEUE_MAX_HANDLES cannot be greater than FD_SETSIZE"
+#  endif
 #endif
 
 
@@ -70,6 +79,22 @@
  *
  */
 #define THIS_FILE   "ioq_select"
+
+static int set_nonblocking(pj_sock_t sock)
+{
+#if defined(PJ_WIN32) && PJ_WIN32!=0 || \
+    defined(PJ_WIN64) && PJ_WIN64 != 0 || \
+    defined(PJ_WIN32_WINCE) && PJ_WIN32_WINCE!=0
+    unsigned long value = 1;
+    return ioctlsocket(sock, FIONBIO, &value);
+#elif defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+    int flags = fcntl(sock, F_GETFL, 0);
+    return flags < 0 ? -1 : fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+#else
+    unsigned long value = 1;
+    return ioctl(sock, FIONBIO, &value);
+#endif
+}
 
 /*
  * The select ioqueue relies on socket functions (pj_sock_xxx()) to return
@@ -350,13 +375,6 @@ PJ_DEF(pj_status_t) pj_ioqueue_register_sock2(pj_pool_t *pool,
                                               pj_ioqueue_key_t **p_key)
 {
     pj_ioqueue_key_t *key = NULL;
-#if defined(PJ_WIN32) && PJ_WIN32!=0 || \
-    defined(PJ_WIN64) && PJ_WIN64 != 0 || \
-    defined(PJ_WIN32_WINCE) && PJ_WIN32_WINCE!=0
-    u_long value;
-#else
-    pj_uint32_t value;
-#endif
     pj_status_t rc = PJ_SUCCESS;
     
     PJ_ASSERT_RETURN(pool && ioqueue && sock != PJ_INVALID_SOCKET &&
@@ -407,14 +425,7 @@ PJ_DEF(pj_status_t) pj_ioqueue_register_sock2(pj_pool_t *pool,
     }
 
     /* Set socket to nonblocking. */
-    value = 1;
-#if defined(PJ_WIN32) && PJ_WIN32!=0 || \
-    defined(PJ_WIN64) && PJ_WIN64 != 0 || \
-    defined(PJ_WIN32_WINCE) && PJ_WIN32_WINCE!=0
-    if (ioctlsocket(sock, FIONBIO, &value)) {
-#else
-    if (ioctl(sock, FIONBIO, &value)) {
-#endif
+    if (set_nonblocking(sock)) {
         rc = pj_get_netos_error();
         goto on_return;
     }
@@ -885,14 +896,7 @@ static pj_status_t replace_udp_sock(pj_ioqueue_key_t *h)
         goto on_error;
     
     /* Set socket to nonblocking. */
-    val = 1;
-#if defined(PJ_WIN32) && PJ_WIN32!=0 || \
-    defined(PJ_WIN64) && PJ_WIN64 != 0 || \
-    defined(PJ_WIN32_WINCE) && PJ_WIN32_WINCE!=0
-    if (ioctlsocket(new_sock, FIONBIO, &val)) {
-#else
-    if (ioctl(new_sock, FIONBIO, &val)) {
-#endif
+    if (set_nonblocking(new_sock)) {
         status = pj_get_netos_error();
         goto on_error;
     }
