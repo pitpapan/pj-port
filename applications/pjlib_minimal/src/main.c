@@ -5,11 +5,19 @@
 int posix_probe_run(void);
 #endif
 
+#if defined(CONFIG_PJLIB_STAGE8_TEST)
+int stage8_core_run(void);
+#endif
+
 int main(void)
 {
 	pj_status_t status;
 
 	printk("PJLIB minimal Zephyr application started\n");
+
+#if defined(CONFIG_PJLIB_STAGE8_TEST)
+	return stage8_core_run();
+#endif
 
 #if defined(CONFIG_PJLIB_STAGE5_PROBE)
 	if (posix_probe_run() != 0) {

@@ -222,7 +222,9 @@ PJ_DEF(pj_status_t) pj_get_timestamp_freq(pj_timestamp *freq)
 #include <time.h>
 #include <errno.h>
 
-#define NSEC_PER_SEC    1000000000
+#ifndef NSEC_PER_SEC
+#   define NSEC_PER_SEC    1000000000
+#endif
 
 PJ_DEF(pj_status_t) pj_get_timestamp(pj_timestamp *ts)
 {

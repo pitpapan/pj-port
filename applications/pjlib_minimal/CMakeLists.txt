@@ -9,3 +9,4 @@ project(pjlib_minimal)
 
 target_sources(app PRIVATE src/main.c)
 target_sources_ifdef(CONFIG_PJLIB_STAGE5_PROBE app PRIVATE src/posix_probe.c)
+target_sources_ifdef(CONFIG_PJLIB_STAGE8_TEST app PRIVATE src/stage8_core.c)

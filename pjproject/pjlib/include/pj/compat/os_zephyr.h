@@ -53,7 +53,14 @@
 #define PJ_IS_LITTLE_ENDIAN                 1
 #define PJ_IS_BIG_ENDIAN                    0
 
-/* libc, time, and native error behavior. */
+/* libc, time, and native error behavior.
+ *
+ * Wall-clock policy: pj_gettimeofday() delegates to Zephyr's POSIX
+ * gettimeofday(). PJLIB does not replace it with a boot-uptime clock. On a
+ * target without an initialized real-time clock, applications may use it for
+ * interval ordering but must not assume the absolute value is calendar time.
+ * Monotonic intervals use clock_gettime(CLOCK_MONOTONIC) independently.
+ */
 #define PJ_HAS_ERRNO_VAR                    1
 #define PJ_NATIVE_ERR_POSITIVE              1
 #define PJ_HAS_HIGH_RES_TIMER               1
@@ -74,9 +81,18 @@
 #define PJ_EMULATE_RWMUTEX                  0
 #define PJ_ATOMIC_VALUE_TYPE                long
 
-/* Let the POSIX layer own thread stacks; honor an explicitly requested size. */
+/* Let the POSIX layer own and align thread stacks; honor an explicitly
+ * requested size. PJLIB joins created threads but must not free a raw stack
+ * pointer because none is allocated or returned through the PJLIB pool.
+ */
 #define PJ_THREAD_SET_STACK_SIZE            1
 #define PJ_THREAD_ALLOCATE_STACK            0
+
+/* Priority policy: PJLIB uses pthread_get/setschedparam() values as opaque
+ * POSIX priorities and never translates them to Zephyr kernel priorities.
+ * This Zephyr configuration does not export sched_get_priority_min/max(), so
+ * PJLIB's range-query helpers report their Unix-backend unsupported fallback.
+ */
 
 /* BSD socket and resolver capabilities verified by the compile probe. */
 #define PJ_HAS_SOCKLEN_T                    1

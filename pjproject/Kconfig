@@ -17,4 +17,11 @@ config PJLIB_STAGE5_PROBE
 	  Build the isolated compile-time and runtime POSIX capability probe used
 	  during PJLIB Zephyr port development.
 
+config PJLIB_STAGE8_TEST
+	bool "PJLIB Stage 8 core runtime validation"
+	depends on PJLIB
+	help
+	  Build the repeated PJLIB core runtime validation harness. Networking and
+	  ioqueue validation are intentionally excluded and remain in Stage 9.
+
 endif # PJPROJECT
