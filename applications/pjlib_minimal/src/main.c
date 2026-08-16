@@ -9,6 +9,14 @@ int posix_probe_run(void);
 int stage8_core_run(void);
 #endif
 
+#if defined(CONFIG_PJLIB_STAGE9_TEST)
+int stage9_network_run(void);
+#endif
+
+#if defined(CONFIG_PJLIB_STAGE10_TEST)
+int stage10_ioqueue_run(void);
+#endif
+
 int main(void)
 {
 	pj_status_t status;
@@ -17,6 +25,15 @@ int main(void)
 
 #if defined(CONFIG_PJLIB_STAGE8_TEST)
 	return stage8_core_run();
+#endif
+
+#if defined(CONFIG_PJLIB_STAGE9_TEST)
+	return stage9_network_run();
+#endif
+
+
+#if defined(CONFIG_PJLIB_STAGE10_TEST)
+	return stage10_ioqueue_run();
 #endif
 
 #if defined(CONFIG_PJLIB_STAGE5_PROBE)
