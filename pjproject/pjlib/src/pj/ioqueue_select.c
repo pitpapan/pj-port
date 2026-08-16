@@ -406,7 +406,6 @@ PJ_DEF(pj_status_t) pj_ioqueue_register_sock2(pj_pool_t *pool,
     /* Scan closing_keys first to let them come back to free_list */
     scan_closing_keys(ioqueue);
 
-    pj_assert(!pj_list_empty(&ioqueue->free_list));
     if (pj_list_empty(&ioqueue->free_list)) {
         rc = PJ_ETOOMANY;
         goto on_return;

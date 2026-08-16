@@ -39,8 +39,8 @@ if(DEFINED ZEPHYR_BASE)
     )
 
     # One implementation is selected for each platform-dependent family.
-    # Stage 4 deliberately starts with PJLIB's existing POSIX/BSD backends;
-    # Stage 5 will supply and validate the Zephyr platform configuration.
+    # Zephyr uses PJLIB's existing POSIX/BSD backends together with the
+    # Zephyr compatibility configuration selected by pj/config.h.
     set(PJLIB_PLATFORM_SOURCES
       pjlib/src/pj/addr_resolv_sock.c
       pjlib/src/pj/file_access_unistd.c
