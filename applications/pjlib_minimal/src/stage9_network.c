@@ -284,6 +284,257 @@ static int test_tcp(void)
 	return 0;
 }
 
+static int test_tcp_peer_names(void)
+{
+    const char *test = "TCP peer/local names";
+
+    pj_sock_t listener = PJ_INVALID_SOCKET;
+    pj_sock_t client = PJ_INVALID_SOCKET;
+    pj_sock_t server = PJ_INVALID_SOCKET;
+
+    pj_sockaddr_in addr;
+    pj_sockaddr_in peer;
+    pj_sockaddr_in local;
+
+    int len;
+
+    CHECK_STATUS(test,
+        pj_sock_socket(pj_AF_INET(), pj_SOCK_STREAM(), 0, &listener));
+
+    CHECK_STATUS(test, make_loopback_address(&addr, 0));
+
+    CHECK_STATUS(test,
+        pj_sock_bind(listener,
+                     (pj_sockaddr_t *)&addr,
+                     sizeof(addr)));
+
+    len = sizeof(addr);
+
+    CHECK_STATUS(test,
+        pj_sock_getsockname(listener,
+                            (pj_sockaddr_t *)&addr,
+                            &len));
+
+    CHECK_STATUS(test, pj_sock_listen(listener, 1));
+
+    CHECK_STATUS(test,
+        pj_sock_socket(pj_AF_INET(), pj_SOCK_STREAM(), 0, &client));
+
+    CHECK_STATUS(test,
+        pj_sock_connect(client,
+                        (pj_sockaddr_t *)&addr,
+                        sizeof(addr)));
+
+    len = sizeof(peer);
+
+    CHECK_STATUS(test,
+        pj_sock_accept(listener,
+                       &server,
+                       (pj_sockaddr_t *)&peer,
+                       &len));
+
+    len = sizeof(local);
+
+    CHECK_STATUS(test,
+        pj_sock_getsockname(client,
+                            (pj_sockaddr_t *)&local,
+                            &len));
+
+    CHECK_TRUE(test,
+        pj_sockaddr_in_get_port(&local) != 0);
+
+    len = sizeof(peer);
+
+    CHECK_STATUS(test,
+        pj_sock_getpeername(client,
+                            (pj_sockaddr_t *)&peer,
+                            &len));
+
+    CHECK_TRUE(test,
+        pj_sockaddr_in_get_port(&peer) ==
+        pj_sockaddr_in_get_port(&addr));
+
+    CHECK_STATUS(test, pj_sock_close(server));
+    CHECK_STATUS(test, pj_sock_close(client));
+    CHECK_STATUS(test, pj_sock_close(listener));
+
+    printk("[Stage 9] TCP getpeername/getsockname: PASSED\n");
+    return 0;
+}
+
+
+static int test_connection_refused(void)
+{
+    const char *test = "TCP connection refused";
+
+    pj_sock_t sock = PJ_INVALID_SOCKET;
+    pj_sockaddr_in addr;
+    pj_status_t status;
+
+    CHECK_STATUS(test,
+        pj_sock_socket(pj_AF_INET(), pj_SOCK_STREAM(), 0, &sock));
+
+    CHECK_STATUS(test,
+        make_loopback_address(&addr, 65000));
+
+    status = pj_sock_connect(
+        sock,
+        (pj_sockaddr_t *)&addr,
+        sizeof(addr));
+
+    CHECK_TRUE(test, status != PJ_SUCCESS);
+
+    CHECK_STATUS(test, pj_sock_close(sock));
+
+    printk("[Stage 9] TCP connection-refused path: PASSED\n");
+    return 0;
+}
+
+static int test_nonblocking_accept(void)
+{
+    const char *test = "nonblocking accept";
+
+    pj_sock_t listener = PJ_INVALID_SOCKET;
+    pj_sockaddr_in addr;
+
+    int len;
+    int flags;
+
+    pj_sock_t accepted;
+    pj_status_t status;
+
+    CHECK_STATUS(test,
+        pj_sock_socket(pj_AF_INET(),
+                       pj_SOCK_STREAM(),
+                       0,
+                       &listener));
+
+    CHECK_STATUS(test,
+        make_loopback_address(&addr, 0));
+
+    CHECK_STATUS(test,
+        pj_sock_bind(listener,
+                     (pj_sockaddr_t *)&addr,
+                     sizeof(addr)));
+
+    len = sizeof(addr);
+
+    CHECK_STATUS(test,
+        pj_sock_getsockname(listener,
+                            (pj_sockaddr_t *)&addr,
+                            &len));
+
+    CHECK_STATUS(test,
+        pj_sock_listen(listener, 1));
+
+    flags = fcntl((int)listener, F_GETFL, 0);
+
+    CHECK_TRUE(test, flags >= 0);
+
+    CHECK_TRUE(test,
+        fcntl((int)listener,
+              F_SETFL,
+              flags | O_NONBLOCK) == 0);
+
+    len = sizeof(addr);
+
+    status = pj_sock_accept(
+        listener,
+        &accepted,
+        (pj_sockaddr_t *)&addr,
+        &len);
+
+    CHECK_TRUE(test,
+        status == PJ_STATUS_FROM_OS(EAGAIN) ||
+        status == PJ_STATUS_FROM_OS(EWOULDBLOCK));
+
+    CHECK_STATUS(test,
+        pj_sock_close(listener));
+
+    printk("[Stage 9] nonblocking accept: PASSED\n");
+    return 0;
+}
+
+static int test_udp_large_payload(void)
+{
+    const char *test = "UDP large payload";
+
+    pj_sock_t rx = PJ_INVALID_SOCKET;
+    pj_sock_t tx = PJ_INVALID_SOCKET;
+
+    pj_sockaddr_in rx_addr;
+    pj_sockaddr_in src;
+
+    char send_buf[1400];
+    char recv_buf[1400];
+
+    int addrlen;
+    pj_ssize_t len;
+
+    memset(send_buf, 0x5a, sizeof(send_buf));
+
+    CHECK_STATUS(test,
+        pj_sock_socket(pj_AF_INET(),
+                       pj_SOCK_DGRAM(),
+                       0,
+                       &rx));
+
+    CHECK_STATUS(test,
+        pj_sock_socket(pj_AF_INET(),
+                       pj_SOCK_DGRAM(),
+                       0,
+                       &tx));
+
+    CHECK_STATUS(test,
+        make_loopback_address(&rx_addr, 0));
+
+    CHECK_STATUS(test,
+        pj_sock_bind(rx,
+                     (pj_sockaddr_t *)&rx_addr,
+                     sizeof(rx_addr)));
+
+    addrlen = sizeof(rx_addr);
+
+    CHECK_STATUS(test,
+        pj_sock_getsockname(rx,
+                            (pj_sockaddr_t *)&rx_addr,
+                            &addrlen));
+
+    len = sizeof(send_buf);
+
+    CHECK_STATUS(test,
+        pj_sock_sendto(tx,
+                       send_buf,
+                       &len,
+                       0,
+                       (pj_sockaddr_t *)&rx_addr,
+                       sizeof(rx_addr)));
+
+    len = sizeof(recv_buf);
+    addrlen = sizeof(src);
+
+    CHECK_STATUS(test,
+        pj_sock_recvfrom(rx,
+                         recv_buf,
+                         &len,
+                         0,
+                         (pj_sockaddr_t *)&src,
+                         &addrlen));
+
+    CHECK_TRUE(test, len == sizeof(send_buf));
+
+    CHECK_TRUE(test,
+        memcmp(send_buf,
+               recv_buf,
+               sizeof(send_buf)) == 0);
+
+    CHECK_STATUS(test, pj_sock_close(tx));
+    CHECK_STATUS(test, pj_sock_close(rx));
+
+    printk("[Stage 9] UDP large payload: PASSED\n");
+    return 0;
+}
+
 int stage9_network_run(void)
 {
 	pj_caching_pool caching_pool;
@@ -304,8 +555,14 @@ int stage9_network_run(void)
 		return 1;
 	}
 
-	if (test_dns() != 0 || test_udp() != 0 ||
-	    test_nonblocking_and_options() != 0 || test_tcp() != 0) {
+if (test_dns() != 0 ||
+    test_udp() != 0 ||
+    test_udp_large_payload() != 0 ||
+    test_nonblocking_and_options() != 0 ||
+    test_nonblocking_accept() != 0 ||
+    test_tcp() != 0 ||
+    test_tcp_peer_names() != 0 ||
+    test_connection_refused() != 0) {
 		pj_pool_release(pool);
 		pj_caching_pool_destroy(&caching_pool);
 		pj_shutdown();
