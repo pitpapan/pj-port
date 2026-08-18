@@ -29,13 +29,6 @@
 
 #define PENDING_RETRY   2
 
-#if PJ_IOQUEUE_CALLBACK_NO_LOCK
-static unsigned ioqueue_dispatch_read_event_no_lock(pj_ioqueue_key_t* h,
-                                                     unsigned max_event);
-static unsigned ioqueue_dispatch_write_event_no_lock(pj_ioqueue_key_t* h,
-                                                      unsigned max_event);
-#endif
-
 PJ_DEF(void) pj_ioqueue_cfg_default(pj_ioqueue_cfg *cfg)
 {
     pj_bzero(cfg, sizeof(*cfg));
@@ -102,8 +95,6 @@ static pj_status_t ioqueue_init_key( pj_pool_t *pool,
 #endif
     pj_list_init(&key->read_cb_list);
     key->read_callback_thread = NULL;
-    pj_list_init(&key->write_cb_list);
-    key->write_callback_thread = NULL;
     key->closing = 0;
 
     /* Save callback. */
@@ -288,14 +279,7 @@ static pj_bool_t ioqueue_dispatch_write_event( pj_ioqueue_t *ioqueue,
             has_lock = PJ_FALSE;
             pj_ioqueue_unlock_key(h);
         } else {
-#if PJ_IOQUEUE_CALLBACK_NO_LOCK
-            /* Do not hold mutex while invoking callback */
-            has_lock = PJ_FALSE;
-            pj_ioqueue_unlock_key(h);
-            PJ_RACE_ME(5);
-#else
             has_lock = PJ_TRUE;
-#endif
         }
 
         /* Call callback. */
@@ -414,41 +398,12 @@ static pj_bool_t ioqueue_dispatch_write_event( pj_ioqueue_t *ioqueue,
                 pj_ioqueue_unlock_key(h);
                 PJ_RACE_ME(5);
             } else {
-#if PJ_IOQUEUE_CALLBACK_NO_LOCK
-                /* If we're not allowing concurrency, we must prevent
-                 * re-entrancy in the callback.
-                 */
-                if (h->write_callback_thread) {
-                    /* Another thread is in the write callback for this key,
-                     * just queue this write_op, that thread will invoke the
-                     * callback later.
-                     */
-                    pj_list_push_back(&h->write_cb_list, write_op);
-                    pj_ioqueue_unlock_key(h);
-                    return PJ_TRUE;
-                }
-
-                /* Save the thread invoking the write callback.
-                 * Note that when threading is disabled or concurrency is allowed,
-                 * this will always be NULL.
-                 */
-                h->write_callback_thread = pj_thread_this();
-
-                /* Do not hold mutex while invoking callback */
-                has_lock = PJ_FALSE;
-                pj_ioqueue_unlock_key(h);
-                PJ_RACE_ME(5);
-#else
                 has_lock = PJ_TRUE;
-#endif
             }
 
-            /* Call callback. Do not skip when IS_CLOSING, as upper
-             * layers need the callback to release resources (e.g.,
-             * pjsip_tx_data_dec_ref). See #4878.
-             */
-            if (h->cb.on_write_complete) {
-                (*h->cb.on_write_complete)(h,
+            /* Call callback. */
+            if (h->cb.on_write_complete && !IS_CLOSING(h)) {
+                (*h->cb.on_write_complete)(h, 
                                            (pj_ioqueue_op_key_t*)write_op,
                                            write_op->written);
             }
@@ -456,11 +411,6 @@ static pj_bool_t ioqueue_dispatch_write_event( pj_ioqueue_t *ioqueue,
             if (has_lock) {
                 pj_ioqueue_unlock_key(h);
             }
-
-#if PJ_IOQUEUE_CALLBACK_NO_LOCK
-            /* If we have more pending write callback, process it now */
-            ioqueue_dispatch_write_event_no_lock(h, 0);
-#endif
 
         } else {
             pj_ioqueue_unlock_key(h);
@@ -526,152 +476,7 @@ static unsigned ioqueue_dispatch_read_event_no_lock(pj_ioqueue_key_t* h,
 
     return event_cnt;
 }
-
-static unsigned ioqueue_dispatch_write_event_no_lock(pj_ioqueue_key_t* h,
-                                                      unsigned max_event)
-{
-    unsigned event_cnt = 0;
-
-    while (1) {
-        struct write_operation *write_op = NULL;
-        void (*on_write_complete)(pj_ioqueue_key_t *key,
-                                  pj_ioqueue_op_key_t *op_key,
-                                  pj_ssize_t bytes_sent);
-
-        /* Check if there is any pending write callback for this key. */
-        pj_ioqueue_lock_key(h);
-
-        if (!pj_list_empty(&h->write_cb_list) &&
-            (max_event == 0 || event_cnt < max_event))
-        {
-            write_op = h->write_cb_list.next;
-            pj_list_erase(write_op);
-            on_write_complete = h->cb.on_write_complete;
-        } else {
-            /* No more pending callback or maximum event number is reached.
-             * Clear the callback thread and return.
-             */
-            h->write_callback_thread = NULL;
-            on_write_complete = NULL;
-        }
-
-        pj_ioqueue_unlock_key(h);
-        PJ_RACE_ME(5);
-
-        /* Invoke the callback or return */
-        if (on_write_complete) {
-            (*on_write_complete)(h, (pj_ioqueue_op_key_t*)write_op,
-                                 write_op->written);
-            ++event_cnt;
-        } else {
-            break;
-        }
-    }
-
-    return event_cnt;
-}
 #endif
-
-/*
- * Drain pending write callbacks during key unregistration.
- *
- * This ensures upper layers (e.g., SIP transport) receive on_write_complete
- * callbacks for all pending writes, allowing them to release resources such
- * as tdata references. Without this, pending writes are silently discarded
- * when a key is unregistered, causing reference leaks. See #4864, #4878.
- *
- * Two lists must be drained in order:
- *  1. write_cb_list (completed ops, deferred callback) - with op->written
- *  2. write_list (pending ops, never sent) - with -PJ_ECANCELLED
- *
- * Must be called after key->closing is set and key is unlocked.
- * Not used by IOCP backend (which has its own mechanism).
- */
-static void ioqueue_drain_pending_writes(pj_ioqueue_key_t *key)
-{
-#if PJ_IOQUEUE_CALLBACK_NO_LOCK
-    pj_ioqueue_lock_key(key);
-
-    if (key->write_callback_thread == pj_thread_this()) {
-        /* We are the callback thread (unregister called from within a
-         * write callback). Drain write_cb_list ourselves with success
-         * status, matching the pattern in
-         * ioqueue_dispatch_write_event_no_lock().
-         */
-        while (!pj_list_empty(&key->write_cb_list)) {
-            struct write_operation *op = key->write_cb_list.next;
-            void (*on_wr_complete)(pj_ioqueue_key_t*,
-                                   pj_ioqueue_op_key_t*,
-                                   pj_ssize_t);
-
-            pj_list_erase(op);
-            on_wr_complete = key->cb.on_write_complete;
-            if (key->grp_lock)
-                pj_grp_lock_add_ref(key->grp_lock);
-            pj_ioqueue_unlock_key(key);
-
-            if (on_wr_complete) {
-                (*on_wr_complete)(key, (pj_ioqueue_op_key_t*)op,
-                                  op->written);
-            }
-            if (key->grp_lock)
-                pj_grp_lock_dec_ref(key->grp_lock);
-            pj_ioqueue_lock_key(key);
-        }
-        pj_ioqueue_unlock_key(key);
-    } else if (key->write_callback_thread) {
-        /* Another thread is the callback thread. Wait for it to finish
-         * draining write_cb_list. The IS_CLOSING check has been removed
-         * from ioqueue_dispatch_write_event_no_lock() so the callback
-         * thread will continue to drain even after closing is set.
-         */
-        unsigned counter = 0;
-
-        while (key->write_callback_thread) {
-            pj_ioqueue_unlock_key(key);
-            pj_thread_sleep(10);
-            pj_ioqueue_lock_key(key);
-            if (++counter > 100) {
-                PJ_LOG(1, (THIS_FILE, "Timeout waiting for write "
-                           "callback to drain on socket=%ld",
-                           (long)key->fd));
-                break;
-            }
-        }
-        pj_ioqueue_unlock_key(key);
-    } else {
-        pj_ioqueue_unlock_key(key);
-    }
-#endif
-
-    /* Walk write_list with -PJ_ECANCELLED (pending ops, never sent).
-     *
-     * Safe to walk without lock because:
-     * - closing=1 was set while key was locked, so any dispatch thread
-     *   that subsequently acquires the lock sees IS_CLOSING and returns
-     *   without touching write_list.
-     * - Any in-flight dispatch already dequeued its op from write_list
-     *   while holding the lock, before unlocking for the callback.
-     * - pj_ioqueue_send() checks IS_CLOSING under lock, preventing
-     *   new entries.
-     * - The socket fd was removed from the polling set before closing
-     *   was set, so no new writable events will be dispatched.
-     */
-    while (!pj_list_empty(&key->write_list)) {
-        struct write_operation *op = key->write_list.next;
-
-        pj_list_erase(op);
-        if (key->grp_lock)
-            pj_grp_lock_add_ref(key->grp_lock);
-
-        if (key->cb.on_write_complete) {
-            (*key->cb.on_write_complete)(key, (pj_ioqueue_op_key_t*)op,
-                                         -(pj_ssize_t)PJ_ECANCELLED);
-        }
-        if (key->grp_lock)
-            pj_grp_lock_dec_ref(key->grp_lock);
-    }
-}
 
 static pj_bool_t ioqueue_dispatch_read_event( pj_ioqueue_t *ioqueue,
                                               pj_ioqueue_key_t *h )
@@ -1000,6 +805,7 @@ PJ_DEF(pj_status_t) pj_ioqueue_recv(  pj_ioqueue_key_t *key,
 
     read_op = (struct read_operation*)op_key;
     PJ_ASSERT_RETURN(read_op->op == PJ_IOQUEUE_OP_NONE, PJ_EPENDING);
+    read_op->op = PJ_IOQUEUE_OP_NONE;
 
     /* Try to see if there's data immediately available. 
      */
@@ -1024,19 +830,6 @@ PJ_DEF(pj_status_t) pj_ioqueue_recv(  pj_ioqueue_key_t *key,
 
     flags &= ~(PJ_IOQUEUE_ALWAYS_ASYNC);
 
-    pj_ioqueue_lock_key(key);
-    /* Check again. Handle may have been closed after the previous check
-     * in multithreaded app. If we add bad handle to the set it will
-     * corrupt the ioqueue set. See #913
-     */
-    if (IS_CLOSING(key)) {
-        pj_ioqueue_unlock_key(key);
-        return PJ_ECANCELLED;
-    }
-
-    /* Also check read_op->op again, this time while holding lock. */
-    PJ_ASSERT_ON_FAIL(read_op->op == PJ_IOQUEUE_OP_NONE,
-                      {pj_ioqueue_unlock_key(key); return PJ_EPENDING;});
     /*
      * No data is immediately available.
      * Must schedule asynchronous operation to the ioqueue.
@@ -1046,6 +839,15 @@ PJ_DEF(pj_status_t) pj_ioqueue_recv(  pj_ioqueue_key_t *key,
     read_op->size = *length;
     read_op->flags = flags;
 
+    pj_ioqueue_lock_key(key);
+    /* Check again. Handle may have been closed after the previous check
+     * in multithreaded app. If we add bad handle to the set it will
+     * corrupt the ioqueue set. See #913
+     */
+    if (IS_CLOSING(key)) {
+        pj_ioqueue_unlock_key(key);
+        return PJ_ECANCELLED;
+    }
     pj_list_insert_before(&key->read_list, read_op);
     ioqueue_add_to_set(key->ioqueue, key, READABLE_EVENT);
     pj_ioqueue_unlock_key(key);
@@ -1077,6 +879,7 @@ PJ_DEF(pj_status_t) pj_ioqueue_recvfrom( pj_ioqueue_key_t *key,
 
     read_op = (struct read_operation*)op_key;
     PJ_ASSERT_RETURN(read_op->op == PJ_IOQUEUE_OP_NONE, PJ_EPENDING);
+    read_op->op = PJ_IOQUEUE_OP_NONE;
 
     /* Try to see if there's data immediately available. 
      */
@@ -1102,19 +905,6 @@ PJ_DEF(pj_status_t) pj_ioqueue_recvfrom( pj_ioqueue_key_t *key,
 
     flags &= ~(PJ_IOQUEUE_ALWAYS_ASYNC);
 
-    pj_ioqueue_lock_key(key);
-    /* Check again. Handle may have been closed after the previous check
-     * in multithreaded app. If we add bad handle to the set it will
-     * corrupt the ioqueue set. See #913
-     */
-    if (IS_CLOSING(key)) {
-        pj_ioqueue_unlock_key(key);
-        return PJ_ECANCELLED;
-    }
-
-    /* Also check read_op->op again, this time while holding lock. */
-    PJ_ASSERT_ON_FAIL(read_op->op == PJ_IOQUEUE_OP_NONE,
-                      {pj_ioqueue_unlock_key(key); return PJ_EPENDING;});
     /*
      * No data is immediately available.
      * Must schedule asynchronous operation to the ioqueue.
@@ -1126,6 +916,15 @@ PJ_DEF(pj_status_t) pj_ioqueue_recvfrom( pj_ioqueue_key_t *key,
     read_op->rmt_addr = addr;
     read_op->rmt_addrlen = addrlen;
 
+    pj_ioqueue_lock_key(key);
+    /* Check again. Handle may have been closed after the previous check
+     * in multithreaded app. If we add bad handle to the set it will
+     * corrupt the ioqueue set. See #913
+     */
+    if (IS_CLOSING(key)) {
+        pj_ioqueue_unlock_key(key);
+        return PJ_ECANCELLED;
+    }
     pj_list_insert_before(&key->read_list, read_op);
     ioqueue_add_to_set(key->ioqueue, key, READABLE_EVENT);
     pj_ioqueue_unlock_key(key);
@@ -1159,7 +958,6 @@ PJ_DEF(pj_status_t) pj_ioqueue_send( pj_ioqueue_key_t *key,
     /* We can not use PJ_IOQUEUE_ALWAYS_ASYNC for socket write. */
     flags &= ~(PJ_IOQUEUE_ALWAYS_ASYNC);
 
-#if PJ_IOQUEUE_FAST_TRACK
     /* Fast track:
      *   Try to send data immediately, only if there's no pending write!
      * Note:
@@ -1193,10 +991,6 @@ PJ_DEF(pj_status_t) pj_ioqueue_send( pj_ioqueue_key_t *key,
             }
         }
     }
-#else
-    PJ_UNUSED_ARG(status);
-    PJ_UNUSED_ARG(sent);
-#endif
 
     /*
      * Schedule asynchronous send.
@@ -1221,7 +1015,7 @@ PJ_DEF(pj_status_t) pj_ioqueue_send( pj_ioqueue_key_t *key,
          * the sending only. If the polling thread runs on lower priority
          * than the sending thread, then it's possible that the pending
          * write flag is not cleared in-time because clearing is only done
-         * during polling.
+         * during polling. 
          *
          * Aplication should specify multiple write operation keys on
          * situation like this.
@@ -1230,6 +1024,12 @@ PJ_DEF(pj_status_t) pj_ioqueue_send( pj_ioqueue_key_t *key,
         return PJ_EBUSY;
     }
 
+    write_op->op = PJ_IOQUEUE_OP_SEND;
+    write_op->buf = (char*)data;
+    write_op->size = *length;
+    write_op->written = 0;
+    write_op->flags = flags;
+    
     pj_ioqueue_lock_key(key);
     /* Check again. Handle may have been closed after the previous check
      * in multithreaded app. If we add bad handle to the set it will
@@ -1239,19 +1039,6 @@ PJ_DEF(pj_status_t) pj_ioqueue_send( pj_ioqueue_key_t *key,
         pj_ioqueue_unlock_key(key);
         return PJ_ECANCELLED;
     }
-
-    /* Also check write_op->op again, this time while holding lock. */
-    if (write_op->op) {
-        pj_ioqueue_unlock_key(key);
-        return PJ_EBUSY;
-    }
-
-    write_op->op = PJ_IOQUEUE_OP_SEND;
-    write_op->buf = (char*)data;
-    write_op->size = *length;
-    write_op->written = 0;
-    write_op->flags = flags;
-
     pj_list_insert_before(&key->write_list, write_op);
     ioqueue_add_to_set(key->ioqueue, key, WRITEABLE_EVENT);
     pj_ioqueue_unlock_key(key);
@@ -1295,7 +1082,6 @@ retry_on_restart:
     /* We can not use PJ_IOQUEUE_ALWAYS_ASYNC for socket write */
     flags &= ~(PJ_IOQUEUE_ALWAYS_ASYNC);
 
-#if PJ_IOQUEUE_FAST_TRACK
     /* Fast track:
      *   Try to send data immediately, only if there's no pending write!
      * Note:
@@ -1348,10 +1134,6 @@ retry_on_restart:
             }
         }
     }
-#else
-    PJ_UNUSED_ARG(status);
-    PJ_UNUSED_ARG(sent);
-#endif
 
     /*
      * Check that address storage can hold the address parameter.
@@ -1390,6 +1172,14 @@ retry_on_restart:
         return PJ_EBUSY;
     }
 
+    write_op->op = PJ_IOQUEUE_OP_SEND_TO;
+    write_op->buf = (char*)data;
+    write_op->size = *length;
+    write_op->written = 0;
+    write_op->flags = flags;
+    pj_memcpy(&write_op->rmt_addr, addr, addrlen);
+    write_op->rmt_addrlen = addrlen;
+    
     pj_ioqueue_lock_key(key);
     /* Check again. Handle may have been closed after the previous check
      * in multithreaded app. If we add bad handle to the set it will
@@ -1399,21 +1189,6 @@ retry_on_restart:
         pj_ioqueue_unlock_key(key);
         return PJ_ECANCELLED;
     }
-
-    /* Also check write_op->op again, this time while holding lock. */
-    if (write_op->op) {
-        pj_ioqueue_unlock_key(key);
-        return PJ_EBUSY;
-    }
-
-    write_op->op = PJ_IOQUEUE_OP_SEND_TO;
-    write_op->buf = (char*)data;
-    write_op->size = *length;
-    write_op->written = 0;
-    write_op->flags = flags;
-    pj_memcpy(&write_op->rmt_addr, addr, addrlen);
-    write_op->rmt_addrlen = addrlen;
-
     pj_list_insert_before(&key->write_list, write_op);
     ioqueue_add_to_set(key->ioqueue, key, WRITEABLE_EVENT);
     pj_ioqueue_unlock_key(key);
@@ -1444,8 +1219,8 @@ PJ_DEF(pj_status_t) pj_ioqueue_accept( pj_ioqueue_key_t *key,
 
     accept_op = (struct accept_operation*)op_key;
     PJ_ASSERT_RETURN(accept_op->op == PJ_IOQUEUE_OP_NONE, PJ_EPENDING);
+    accept_op->op = PJ_IOQUEUE_OP_NONE;
 
-#if PJ_IOQUEUE_FAST_TRACK
     /* Fast track:
      *  See if there's new connection available immediately.
      */
@@ -1471,23 +1246,6 @@ PJ_DEF(pj_status_t) pj_ioqueue_accept( pj_ioqueue_key_t *key,
             }
         }
     }
-#else
-    PJ_UNUSED_ARG(status);
-#endif
-
-    pj_ioqueue_lock_key(key);
-    /* Check again. Handle may have been closed after the previous check
-     * in multithreaded app. If we add bad handle to the set it will
-     * corrupt the ioqueue set. See #913
-     */
-    if (IS_CLOSING(key)) {
-        pj_ioqueue_unlock_key(key);
-        return PJ_ECANCELLED;
-    }
-
-    /* Also check accept_op->op again, this time while holding lock. */
-    PJ_ASSERT_ON_FAIL(accept_op->op == PJ_IOQUEUE_OP_NONE,
-                      {pj_ioqueue_unlock_key(key); return PJ_ECANCELLED;});
 
     /*
      * No connection is available immediately.
@@ -1500,6 +1258,15 @@ PJ_DEF(pj_status_t) pj_ioqueue_accept( pj_ioqueue_key_t *key,
     accept_op->addrlen= addrlen;
     accept_op->local_addr = local;
 
+    pj_ioqueue_lock_key(key);
+    /* Check again. Handle may have been closed after the previous check
+     * in multithreaded app. If we add bad handle to the set it will
+     * corrupt the ioqueue set. See #913
+     */
+    if (IS_CLOSING(key)) {
+        pj_ioqueue_unlock_key(key);
+        return PJ_ECANCELLED;
+    }
     pj_list_insert_before(&key->accept_list, accept_op);
     ioqueue_add_to_set(key->ioqueue, key, READABLE_EVENT);
     pj_ioqueue_unlock_key(key);
@@ -1668,63 +1435,8 @@ PJ_DEF(pj_status_t) pj_ioqueue_clear_key( pj_ioqueue_key_t *key )
     pj_list_init(&key->write_list);
     pj_list_init(&key->accept_list);
     pj_list_init(&key->read_cb_list);
-    pj_list_init(&key->write_cb_list);
-
-#if PJ_IOQUEUE_CALLBACK_NO_LOCK
-    /* Wait until any read callback is finished */
-    do {
-        unsigned counter = 0;
-
-        while (key->read_callback_thread &&
-               key->read_callback_thread != pj_thread_this())
-        {
-            /* Callback is running, unlock while waiting, since the callback
-             * may need the lock.
-             */
-            pj_ioqueue_unlock_key(key);
-            pj_thread_sleep(10);
-            pj_ioqueue_lock_key(key);
-            
-            /* Clear read pending list again */
-            pj_list_init(&key->read_list);
-
-            /* Timeout after ~1 second */
-            if (++counter > 100) {
-                PJ_LOG(1,(THIS_FILE, "Timeout waiting for read callback "
-                                     "to finish on socket=%ld", key->fd));
-                break;
-            }
-        }
-    } while (0);
-
-    /* Wait until any write callback is finished */
-    do {
-        unsigned counter = 0;
-
-        while (key->write_callback_thread &&
-               key->write_callback_thread != pj_thread_this())
-        {
-            /* Callback is running, unlock while waiting, since the callback
-             * may need the lock.
-             */
-            pj_ioqueue_unlock_key(key);
-            pj_thread_sleep(10);
-            pj_ioqueue_lock_key(key);
-            
-            /* Clear write pending list again */
-            pj_list_init(&key->write_list);
-
-            /* Timeout after ~1 second */
-            if (++counter > 100) {
-                PJ_LOG(1,(THIS_FILE, "Timeout waiting for write callback "
-                                     "to finish on socket=%ld", key->fd));
-                break;
-            }
-        }
-    } while (0);
-#endif
-
     key->connecting = 0;
+    key->read_callback_thread = NULL;
 
     /* Remove key from sets */
     ioqueue_remove_from_set2(key->ioqueue, key,

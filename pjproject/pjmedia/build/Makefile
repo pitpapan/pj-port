@@ -23,15 +23,15 @@ export PJMEDIA_VIDEODEV_LIB:=libpjmedia-videodev-$(TARGET_NAME)$(LIBEXT)
 ifeq ($(PJ_SHARED_LIBRARIES),)
 else
 export PJMEDIA_SONAME:=libpjmedia.$(SHLIB_SUFFIX)
-export PJMEDIA_SHLIB:=$(PJMEDIA_SONAME).$(PJ_SONAME_VERSION)
+export PJMEDIA_SHLIB:=$(PJMEDIA_SONAME).$(PJ_VERSION_MAJOR)
 export PJMEDIA_CODEC_SONAME:=libpjmedia-codec.$(SHLIB_SUFFIX)
-export PJMEDIA_CODEC_SHLIB:=$(PJMEDIA_CODEC_SONAME).$(PJ_SONAME_VERSION)
+export PJMEDIA_CODEC_SHLIB:=$(PJMEDIA_CODEC_SONAME).$(PJ_VERSION_MAJOR)
 export PJSDP_SONAME:=libpjsdp.$(SHLIB_SUFFIX)
-export PJSDP_SHLIB:=$(PJSDP_SONAME).$(PJ_SONAME_VERSION)
+export PJSDP_SHLIB:=$(PJSDP_SONAME).$(PJ_VERSION_MAJOR)
 export PJMEDIA_AUDIODEV_SONAME:=libpjmedia-audiodev.$(SHLIB_SUFFIX)
-export PJMEDIA_AUDIODEV_SHLIB:=$(PJMEDIA_AUDIODEV_SONAME).$(PJ_SONAME_VERSION)
+export PJMEDIA_AUDIODEV_SHLIB:=$(PJMEDIA_AUDIODEV_SONAME).$(PJ_VERSION_MAJOR)
 export PJMEDIA_VIDEODEV_SONAME:=libpjmedia-videodev.$(SHLIB_SUFFIX)
-export PJMEDIA_VIDEODEV_SHLIB:=$(PJMEDIA_VIDEODEV_SONAME).$(PJ_SONAME_VERSION)
+export PJMEDIA_VIDEODEV_SHLIB:=$(PJMEDIA_VIDEODEV_SONAME).$(PJ_VERSION_MAJOR)
 endif
 
 
@@ -50,15 +50,14 @@ export _CXXFLAGS:= $(CC_CXXFLAGS) $(OS_CXXFLAGS) $(M_CXXFLAGS) \
 
 export _LDFLAGS := $(APP_THIRD_PARTY_LIBS) \
 		   $(APP_THIRD_PARTY_EXT) \
-		   $(CC_LDFLAGS) $(APP_LDFLAGS) $(OS_LDFLAGS) $(M_LDFLAGS) \
-		   $(HOST_LDFLAGS) $(LDFLAGS) 
+		   $(CC_LDFLAGS) $(OS_LDFLAGS) $(M_LDFLAGS) $(HOST_LDFLAGS) \
+		   $(APP_LDFLAGS) $(LDFLAGS) 
 
 ###############################################################################
 # Defines for building PJMEDIA library
 #
 export PJMEDIA_SRCDIR = ../src/pjmedia
 export PJMEDIA_OBJS += $(OS_OBJS) $(M_OBJS) $(CC_OBJS) $(HOST_OBJS) \
-			ai_port.o ai_port_openai.o \
 			alaw_ulaw.o alaw_ulaw_table.o avi_player.o avi_writer.o av_sync.o \
 			bidirectional.o clock_thread.o codec.o conference.o conf_thread.o \
 			conf_switch.o converter.o  converter_libswscale.o converter_libyuv.o \
@@ -75,7 +74,7 @@ export PJMEDIA_OBJS += $(OS_OBJS) $(M_OBJS) $(CC_OBJS) $(HOST_OBJS) \
 			transport_ice.o transport_loop.o transport_srtp.o transport_udp.o \
 			types.o txt_stream.o vid_codec.o vid_codec_util.o \
 			vid_port.o vid_stream.o vid_stream_info.o vid_conf.o \
-			wav_player.o wav_playlist.o wav_writer.o tone_detector.o wave.o \
+			wav_player.o wav_playlist.o wav_writer.o wave.o \
 			wsola.o audiodev.o videodev.o
 
 export PJMEDIA_CFLAGS += $(_CFLAGS)
@@ -106,8 +105,8 @@ export PJMEDIA_AUDIODEV_LDFLAGS += $(PJMEDIA_LDLIB) \
 #
 export PJMEDIA_VIDEODEV_SRCDIR = ../src/pjmedia-videodev
 export PJMEDIA_VIDEODEV_OBJS += videodev.o errno.o avi_dev.o ffmpeg_dev.o \
-				colorbar_dev.o null_dev.o v4l2_dev.o \
-				opengl_dev.o util.o
+				colorbar_dev.o v4l2_dev.o opengl_dev.o \
+				util.o
 export PJMEDIA_VIDEODEV_CFLAGS += $(_CFLAGS)
 export PJMEDIA_VIDEODEV_CXXFLAGS += $(_CXXFLAGS)
 export PJMEDIA_VIDEODEV_LDFLAGS += $(PJMEDIA_LDLIB) \
@@ -156,8 +155,8 @@ export PJMEDIA_CODEC_LDFLAGS += $(PJMEDIA_LDLIB) \
 export PJMEDIA_TEST_SRCDIR = ../src/test
 export PJMEDIA_TEST_OBJS += codec_vectors.o jbuf_test.o main.o mips_test.o \
 			    vid_codec_test.o vid_dev_test.o vid_port_test.o \
-			    rtp_test.o test.o tone_detector_test.o
-export PJMEDIA_TEST_OBJS += sdp_neg_test.o sdp_attr_test.o
+			    rtp_test.o test.o
+export PJMEDIA_TEST_OBJS += sdp_neg_test.o 
 export PJMEDIA_TEST_CFLAGS += $(_CFLAGS)
 export PJMEDIA_TEST_CXXFLAGS += $(_CXXFLAGS)
 export PJMEDIA_TEST_LDFLAGS += $(PJMEDIA_CODEC_LDLIB) \

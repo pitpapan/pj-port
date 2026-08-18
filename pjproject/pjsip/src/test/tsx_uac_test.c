@@ -89,8 +89,8 @@ static char *TEST9_BRANCH_ID = PJSIP_RFC3261_BRANCH_ID "-UAC-Test09";
 
 #define BRANCH_LEN   (7+11)
 
-/* Widen timing tolerance in CI mode — shared runners can be 5-10x slower. */
-#define      TEST1_ALLOWED_DIFF    (test_app.ut_app.prm_ci_mode ? 2500 : 500)
+// An effort to accommodate CPU load spike on some test machines.
+#define      TEST1_ALLOWED_DIFF     500 //(150)
 #define      TEST4_RETRANSMIT_CNT   3
 #define      TEST5_RETRANSMIT_CNT   3
 
@@ -1180,8 +1180,6 @@ static int perform_tsx_test(unsigned tid, int dummy, char *target_uri,
             return -130;
         }
     }
-
-    pjsip_endpt_stop_handle_events(endpt);
 
     if (g[tid].test_complete < 0) {
         tsx = pjsip_tsx_layer_find_tsx(&tsx_key, PJ_TRUE);

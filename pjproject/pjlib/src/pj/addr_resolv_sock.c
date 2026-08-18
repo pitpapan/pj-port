@@ -69,7 +69,7 @@ PJ_DEF(pj_status_t) pj_gethostbyname(const pj_str_t *hostname, pj_hostent *phe)
     phe->h_addr_list = he->h_addr_list;
 
     return PJ_SUCCESS;
-#elif defined(PJ_SOCK_HAS_GETADDRINFO) && PJ_SOCK_HAS_GETADDRINFO!=0
+    #elif defined(PJ_SOCK_HAS_GETADDRINFO) && PJ_SOCK_HAS_GETADDRINFO!=0
     enum { MAX_ADDRESSES = 8 };
     static char canonical_name[PJ_MAX_HOSTNAME];
     static struct in_addr addresses[MAX_ADDRESSES];
@@ -629,3 +629,4 @@ PJ_DEF(pj_status_t) pj_getaddrinfo(int af, const pj_str_t *nodename,
     }
 #endif  /* PJ_SOCK_HAS_GETADDRINFO */
 }
+

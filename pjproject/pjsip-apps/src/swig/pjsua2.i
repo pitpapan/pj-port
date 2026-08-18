@@ -179,7 +179,6 @@ using namespace pj;
 %feature("director") FindBuddyMatch;
 %feature("director") AudioMediaPlayer;
 %feature("director") AudioMediaPort;
-%feature("director") AudioMediaAiPort;
 %feature("director") VideoRecorder;
 
 // PendingJob is only used on Python
@@ -190,16 +189,7 @@ using namespace pj;
     %ignore pj::Endpoint::utilAddPendingJob;
 #endif
 
-%newobject pj::AuthChallenge::defer;
-%nocopyctor pj::AuthChallenge;
-
 %copyctor pj::OnCallMediaEventParam;
-
-// SWIG can't wrap 'operator=' — silence warning 503 for the copy-assign
-// operator. (The move ctor/assignment are hidden via #ifndef SWIG in the
-// header, since SWIG 4.x doesn't reliably match rvalue-ref signatures
-// in %ignore.)
-%ignore pj::DeferredResponse::operator=;
 
 //
 // Ignore stuffs in pjsua2

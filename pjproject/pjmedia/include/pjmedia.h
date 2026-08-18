@@ -23,7 +23,6 @@
  * @file pjmedia.h
  * @brief PJMEDIA main header file.
  */
-#include <pjmedia/ai_port.h>
 #include <pjmedia/alaw_ulaw.h>
 #include <pjmedia/avi.h>
 #include <pjmedia/avi_stream.h>
@@ -75,7 +74,6 @@
 #include <pjmedia/vid_port.h>
 #include <pjmedia/vid_stream.h>
 //#include <pjmedia/vid_tee.h>
-#include <pjmedia/tone_detector.h>
 #include <pjmedia/wav_playlist.h>
 #include <pjmedia/wav_port.h>
 #include <pjmedia/wave.h>

@@ -40,11 +40,6 @@ distclean realclean:
 	done
 	$(HOST_RM) config.log
 	$(HOST_RM) config.status
-	$(HOST_RM) pjlib/include/pj/compat/os_auto.h
-	$(HOST_RM) pjlib/include/pj/compat/m_auto.h
-	$(HOST_RM) pjmedia/include/pjmedia/config_auto.h
-	$(HOST_RM) pjmedia/include/pjmedia-codec/config_auto.h
-	$(HOST_RM) pjsip/include/pjsip/sip_autoconf.h
 	$(subst @@,$(subst /,$(HOST_PSEP),pjlib/lib),$(HOST_RMDIR))
 	$(subst @@,$(subst /,$(HOST_PSEP),pjlib-util/lib),$(HOST_RMDIR))
 	$(subst @@,$(subst /,$(HOST_PSEP),pjnath/lib),$(HOST_RMDIR))
@@ -129,16 +124,16 @@ pjlib-test: pjlib/bin/pjlib-test-$(TARGET_NAME)
 	cd pjlib/build && $(CI_RUNNER) ../bin/pjlib-test-$(TARGET_NAME) $(CI_ARGS) $(CI_MODE)
 
 pjlib-util-test: pjlib-util/bin/pjlib-util-test-$(TARGET_NAME)
-	cd pjlib-util/build && $(CI_RUNNER) ../bin/pjlib-util-test-$(TARGET_NAME) $(CI_ARGS) $(CI_MODE)
+	cd pjlib-util/build && $(CI_RUNNER) ../bin/pjlib-util-test-$(TARGET_NAME) $(CI_ARGS)
 
 pjnath-test: pjnath/bin/pjnath-test-$(TARGET_NAME)
-	cd pjnath/build && $(CI_RUNNER) ../bin/pjnath-test-$(TARGET_NAME) $(CI_ARGS) $(CI_MODE)
+	cd pjnath/build && $(CI_RUNNER) ../bin/pjnath-test-$(TARGET_NAME) $(CI_ARGS)
 
 pjmedia-test: pjmedia/bin/pjmedia-test-$(TARGET_NAME)
-	cd pjmedia/build && $(CI_RUNNER) ../bin/pjmedia-test-$(TARGET_NAME) $(CI_ARGS) $(CI_MODE)
+	cd pjmedia/build && $(CI_RUNNER) ../bin/pjmedia-test-$(TARGET_NAME) $(CI_ARGS)
 
 pjsip-test: pjsip/bin/pjsip-test-$(TARGET_NAME)
-	cd pjsip/build && $(CI_RUNNER) ../bin/pjsip-test-$(TARGET_NAME) $(CI_ARGS) $(CI_MODE)
+	cd pjsip/build && $(CI_RUNNER) ../bin/pjsip-test-$(TARGET_NAME) $(CI_ARGS)
 
 pjsua-test: cmp_wav
 	cd tests/pjsua && python runall.py -t 2

@@ -33,7 +33,6 @@
 #include <pj/guid.h>
 #include <pj/except.h>
 #include <pj/errno.h>
-#include <pj/hash.h>
 
 #if defined(PJ_HAS_SEMAPHORE_H) && PJ_HAS_SEMAPHORE_H != 0
 #  include <semaphore.h>
@@ -48,10 +47,7 @@
 
 #if PJ_HAS_THREADS
 #  if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L \
-                                && !defined(__STDC_NO_ATOMICS__)  \
-                                && (!defined(__GNUC__) || defined(__clang__) \
-                                || __GNUC__ > 4 \
-                                || (__GNUC__ == 4 && __GNUC_MINOR__ >= 9))
+                                && !defined(__STDC_NO_ATOMICS__)
 #    define HAS_STD_ATOMICS 1
 #    include <stdatomic.h>
 #  else
@@ -127,7 +123,7 @@ struct pj_atomic_t
 #else
     pj_atomic_value_t   value;
 #endif
-} PJ_ALIGN_DATA_SUFFIX(8);
+};
 
 struct pj_mutex_t
 {
@@ -180,7 +176,6 @@ struct pj_barrier_t {
     pthread_cond_t      cond;
     unsigned            count;
     unsigned            trip_count;
-    unsigned            generation;
 #endif
 };
 
@@ -282,11 +277,6 @@ PJ_DEF(pj_status_t) pj_init(void)
     }
 #endif
 
-    /* Initialize the per-process hash table bucketing key while still
-     * single-threaded, so the hash create/lookup paths stay lock-free.
-     */
-    pj_hash_init_key();
-
     /* Flag PJLIB as initialized */
     ++initialized;
     pj_assert(initialized == 1);
@@ -343,9 +333,9 @@ PJ_DEF(void) pj_shutdown()
         thread_tls_id = -1;
     }
 
-#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+    #if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
     zephyr_tls_clear_thread();
-#endif
+    #endif
 
     /* Ticket #1132: Assertion when (re)starting PJLIB on different thread */
     pj_bzero(main_thread_desc, sizeof(pj_thread_desc));
@@ -685,21 +675,12 @@ PJ_DEF(pj_status_t) pj_thread_register ( const char *cstr_thread_name,
     thread->signature1 = SIGNATURE1;
     thread->signature2 = SIGNATURE2;
 
-    if (cstr_thread_name && pj_strlen(&thread_name) < sizeof(thread->obj_name)-1) {
-        const char *p = pj_ansi_strchr(cstr_thread_name, '%');
-        /* Only expand the "%p" object-id convention; never treat an
-         * arbitrary name as a printf format string.
-         */
-        if (p && *(p+1)=='p' && *(p+2)=='\0')
-            pj_ansi_snprintf(thread->obj_name, sizeof(thread->obj_name),
-                             cstr_thread_name, (void*)thread->thread);
-        else
-            pj_ansi_strxcpy(thread->obj_name, cstr_thread_name,
-                            sizeof(thread->obj_name));
-    } else {
+    if(cstr_thread_name && pj_strlen(&thread_name) < sizeof(thread->obj_name)-1)
+        pj_ansi_snprintf(thread->obj_name, sizeof(thread->obj_name),
+                         cstr_thread_name, thread->thread);
+    else
         pj_ansi_snprintf(thread->obj_name, sizeof(thread->obj_name),
                          "thr%p", (void*)thread->thread);
-    }
 
     rc = pj_thread_local_set(thread_tls_id, thread);
     if (rc != PJ_SUCCESS) {
@@ -817,9 +798,9 @@ static void *thread_main(void *param)
     /* Done. */
     PJ_LOG(6,(rec->obj_name, "Thread quitting"));
 
-#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+    #if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
     zephyr_tls_clear_thread();
-#endif
+    #endif
 
     return result;
 }
@@ -845,18 +826,18 @@ static pj_status_t create_thread(const char *thread_name,
         thread_name = "thr%p";
 
     ch = pj_ansi_strchr(thread_name, '%');
-    if (ch && *(ch+1) == 'p' && *(ch+2) == '\0') {
+    if (ch && *(ch+1) == 'p') {
         pj_ansi_snprintf(rec->obj_name, PJ_MAX_OBJ_NAME, thread_name, rec);
     } else {
         pj_ansi_strxcpy(rec->obj_name, thread_name, PJ_MAX_OBJ_NAME);
     }
 
+    /* Set default stack size */
+    if (stack_size == 0)
+        stack_size = PJ_THREAD_DEFAULT_STACK_SIZE;
+
 #if defined(PJ_OS_HAS_CHECK_STACK) && PJ_OS_HAS_CHECK_STACK!=0
-#   if defined(PJ_THREAD_SET_STACK_SIZE) && PJ_THREAD_SET_STACK_SIZE!=0
-    rec->stk_size = stack_size ? stack_size : 0xFFFFFFFFUL;
-#   else
-    rec->stk_size = 0xFFFFFFFFUL;
-#   endif
+    rec->stk_size = stack_size;
     rec->stk_max_usage = 0;
 #endif
 
@@ -864,15 +845,11 @@ static pj_status_t create_thread(const char *thread_name,
     pthread_attr_init(&thread_attr);
 
 #if defined(PJ_THREAD_SET_STACK_SIZE) && PJ_THREAD_SET_STACK_SIZE!=0
-    /* Set thread's stack size if caller specified one;
-     * 0 means let OS pick the default.
-     */
-    if (stack_size != 0) {
-        rc = pthread_attr_setstacksize(&thread_attr, stack_size);
-        if (rc != 0) {
-            pthread_attr_destroy(&thread_attr);
-            return PJ_RETURN_OS_ERROR(rc);
-        }
+    /* Set thread's stack size */
+    rc = pthread_attr_setstacksize(&thread_attr, stack_size);
+    if (rc != 0) {
+        pthread_attr_destroy(&thread_attr);
+        return PJ_RETURN_OS_ERROR(rc);
     }
 #endif  /* PJ_THREAD_SET_STACK_SIZE */
 
@@ -933,11 +910,6 @@ PJ_DEF(pj_status_t) pj_thread_create( pj_pool_t *pool,
     PJ_ASSERT_RETURN(rec, PJ_ENOMEM);
 
 #if defined(PJ_THREAD_ALLOCATE_STACK) && PJ_THREAD_ALLOCATE_STACK!=0
-    /* When pjlib allocates the stack from the pool, 0 is not
-     * meaningful; fall back to PJ_THREAD_DEFAULT_STACK_SIZE.
-     */
-    if (stack_size == 0)
-        stack_size = PJ_THREAD_DEFAULT_STACK_SIZE;
     /* Allocate memory for the stack */
     stack_addr = pj_pool_alloc(pool, stack_size);
     PJ_ASSERT_RETURN(stack_addr, PJ_ENOMEM);
@@ -1104,11 +1076,11 @@ PJ_DEF(pj_status_t) pj_thread_unregister()
     //    return PJ_RETURN_OS_ERROR(result);
     else {
         status = pj_thread_local_set(thread_tls_id, NULL);
-#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
-        zephyr_tls_clear_thread();
-#endif
-        return status;
-    }
+        #if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+                zephyr_tls_clear_thread();
+        #endif
+                return status;
+        }
 #else
     pj_assert(!"No multithreading support!");
     return PJ_EINVALIDOP;
@@ -1165,15 +1137,7 @@ PJ_DEF(pj_status_t) pj_thread_sleep(unsigned msec)
 
     pj_set_os_error(0);
 
-    /* Sleep in sub-second chunks to avoid overflow of msec*1000 for large
-     * values, and to keep each usleep() argument below 1000000, which POSIX
-     * requires.
-     */
-    while (msec > 0) {
-        unsigned chunk = (msec > 500)? 500 : msec;
-        usleep(chunk * 1000);
-        msec -= chunk;
-    }
+    usleep(msec * 1000);
 
     /* MacOS X (reported on 10.5) seems to always set errno to ETIMEDOUT.
      * It does so because usleep() is declared to return int, and we're
@@ -1450,29 +1414,29 @@ PJ_DEF(void) pj_atomic_add( pj_atomic_t *atomic_var,
 PJ_DEF(pj_status_t) pj_thread_local_alloc(long *p_index)
 {
 #if PJ_HAS_THREADS
-#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
-    unsigned i;
-    k_spinlock_key_t lock_key;
+    #if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+        unsigned i;
+        k_spinlock_key_t lock_key;
 
-    PJ_ASSERT_RETURN(p_index != NULL, PJ_EINVAL);
+        PJ_ASSERT_RETURN(p_index != NULL, PJ_EINVAL);
 
-    lock_key = k_spin_lock(&zephyr_tls_lock);
-    for (i = 0; i < PJ_ZEPHYR_TLS_MAX_KEYS; ++i) {
-        unsigned long bit = 1UL << i;
+        lock_key = k_spin_lock(&zephyr_tls_lock);
+        for (i = 0; i < PJ_ZEPHYR_TLS_MAX_KEYS; ++i) {
+            unsigned long bit = 1UL << i;
 
-        if ((zephyr_tls_keys & bit) == 0) {
-            zephyr_tls_keys |= bit;
-            if (++zephyr_tls_generation[i] == 0)
-                ++zephyr_tls_generation[i];
-            *p_index = (long)i;
-            k_spin_unlock(&zephyr_tls_lock, lock_key);
-            return PJ_SUCCESS;
+            if ((zephyr_tls_keys & bit) == 0) {
+                zephyr_tls_keys |= bit;
+                if (++zephyr_tls_generation[i] == 0)
+                    ++zephyr_tls_generation[i];
+                *p_index = (long)i;
+                k_spin_unlock(&zephyr_tls_lock, lock_key);
+                return PJ_SUCCESS;
+            }
         }
-    }
 
-    k_spin_unlock(&zephyr_tls_lock, lock_key);
-    return PJ_ETOOMANY;
-#else
+        k_spin_unlock(&zephyr_tls_lock, lock_key);
+        return PJ_ETOOMANY;
+    #else
     pthread_key_t key;
     int rc;
 
@@ -1484,7 +1448,7 @@ PJ_DEF(pj_status_t) pj_thread_local_alloc(long *p_index)
 
     *p_index = key;
     return PJ_SUCCESS;
-#endif
+    #endif
 #else
     int i;
     for (i=0; i<MAX_THREADS; ++i) {
@@ -1509,7 +1473,7 @@ PJ_DEF(void) pj_thread_local_free(long index)
 {
     PJ_CHECK_STACK();
 #if PJ_HAS_THREADS
-#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+    #if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
     if (index >= 0 && index < PJ_ZEPHYR_TLS_MAX_KEYS) {
         unsigned long bit = 1UL << index;
         k_spinlock_key_t lock_key = k_spin_lock(&zephyr_tls_lock);
@@ -1519,9 +1483,9 @@ PJ_DEF(void) pj_thread_local_free(long index)
         zephyr_tls_keys &= ~bit;
         k_spin_unlock(&zephyr_tls_lock, lock_key);
     }
-#else
+    #else
     pthread_key_delete(index);
-#endif
+    #endif
 #else
     tls_flag[index] = 0;
 #endif
@@ -1536,50 +1500,50 @@ PJ_DEF(pj_status_t) pj_thread_local_set(long index, void *value)
     //beginning before main thread is initialized.
     //PJ_CHECK_STACK();
 #if PJ_HAS_THREADS
-#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
-    struct zephyr_tls_thread *entry = NULL;
-    k_tid_t current;
-    k_spinlock_key_t lock_key;
-    unsigned i;
+    #if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+        struct zephyr_tls_thread *entry = NULL;
+        k_tid_t current;
+        k_spinlock_key_t lock_key;
+        unsigned i;
 
-    if (index < 0 || index >= PJ_ZEPHYR_TLS_MAX_KEYS)
-        return PJ_EINVAL;
+        if (index < 0 || index >= PJ_ZEPHYR_TLS_MAX_KEYS)
+            return PJ_EINVAL;
 
-    current = k_current_get();
-    lock_key = k_spin_lock(&zephyr_tls_lock);
-    if ((zephyr_tls_keys & (1UL << index)) == 0) {
-        k_spin_unlock(&zephyr_tls_lock, lock_key);
-        return PJ_EINVAL;
-    }
-
-    for (i = 0; i < PJ_ZEPHYR_TLS_MAX_THREADS; ++i) {
-        if (zephyr_tls_threads[i].thread == current) {
-            entry = &zephyr_tls_threads[i];
-            break;
+        current = k_current_get();
+        lock_key = k_spin_lock(&zephyr_tls_lock);
+        if ((zephyr_tls_keys & (1UL << index)) == 0) {
+            k_spin_unlock(&zephyr_tls_lock, lock_key);
+            return PJ_EINVAL;
         }
-        if (!entry && zephyr_tls_threads[i].thread == NULL)
-            entry = &zephyr_tls_threads[i];
-    }
 
-    if (!entry) {
+        for (i = 0; i < PJ_ZEPHYR_TLS_MAX_THREADS; ++i) {
+            if (zephyr_tls_threads[i].thread == current) {
+                entry = &zephyr_tls_threads[i];
+                break;
+            }
+            if (!entry && zephyr_tls_threads[i].thread == NULL)
+                entry = &zephyr_tls_threads[i];
+        }
+
+        if (!entry) {
+            k_spin_unlock(&zephyr_tls_lock, lock_key);
+            return PJ_ETOOMANY;
+        }
+
+        if (entry->thread == NULL) {
+            entry->thread = current;
+            pj_bzero(entry->values, sizeof(entry->values));
+            pj_bzero(entry->value_generation, sizeof(entry->value_generation));
+        }
+
+        entry->values[index] = value;
+        entry->value_generation[index] = zephyr_tls_generation[index];
         k_spin_unlock(&zephyr_tls_lock, lock_key);
-        return PJ_ETOOMANY;
-    }
-
-    if (entry->thread == NULL) {
-        entry->thread = current;
-        pj_bzero(entry->values, sizeof(entry->values));
-        pj_bzero(entry->value_generation, sizeof(entry->value_generation));
-    }
-
-    entry->values[index] = value;
-    entry->value_generation[index] = zephyr_tls_generation[index];
-    k_spin_unlock(&zephyr_tls_lock, lock_key);
-    return PJ_SUCCESS;
-#else
+        return PJ_SUCCESS;
+    #else
     int rc=pthread_setspecific(index, value);
     return rc==0 ? PJ_SUCCESS : PJ_RETURN_OS_ERROR(rc);
-#endif
+    #endif
 #else
     pj_assert(index >= 0 && index < MAX_THREADS);
     tls[index] = value;
@@ -1593,35 +1557,35 @@ PJ_DEF(void*) pj_thread_local_get(long index)
     //by PJ_CHECK_STACK() itself!!!
     //PJ_CHECK_STACK();
 #if PJ_HAS_THREADS
-#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
-    k_tid_t current;
-    k_spinlock_key_t lock_key;
-    void *value = NULL;
-    unsigned i;
+    #if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
+        k_tid_t current;
+        k_spinlock_key_t lock_key;
+        void *value = NULL;
+        unsigned i;
 
-    if (index < 0 || index >= PJ_ZEPHYR_TLS_MAX_KEYS)
-        return NULL;
+        if (index < 0 || index >= PJ_ZEPHYR_TLS_MAX_KEYS)
+            return NULL;
 
-    current = k_current_get();
-    lock_key = k_spin_lock(&zephyr_tls_lock);
-    if ((zephyr_tls_keys & (1UL << index)) != 0) {
-        for (i = 0; i < PJ_ZEPHYR_TLS_MAX_THREADS; ++i) {
-            struct zephyr_tls_thread *entry = &zephyr_tls_threads[i];
+        current = k_current_get();
+        lock_key = k_spin_lock(&zephyr_tls_lock);
+        if ((zephyr_tls_keys & (1UL << index)) != 0) {
+            for (i = 0; i < PJ_ZEPHYR_TLS_MAX_THREADS; ++i) {
+                struct zephyr_tls_thread *entry = &zephyr_tls_threads[i];
 
-            if (entry->thread == current &&
-                entry->value_generation[index] ==
-                    zephyr_tls_generation[index])
-            {
-                value = entry->values[index];
-                break;
+                if (entry->thread == current &&
+                    entry->value_generation[index] ==
+                        zephyr_tls_generation[index])
+                {
+                    value = entry->values[index];
+                    break;
+                }
             }
         }
-    }
-    k_spin_unlock(&zephyr_tls_lock, lock_key);
-    return value;
-#else
+        k_spin_unlock(&zephyr_tls_lock, lock_key);
+        return value;
+    #else
     return pthread_getspecific(index);
-#endif
+    #endif
 #else
     pj_assert(index >= 0 && index < MAX_THREADS);
     return tls[index];
@@ -1717,13 +1681,11 @@ static pj_status_t init_mutex(pj_mutex_t *mutex, const char *name, int type)
     }
 
     if (rc != 0) {
-        pthread_mutexattr_destroy(&attr);
         return PJ_RETURN_OS_ERROR(rc);
     }
 
     rc = pthread_mutex_init(&mutex->mutex, &attr);
     if (rc != 0) {
-        pthread_mutexattr_destroy(&attr);
         return PJ_RETURN_OS_ERROR(rc);
     }
 
@@ -1745,16 +1707,10 @@ static pj_status_t init_mutex(pj_mutex_t *mutex, const char *name, int type)
     if (!name) {
         name = "mtx%p";
     }
-    {
-        const char *p = strchr(name, '%');
-        /* Only expand the "%p" object-id convention; never treat an
-         * arbitrary name as a printf format string.
-         */
-        if (p && *(p+1)=='p' && *(p+2)=='\0') {
-            pj_ansi_snprintf(mutex->obj_name, PJ_MAX_OBJ_NAME, name, mutex);
-        } else {
-            pj_ansi_strxcpy(mutex->obj_name, name, PJ_MAX_OBJ_NAME);
-        }
+    if (strchr(name, '%')) {
+        pj_ansi_snprintf(mutex->obj_name, PJ_MAX_OBJ_NAME, name, mutex);
+    } else {
+        pj_ansi_strxcpy(mutex->obj_name, name, PJ_MAX_OBJ_NAME);
     }
 
     PJ_LOG(6, (mutex->obj_name, "Mutex created"));
@@ -2172,16 +2128,10 @@ PJ_DEF(pj_status_t) pj_sem_create( pj_pool_t *pool,
     if (!name) {
         name = "sem%p";
     }
-    {
-        const char *p = strchr(name, '%');
-        /* Only expand the "%p" object-id convention; never treat an
-         * arbitrary name as a printf format string.
-         */
-        if (p && *(p+1)=='p' && *(p+2)=='\0') {
-            pj_ansi_snprintf(sem->obj_name, PJ_MAX_OBJ_NAME, name, sem);
-        } else {
-            pj_ansi_strxcpy(sem->obj_name, name, PJ_MAX_OBJ_NAME);
-        }
+    if (strchr(name, '%')) {
+        pj_ansi_snprintf(sem->obj_name, PJ_MAX_OBJ_NAME, name, sem);
+    } else {
+        pj_ansi_strxcpy(sem->obj_name, name, PJ_MAX_OBJ_NAME);
     }
 
     PJ_LOG(6, (sem->obj_name, "Semaphore created"));
@@ -2340,22 +2290,11 @@ PJ_DEF(pj_status_t) pj_event_create(pj_pool_t *pool, const char *name,
                                     pj_event_t **ptr_event)
 {
     pj_event_t *event;
-    pj_status_t rc;
-    int prc;
 
     event = PJ_POOL_ALLOC_T(pool, pj_event_t);
-    PJ_ASSERT_RETURN(event, PJ_ENOMEM);
 
-    rc = init_mutex(&event->mutex, name, PJ_MUTEX_SIMPLE);
-    if (rc != PJ_SUCCESS)
-        return rc;
-
-    prc = pthread_cond_init(&event->cond, 0);
-    if (prc != 0) {
-        pj_mutex_destroy(&event->mutex);
-        return PJ_RETURN_OS_ERROR(prc);
-    }
-
+    init_mutex(&event->mutex, name, PJ_MUTEX_SIMPLE);
+    pthread_cond_init(&event->cond, 0);
     event->auto_reset = !manual_reset;
     event->threads_waiting = 0;
 
@@ -2511,10 +2450,8 @@ PJ_DEF(pj_status_t) pj_barrier_create(pj_pool_t *pool, unsigned trip_count, pj_b
  */
 PJ_DEF(pj_int32_t) pj_barrier_wait(pj_barrier_t *barrier, pj_uint32_t flags) 
 {
-    int rc;
-
     PJ_UNUSED_ARG(flags);
-    rc = pthread_barrier_wait(&barrier->barrier);
+    int rc = pthread_barrier_wait(&barrier->barrier);
     switch (rc) {
     case 0:
         return PJ_FALSE;
@@ -2571,25 +2508,18 @@ PJ_DEF(pj_status_t) pj_barrier_create(pj_pool_t *pool, unsigned trip_count, pj_b
  */
 PJ_DEF(pj_int32_t) pj_barrier_wait(pj_barrier_t *barrier, pj_uint32_t flags) 
 {
-    pj_bool_t is_last = PJ_FALSE;
-    int status = 0;
-
     PJ_UNUSED_ARG(flags);
+
+    pj_bool_t is_last = PJ_FALSE;
+    int status;
 
     pthread_mutex_lock(&barrier->mutex.mutex);
     if (++barrier->count >= barrier->trip_count) {
         barrier->count = 0;
-        ++barrier->generation;
         status = pthread_cond_broadcast(&barrier->cond);
         is_last = PJ_TRUE;
     } else {
-        unsigned gen = barrier->generation;
-        /* Loop to guard against spurious wakeups and barrier reuse: return
-         * only once this generation has been released by the last waiter,
-         * instead of returning on any wakeup.
-         */
-        while (gen == barrier->generation && status == 0)
-            status = pthread_cond_wait(&barrier->cond, &barrier->mutex.mutex);
+        status = pthread_cond_wait(&barrier->cond, &barrier->mutex.mutex);
     }
     pthread_mutex_unlock(&barrier->mutex.mutex);
 

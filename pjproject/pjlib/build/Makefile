@@ -12,7 +12,7 @@ export PJLIB_LIB := libpj-$(TARGET_NAME)$(LIBEXT)
 ifeq ($(PJ_SHARED_LIBRARIES),)
 else
 export PJLIB_SONAME := libpj.$(SHLIB_SUFFIX)
-export PJLIB_SHLIB := $(PJLIB_SONAME).$(PJ_SONAME_VERSION)
+export PJLIB_SHLIB := $(PJLIB_SONAME).$(PJ_VERSION_MAJOR)
 endif
 
 ###############################################################################
@@ -22,8 +22,8 @@ export _CFLAGS 	:= $(CC_CFLAGS) $(OS_CFLAGS) $(HOST_CFLAGS) $(M_CFLAGS) \
 		   $(CFLAGS) $(CC_INC)../include
 export _CXXFLAGS:= $(_CFLAGS) $(CC_CXXFLAGS) $(OS_CXXFLAGS) $(M_CXXFLAGS) \
 		   $(HOST_CXXFLAGS) $(CXXFLAGS)
-export _LDFLAGS := $(CC_LDFLAGS) $(APP_LDFLAGS) $(OS_LDFLAGS) $(M_LDFLAGS) \
-		   $(HOST_LDFLAGS) $(LDFLAGS) 
+export _LDFLAGS := $(CC_LDFLAGS) $(OS_LDFLAGS) $(M_LDFLAGS) $(HOST_LDFLAGS) \
+		   $(APP_LDFLAGS) $(LDFLAGS) 
 
 
 ###############################################################################
@@ -51,7 +51,7 @@ export TEST_OBJS += activesock.o atomic.o atomic_slist.o \
 		    fifobuf.o file.o hash_test.o ioq_perf.o ioq_udp.o \
 		    ioq_stress_test.o ioq_unreg.o ioq_tcp.o ioq_iocp_unreg_test.o \
 		    list.o mutex.o os.o pool.o pool_perf.o rand.o rbtree.o \
-		    select.o sleep.o sock.o sock_perf.o ssl_sock.o ssl_sock_stress.o \
+		    select.o sleep.o sock.o sock_perf.o ssl_sock.o \
 		    string.o test.o thread.o timer.o timestamp.o \
 		    udp_echo_srv_sync.o udp_echo_srv_ioqueue.o \
 		    unittest_test.o util.o

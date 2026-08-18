@@ -153,14 +153,14 @@ static int ssl_data_push(void *ctx, const unsigned char *buf, size_t len)
 {
     pj_ssl_sock_t *ssock = (pj_ssl_sock_t *)ctx;
 
-    pj_lock_acquire(ssock->ssl_write_buf_mutex);
-    if (circ_write(&ssock->ssl_write_buf, buf, len) != PJ_SUCCESS) {
-        pj_lock_release(ssock->ssl_write_buf_mutex);
+    pj_lock_acquire(ssock->circ_buf_output_mutex);
+    if (circ_write(&ssock->circ_buf_output, buf, len) != PJ_SUCCESS) {
+        pj_lock_release(ssock->circ_buf_output_mutex);
 
         return MBEDTLS_ERR_SSL_WANT_WRITE;
     }
 
-    pj_lock_release(ssock->ssl_write_buf_mutex);
+    pj_lock_release(ssock->circ_buf_output_mutex);
 
     return len;
 }
@@ -171,19 +171,19 @@ static int ssl_data_pull(void *ctx, unsigned char *buf, size_t len)
     pj_size_t circ_buf_size;
     pj_size_t read_size;
 
-    pj_lock_acquire(ssock->ssl_read_buf_mutex);
+    pj_lock_acquire(ssock->circ_buf_input_mutex);
 
-    if (circ_empty(&ssock->ssl_read_buf)) {
-        pj_lock_release(ssock->ssl_read_buf_mutex);
+    if (circ_empty(&ssock->circ_buf_input)) {
+        pj_lock_release(ssock->circ_buf_input_mutex);
 
         return MBEDTLS_ERR_SSL_WANT_READ;
     }
 
-    circ_buf_size = circ_size(&ssock->ssl_read_buf);
+    circ_buf_size = circ_size(&ssock->circ_buf_input);
     read_size = PJ_MIN(circ_buf_size, len);
 
-    circ_read(&ssock->ssl_read_buf, buf, read_size);
-    pj_lock_release(ssock->ssl_read_buf_mutex);
+    circ_read(&ssock->circ_buf_input, buf, read_size);
+    pj_lock_release(ssock->circ_buf_input_mutex);
 
     return read_size;
 }
@@ -623,12 +623,12 @@ static pj_status_t ssl_create(pj_ssl_sock_t *ssock)
     pj_assert(ssock);
 
     /* Initialize input circular buffer */
-    status = circ_init(ssock->pool->factory, &ssock->ssl_read_buf, 512);
+    status = circ_init(ssock->pool->factory, &ssock->circ_buf_input, 512);
     if (status != PJ_SUCCESS)
         return status;
 
     /* Initialize output circular buffer */
-    status = circ_init(ssock->pool->factory, &ssock->ssl_write_buf, 512);
+    status = circ_init(ssock->pool->factory, &ssock->circ_buf_output, 512);
     if (status != PJ_SUCCESS) {
         return status;
     }
@@ -742,16 +742,16 @@ static void ssl_destroy(pj_ssl_sock_t *ssock)
 #endif
 
     /* Destroy circular buffers */
-    circ_deinit(&ssock->ssl_read_buf);
-    circ_deinit(&ssock->ssl_write_buf);
+    circ_deinit(&ssock->circ_buf_input);
+    circ_deinit(&ssock->circ_buf_output);
 }
 
 /* Reset socket state. */
 static void ssl_reset_sock_state(pj_ssl_sock_t *ssock)
 {
-    pj_lock_acquire(ssock->ssl_write_buf_mutex);
+    pj_lock_acquire(ssock->circ_buf_output_mutex);
     ssock->ssl_state = SSL_STATE_NULL;
-    pj_lock_release(ssock->ssl_write_buf_mutex);
+    pj_lock_release(ssock->circ_buf_output_mutex);
 
     ssl_close_sockets(ssock);
 }
@@ -826,16 +826,17 @@ static pj_status_t ssl_do_handshake(pj_ssl_sock_t *ssock)
 {
     mbedtls_sock_t *mssock = (mbedtls_sock_t *)ssock;
     pj_status_t handshake_status;
+    pj_status_t status;
     int ret;
 
-    /* Hold write_mutex to prevent concurrent session access from
-     * read and write callbacks (ioqueue may fire them in parallel).
-     */
-    pj_lock_acquire(ssock->write_mutex);
     ret = mbedtls_ssl_handshake(&mssock->ssl_ctx);
-    pj_lock_release(ssock->write_mutex);
     handshake_status = ssl_status_from_err(ssock, ret);
 
+    status = flush_circ_buf_output(ssock, &ssock->handshake_op_key, 0, 0);
+    if (status != PJ_SUCCESS) {
+        PJ_LOG(2, (THIS_FILE, "Failed to send handshake packets"));
+        return status;
+    }
     if (handshake_status == PJ_EPENDING)
         return PJ_EPENDING;
 
@@ -861,15 +862,8 @@ static pj_status_t ssl_renegotiate(pj_ssl_sock_t *ssock)
 static pj_status_t ssl_read(pj_ssl_sock_t *ssock, void *data, int *size)
 {
     mbedtls_sock_t *mssock = (mbedtls_sock_t *)ssock;
-    int ret;
 
-    /* Hold write_mutex because mbedtls_ssl_read() may produce
-     * handshake data during renegotiation (same as OpenSSL's
-     * SSL_read approach).
-     */
-    pj_lock_acquire(ssock->write_mutex);
-    ret = mbedtls_ssl_read(&mssock->ssl_ctx, data, *size);
-    pj_lock_release(ssock->write_mutex);
+    int ret = mbedtls_ssl_read(&mssock->ssl_ctx, data, *size);
     if (ret >= 0) {
         *size = ret;
         return PJ_SUCCESS;
@@ -881,7 +875,6 @@ static pj_status_t ssl_read(pj_ssl_sock_t *ssock, void *data, int *size)
     }
 }
 
-/* Caller must hold ssock->write_mutex. */
 static pj_status_t ssl_write(pj_ssl_sock_t *ssock, const void *data,
                              pj_ssize_t size, int *nwritten)
 {

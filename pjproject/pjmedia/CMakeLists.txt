@@ -41,16 +41,6 @@ elseif(PJMEDIA_WITH_RESAMPLE STREQUAL "speex")
     message(FATAL_ERROR "Resampling backend cannot be set to `speex`, \
                          because Speex is not available")
   endif()
-  # Modern speex (1.2+) ships the resampler in libspeexdsp, separate from
-  # libspeex. When using system speex we therefore also need SpeexDSP.
-  # The bundled speex keeps the resampler in-tree so nothing extra is
-  # required there.
-  get_target_property(_pj_speex_provider Pj::Dep::Speex PJ_DEP_PROVIDER)
-  if(_pj_speex_provider STREQUAL "system")
-    find_package(SpeexDSP REQUIRED)
-    set(_pj_resample_speex_needs_speexdsp TRUE)
-  endif()
-  unset(_pj_speex_provider)
 endif()
 
 #
@@ -307,8 +297,6 @@ cmake_dependent_option(PJMEDIA_WITH_VIDEODEV_DSHOW
 # pjmedia
 
 add_library(pjmedia
-  src/pjmedia/ai_port.c
-  src/pjmedia/ai_port_openai.c
   src/pjmedia/alaw_ulaw.c
   src/pjmedia/alaw_ulaw_table.c
   src/pjmedia/avi_player.c
@@ -379,7 +367,6 @@ add_library(pjmedia
   src/pjmedia/wav_player.c
   src/pjmedia/wav_playlist.c
   src/pjmedia/wav_writer.c
-  src/pjmedia/tone_detector.c
   src/pjmedia/wave.c
   src/pjmedia/wsola.c
   src/pjmedia/audiodev.c
@@ -394,7 +381,6 @@ target_sources(pjmedia
       include
     FILES
       include/pjmedia.h
-      include/pjmedia/ai_port.h
       include/pjmedia/alaw_ulaw.h
       include/pjmedia/audiodev.h
       include/pjmedia/av_sync.h
@@ -458,7 +444,6 @@ target_sources(pjmedia
       include/pjmedia/vid_stream.h
       include/pjmedia/vid_tee.h
       include/pjmedia/videodev.h
-      include/pjmedia/tone_detector.h
       include/pjmedia/wav_playlist.h
       include/pjmedia/wav_port.h
       include/pjmedia/wave.h
@@ -539,20 +524,17 @@ target_sources(pjmedia
 #
 
 target_link_libraries(pjmedia
-  PUBLIC
-    # pjlib - PUBLIC to propagate PJ_AUTOCONF and other compile definitions
-    pjlib
-    # srtp - PUBLIC to propagate shared library dependency to consumers
-    $<$<BOOL:${PJMEDIA_WITH_SRTP}>:Pj::Dep::SRTP>
   PRIVATE
     # project
-    pjlib-ssl pjlib-util pjnath
+    pjlib pjlib-ssl pjlib-util pjnath
+
+    # srtp
+    $<$<BOOL:${PJMEDIA_WITH_SRTP}>:Pj::Dep::SRTP>
 
     # resampling backend
     $<$<STREQUAL:${PJMEDIA_WITH_RESAMPLE},libresample>:Pj::Dep::Resample>
     $<$<STREQUAL:${PJMEDIA_WITH_RESAMPLE},libsamplerate>:SampleRate::SampleRate>
     $<$<STREQUAL:${PJMEDIA_WITH_RESAMPLE},speex>:Pj::Dep::Speex>
-    $<$<BOOL:${_pj_resample_speex_needs_speexdsp}>:SpeexDSP::SpeexDSP>
 
     # aec
     $<$<BOOL:${PJMEDIA_WITH_SPEEX_AEC}>:Pj::Dep::Speex;SpeexDSP::SpeexDSP>
@@ -707,11 +689,9 @@ target_sources(pjmedia-codec
 #
 
 target_link_libraries(pjmedia-codec
-  PUBLIC
-    pjlib
   PRIVATE
     # project
-    pjlib-util pjmedia
+    pjlib pjlib-util pjmedia
 
     # audio codecs
     $<$<BOOL:${PJMEDIA_WITH_GSM_CODEC}>:Pj::Dep::GSM>
@@ -729,9 +709,7 @@ target_link_libraries(pjmedia-codec
     # video codecs
     $<$<BOOL:${PJMEDIA_WITH_VPX_CODEC}>:VPX::VPX>
     $<$<BOOL:${PJMEDIA_WITH_OPEN_H264_CODEC}>:OpenH264::OpenH264>
-    $<$<BOOL:${PJMEDIA_WITH_FFMPEG_AVFORMAT}>:FFMPEG::avformat>
-    $<$<BOOL:${PJMEDIA_WITH_FFMPEG_AVCODEC}>:FFMPEG::avcodec>
-    $<$<BOOL:${PJMEDIA_WITH_FFMPEG_AVUTIL}>:FFMPEG::avutil>
+    $<$<BOOL:${PJMEDIA_HAS_LIBAVFORMAT}>:FFMPEG::avformat>
 )
 
 # ##############################################################################
@@ -796,11 +774,9 @@ target_compile_definitions(pjmedia-audiodev
 #
 
 target_link_libraries(pjmedia-audiodev
-  PUBLIC
-    pjlib
   PRIVATE
     # project
-    pjlib-util pjmedia
+    pjlib pjlib-util pjmedia
 
     # audio backends
     $<$<BOOL:${PJMEDIA_WITH_AUDIODEV_ALSA}>:ALSA::ALSA>
@@ -819,7 +795,6 @@ add_library(pjmedia-videodev
   src/pjmedia-videodev/dshowclasses.cpp
   src/pjmedia-videodev/errno.c
   src/pjmedia-videodev/ffmpeg_dev.c
-  src/pjmedia-videodev/null_dev.c
   src/pjmedia-videodev/opengl_dev.c
   src/pjmedia-videodev/util.c
   src/pjmedia-videodev/v4l2_dev.c
@@ -881,11 +856,9 @@ endif()
 #
 
 target_link_libraries(pjmedia-videodev
-  PUBLIC
-    pjlib
   PRIVATE
     # project
-    pjlib-util pjmedia
+    pjlib pjlib-util pjmedia
 
     # video backends
     $<$<BOOL:${PJMEDIA_WITH_VIDEODEV_OPENGL}>:OpenGL::GL;OpenGL::GLES2>
@@ -912,9 +885,7 @@ if(BUILD_TESTING)
     src/test/vid_port_test.c
     src/test/rtp_test.c
     src/test/test.c
-    src/test/tone_detector_test.c
     src/test/sdp_neg_test.c
-    src/test/sdp_attr_test.c
   )
 
   target_link_libraries(pjmedia-test

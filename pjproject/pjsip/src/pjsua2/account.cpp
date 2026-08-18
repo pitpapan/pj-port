@@ -395,10 +395,8 @@ void AccountCallConfig::readObject(const ContainerNode &node)
     NODE_READ_NUM_T   ( this_node, pjsua_100rel_use, prackUse);
     NODE_READ_NUM_T   ( this_node, pjsua_sip_timer_use, timerUse);
     NODE_READ_NUM_T   ( this_node, pjsua_sip_siprec_use, siprecUse);
-    NODE_READ_BOOL    ( this_node, siprecRequireLabel);
     NODE_READ_UNSIGNED( this_node, timerMinSESec);
     NODE_READ_UNSIGNED( this_node, timerSessExpiresSec);
-    NODE_READ_BOOL_OPT( this_node, siprecRequireMetadata);
 }
 
 void AccountCallConfig::writeObject(ContainerNode &node) const
@@ -410,10 +408,8 @@ void AccountCallConfig::writeObject(ContainerNode &node) const
     NODE_WRITE_NUM_T   ( this_node, pjsua_100rel_use, prackUse);
     NODE_WRITE_NUM_T   ( this_node, pjsua_sip_timer_use, timerUse);
     NODE_WRITE_NUM_T   ( this_node, pjsua_sip_siprec_use, siprecUse);
-    NODE_WRITE_BOOL    ( this_node, siprecRequireLabel);
     NODE_WRITE_UNSIGNED( this_node, timerMinSESec);
     NODE_WRITE_UNSIGNED( this_node, timerSessExpiresSec);
-    NODE_WRITE_BOOL    ( this_node, siprecRequireMetadata);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -730,7 +726,6 @@ void AccountConfig::toPj(pjsua_acc_config &ret) const
     ret.auth_pref.algorithm       = str2Pj(sipConfig.authInitialAlgorithm);
     ret.transport_id              = sipConfig.transportId;
     ret.ipv6_sip_use              = sipConfig.ipv6Use;
-    ret.server_affinity           = sipConfig.serverAffinity;
     ret.use_shared_auth           = sipConfig.useSharedAuth;
     ret.auto_repond_sip_message = sipConfig.autoRespondSipMessage;
 
@@ -739,8 +734,6 @@ void AccountConfig::toPj(pjsua_acc_config &ret) const
     ret.require_100rel          = callConfig.prackUse;
     ret.use_timer               = callConfig.timerUse;
     ret.use_siprec              = callConfig.siprecUse;
-    ret.siprec_require_label    = callConfig.siprecRequireLabel;
-    ret.siprec_require_metadata = callConfig.siprecRequireMetadata;
     ret.timer_setting.min_se    = callConfig.timerMinSESec;
     ret.timer_setting.sess_expires = callConfig.timerSessExpiresSec;
 
@@ -922,7 +915,6 @@ void AccountConfig::fromPj(const pjsua_acc_config &prm,
     sipConfig.authInitialAlgorithm   = pj2Str(prm.auth_pref.algorithm);
     sipConfig.transportId            = prm.transport_id;
     sipConfig.ipv6Use                = prm.ipv6_sip_use;
-    sipConfig.serverAffinity         = prm.server_affinity;
     sipConfig.useSharedAuth          = PJ2BOOL(prm.use_shared_auth);
     sipConfig.autoRespondSipMessage = PJ2BOOL(prm.auto_repond_sip_message);
 
@@ -931,8 +923,6 @@ void AccountConfig::fromPj(const pjsua_acc_config &prm,
     callConfig.prackUse         = prm.require_100rel;
     callConfig.timerUse         = prm.use_timer;
     callConfig.siprecUse        = prm.use_siprec;
-    callConfig.siprecRequireLabel = PJ2BOOL(prm.siprec_require_label);
-    callConfig.siprecRequireMetadata = PJ2BOOL(prm.siprec_require_metadata);
     callConfig.timerMinSESec    = prm.timer_setting.min_se;
     callConfig.timerSessExpiresSec = prm.timer_setting.sess_expires;
 
@@ -1134,7 +1124,9 @@ Account::Account()
 
 Account::~Account()
 {
-    /* Always delete the C-layer account to prevent resource leaks. */
+    /* If this instance is deleted, also delete the corresponding account in
+     * PJSUA library.
+     */
     shutdown();
 }
 
@@ -1156,18 +1148,6 @@ void Account::create(const AccountConfig &acc_cfg,
 
 void Account::shutdown()
 {
-    try {
-        AccountShutdownParam prm;
-        prm.force = true;
-        shutdown2(prm);
-    } catch (Error &err) {
-        PJ_PERROR(1, (THIS_FILE, err.status,
-                     "Failed to delete account %d", id));
-    }
-}
-
-void Account::shutdown2(const AccountShutdownParam &prm) PJSUA2_THROW(Error)
-{
     if (isValid() && pjsua_get_state() < PJSUA_STATE_CLOSING) {
 #if !DEPRECATED_FOR_TICKET_2232
         // Cleanup buddies in the buddy list
@@ -1177,10 +1157,11 @@ void Account::shutdown2(const AccountShutdownParam &prm) PJSUA2_THROW(Error)
         }
 #endif
 
-        pjsua_acc_del_param del_prm;
-        pjsua_acc_del_param_default(&del_prm);
-        del_prm.force = prm.force? PJ_TRUE : PJ_FALSE;
-        PJSUA2_CHECK_EXPR(pjsua_acc_del2(id, &del_prm));
+        // This caused error message of "Error: cannot find Account.."
+        // when Endpoint::on_reg_started() is called for unregistration.
+        //pjsua_acc_set_user_data(id, NULL);
+
+        pjsua_acc_del(id);
     }
 }
 
@@ -1215,8 +1196,6 @@ int Account::getId() const
 
 Account *Account::lookup(int acc_id)
 {
-    if (!pjsua_acc_is_valid(acc_id))
-        return NULL;
     return (Account*)pjsua_acc_get_user_data(acc_id);
 }
 
@@ -1274,22 +1253,6 @@ Account::setOnlineStatus(const PresenceStatus &pres_st) PJSUA2_THROW(Error)
 void Account::setTransport(TransportId tp_id) PJSUA2_THROW(Error)
 {
     PJSUA2_CHECK_EXPR( pjsua_acc_set_transport(id, tp_id) );
-}
-
-void Account::refreshTransport() PJSUA2_THROW(Error)
-{
-    PJSUA2_CHECK_EXPR( pjsua_acc_refresh_transport(id) );
-}
-
-void Account::setAffinityAddr(const SocketAddress &addr) PJSUA2_THROW(Error)
-{
-    pj_sockaddr sa;
-    pj_str_t input = str2Pj(addr);
-
-    PJSUA2_CHECK_EXPR(
-        pj_sockaddr_parse(pj_AF_UNSPEC(), 0, &input, &sa)
-    );
-    PJSUA2_CHECK_EXPR( pjsua_acc_set_affinity_addr(id, &sa) );
 }
 
 void Account::presNotify(const PresNotifyParam &prm) PJSUA2_THROW(Error)

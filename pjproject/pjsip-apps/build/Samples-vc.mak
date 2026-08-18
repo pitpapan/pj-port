@@ -74,8 +74,7 @@ OBJDIR = .\output\samples-$(TARGET)
 BINDIR = ..\bin\samples\$(TARGET)
 
 
-SAMPLES = $(BINDIR)\aidemo.exe \
-	  $(BINDIR)\auddemo.exe \
+SAMPLES = $(BINDIR)\auddemo.exe \
 	  $(BINDIR)\aectest.exe \
 	  $(BINDIR)\aviplay.exe \
 	  $(BINDIR)\clidemo.exe \
@@ -105,7 +104,6 @@ SAMPLES = $(BINDIR)\aidemo.exe \
 	  $(BINDIR)\streamutil.exe \
 	  $(BINDIR)\strerror.exe \
 	  $(BINDIR)\tonegen.exe \
-	  $(BINDIR)\vaddemo.exe \
 	  $(BINDIR)\vid_streamutil.exe
 
 

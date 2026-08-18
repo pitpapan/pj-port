@@ -606,8 +606,6 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\src\pjmedia\ai_port.c" />
-    <ClCompile Include="..\src\pjmedia\ai_port_openai.c" />
     <ClCompile Include="..\src\pjmedia\alaw_ulaw.c" />
     <ClCompile Include="..\src\pjmedia\alaw_ulaw_table.c" />
     <ClCompile Include="..\src\pjmedia\audiodev.c" />
@@ -762,12 +760,10 @@
     <ClCompile Include="..\src\pjmedia\wav_player.c" />
     <ClCompile Include="..\src\pjmedia\wav_playlist.c" />
     <ClCompile Include="..\src\pjmedia\wav_writer.c" />
-    <ClCompile Include="..\src\pjmedia\tone_detector.c" />
     <ClCompile Include="..\src\pjmedia\wsola.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\include\pjmedia.h" />
-    <ClInclude Include="..\include\pjmedia\ai_port.h" />
     <ClInclude Include="..\include\pjmedia\alaw_ulaw.h" />
     <ClInclude Include="..\include\pjmedia\audiodev.h" />
     <ClInclude Include="..\include\pjmedia\avi.h" />
@@ -828,7 +824,6 @@
     <ClInclude Include="..\include\pjmedia\vid_stream.h" />
     <ClInclude Include="..\include\pjmedia\vid_tee.h" />
     <ClInclude Include="..\include\pjmedia\wave.h" />
-    <ClInclude Include="..\include\pjmedia\tone_detector.h" />
     <ClInclude Include="..\include\pjmedia\wav_playlist.h" />
     <ClInclude Include="..\include\pjmedia\wav_port.h" />
     <ClInclude Include="..\include\pjmedia\wsola.h" />

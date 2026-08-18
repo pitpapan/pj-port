@@ -158,18 +158,10 @@ int main(int argc, char *argv[])
 
     pj_log_set_level(5);
 
-    status = pj_init();
-    if (status != PJ_SUCCESS) {
-        puts("pj_init() error");
-        return 1;
-    }
+    pj_init();
     pj_caching_pool_init(&cp, NULL, 0);
     mem = &cp.factory;
-    status = pjlib_util_init();
-    if (status != PJ_SUCCESS) {
-        puts("pjlib_util_init() error");
-        return 1;
-    }
+    pjlib_util_init();
 
     if (argc > 2)
         f = fopen(argv[2], "wb");

@@ -974,12 +974,6 @@ PJ_DEF(pj_status_t) pj_stun_session_send_msg( pj_stun_session *sess,
     /* Allocate packet */
     tdata->max_len = PJ_STUN_MAX_PKT_LEN;
     tdata->pkt = pj_pool_zalloc(tdata->pool, tdata->max_len);
-    if (tdata->pkt == NULL) {
-        status = PJ_ENOMEM;
-        pj_stun_msg_destroy_tdata(sess, tdata);
-        LOG_ERR_(sess, "Error allocating packet buffer", status);
-        goto on_return;
-    }
 
     tdata->token = token;
     tdata->retransmit = retransmit;
@@ -1226,9 +1220,8 @@ static pj_status_t send_response(pj_stun_session *sess, void *token,
     out_pkt = (pj_uint8_t*) pj_pool_alloc(pool, out_max_len);
 
     /* Encode */
-    status = pj_stun_msg_encode(response, out_pkt, out_max_len, 0,
-                                auth_info ? &auth_info->auth_key : NULL,
-                                &out_len);
+    status = pj_stun_msg_encode(response, out_pkt, out_max_len, 0, 
+                                &auth_info->auth_key, &out_len);
     if (status != PJ_SUCCESS) {
         LOG_ERR_(sess, "Error encoding message", status);
         return status;

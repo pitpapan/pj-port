@@ -209,11 +209,7 @@ PJ_DEF(pj_status_t) pjmedia_vpx_unpacketize(pjmedia_vpx_packetizer *pktz,
 
             INC_DESC_LEN();
             /* Y: Each spatial layer's frame resolution present. */
-            if (*q & 0x10) {
-                desc_len += N_S * 4;
-                if (desc_len >= payload_len)
-                    return PJ_ETOOSMALL;
-            }
+            if (*q & 0x10) desc_len += N_S * 4;
 
             /* G: PG description present flag. */
             if (*q & 0x8) {

@@ -26,15 +26,15 @@ export PJSUA2_LIB_LIB=libpjsua2-$(TARGET_NAME)$(LIBEXT)
 ifeq ($(PJ_SHARED_LIBRARIES),)
 else
 export PJSIP_SONAME := libpjsip.$(SHLIB_SUFFIX)
-export PJSIP_SHLIB := $(PJSIP_SONAME).$(PJ_SONAME_VERSION)
+export PJSIP_SHLIB := $(PJSIP_SONAME).$(PJ_VERSION_MAJOR)
 export PJSIP_UA_SONAME := libpjsip-ua.$(SHLIB_SUFFIX)
-export PJSIP_UA_SHLIB := $(PJSIP_UA_SONAME).$(PJ_SONAME_VERSION)
+export PJSIP_UA_SHLIB := $(PJSIP_UA_SONAME).$(PJ_VERSION_MAJOR)
 export PJSIP_SIMPLE_SONAME := libpjsip-simple.$(SHLIB_SUFFIX)
-export PJSIP_SIMPLE_SHLIB := $(PJSIP_SIMPLE_SONAME).$(PJ_SONAME_VERSION)
+export PJSIP_SIMPLE_SHLIB := $(PJSIP_SIMPLE_SONAME).$(PJ_VERSION_MAJOR)
 export PJSUA_LIB_SONAME := libpjsua.$(SHLIB_SUFFIX)
-export PJSUA_LIB_SHLIB := $(PJSUA_LIB_SONAME).$(PJ_SONAME_VERSION)
+export PJSUA_LIB_SHLIB := $(PJSUA_LIB_SONAME).$(PJ_VERSION_MAJOR)
 export PJSUA2_LIB_SONAME := libpjsua2.$(SHLIB_SUFFIX)
-export PJSUA2_LIB_SHLIB := $(PJSUA2_LIB_SONAME).$(PJ_SONAME_VERSION)
+export PJSUA2_LIB_SHLIB := $(PJSUA2_LIB_SONAME).$(PJ_VERSION_MAJOR)
 endif
 
 ###############################################################################
@@ -50,8 +50,8 @@ export _CXXFLAGS:= $(CC_CXXFLAGS) $(OS_CXXFLAGS) $(M_CXXFLAGS) \
 		   $(HOST_CXXFLAGS) $(CXXFLAGS) $(_CFLAGS)
 export _LDFLAGS := $(APP_THIRD_PARTY_LIBS) \
 		   $(APP_THIRD_PARTY_EXT) \
-		   $(CC_LDFLAGS) $(APP_LDFLAGS) $(OS_LDFLAGS) $(M_LDFLAGS) \
-		   $(HOST_LDFLAGS) $(LDFLAGS) 
+		   $(CC_LDFLAGS) $(OS_LDFLAGS) $(M_LDFLAGS) $(HOST_LDFLAGS) \
+		   $(APP_LDFLAGS) $(LDFLAGS) 
 
 ###############################################################################
 # Defines for building PJSIP core library
@@ -157,42 +157,18 @@ export PJSUA2_LIB_LDFLAGS += $(PJSUA_LIB_LDLIB) \
 
 
 ###############################################################################
-# Defines for building pjsua-stress application
-#
-export PJSUA_STRESS_SRCDIR = ../src/test
-export PJSUA_STRESS_OBJS += $(OS_OBJS) $(M_OBJS) $(CC_OBJS) $(HOST_OBJS) \
-			    pjsua_stress.o
-export PJSUA_STRESS_CFLAGS += $(_CFLAGS) $(PJ_VIDEO_CFLAGS)
-export PJSUA_STRESS_CXXFLAGS += $(_CXXFLAGS) $(PJ_VIDEO_CFLAGS)
-export PJSUA_STRESS_LDFLAGS += $(PJSUA_LIB_LDLIB) \
-			       $(PJSIP_UA_LDLIB) \
-			       $(PJSIP_SIMPLE_LDLIB) \
-			       $(PJSIP_LDLIB) \
-			       $(PJMEDIA_CODEC_LDLIB) \
-			       $(PJMEDIA_VIDEODEV_LDLIB) \
-			       $(PJMEDIA_LDLIB) \
-			       $(PJMEDIA_AUDIODEV_LDLIB) \
-			       $(PJNATH_LDLIB) \
-			       $(PJLIB_UTIL_LDLIB) \
-			       $(PJLIB_LDLIB) \
-			       $(_LDFLAGS)
-ifeq ($(EXCLUDE_APP),0)
-export PJSUA_STRESS_EXE := pjsua-stress-$(TARGET_NAME)$(HOST_EXE)
-endif
-
-###############################################################################
 # Defines for building pjsua2-test application
 #
 export PJSUA2_TEST_SRCDIR = ../src/pjsua2-test
 export PJSUA2_TEST_OBJS += $(OS_OBJS) $(M_OBJS) $(CC_OBJS) $(HOST_OBJS) \
-			   main.o instant_messaging.o auth_challenge.o
+			   main.o instant_messaging.o
 export PJSUA2_TEST_CFLAGS += $(_CFLAGS) $(PJ_VIDEO_CFLAGS)
 export PJSUA2_TEST_CXXFLAGS = $(_CXXFLAGS) $(PJSUA2_LIB_CFLAGS) $(PJ_VIDEO_CFLAGS)
 export PJSUA2_TEST_LDFLAGS += $(PJ_LDXXFLAGS) $(PJ_LDXXLIBS) $(LDFLAGS)
 ifeq ($(EXCLUDE_APP),0)
 export PJSUA2_TEST_EXE := pjsua2-test-$(TARGET_NAME)$(HOST_EXE)
 endif
-export CC_OUT CC AR RANLIB HOST_MV HOST_RM HOST_RMDIR HOST_MKDIR OBJEXT LD LDOUT
+export CC_OUT CC AR RANLIB HOST_MV HOST_RM HOST_RMDIR HOST_MKDIR OBJEXT LD LDOUT 
 
 ###############################################################################
 # Defines for building test application
@@ -204,15 +180,13 @@ export TEST_OBJS += dlg_core_test.o dns_test.o msg_err_test.o \
 		    transport_test.o transport_udp_test.o \
 		    tsx_basic_test.o tsx_bench.o tsx_uac_test.o \
 		    tsx_uas_test.o txdata_test.o uri_test.o \
-		    inv_offer_answer_test.o auth_async_test.o \
-		    pjsua_auth_test.o pjsua_call_test.o \
-		    pjsua_acc_test.o
+		    inv_offer_answer_test.o
 export TEST_CFLAGS += $(_CFLAGS) $(PJ_VIDEO_CFLAGS)
 export TEST_CXXFLAGS += $(_CXXFLAGS)
-export TEST_LDFLAGS += $(PJSUA_LIB_LDLIB) \
-		       $(PJSIP_LDLIB) \
+export TEST_LDFLAGS += $(PJSIP_LDLIB) \
 		       $(PJSIP_UA_LDLIB) \
 		       $(PJSIP_SIMPLE_LDLIB) \
+		       $(PJSUA_LDLIB) \
 		       $(PJMEDIA_CODEC_LDLIB) \
 		       $(PJMEDIA_VIDEODEV_LDLIB) \
 		       $(PJMEDIA_LDLIB) \
@@ -234,7 +208,7 @@ TARGETS := $(PJSIP_LIB) $(PJSIP_SONAME) \
 	   $(PJSIP_SIMPLE_LIB) $(PJSIP_SIMPLE_SONAME) \
 	   $(PJSIP_UA_LIB) $(PJSIP_UA_SONAME) \
 	   $(PJSUA_LIB_LIB) $(PJSUA_LIB_SONAME)
-TARGETS_EXE := $(TEST_EXE) $(PJSUA_STRESS_EXE)
+TARGETS_EXE := $(TEST_EXE)
 
 ifeq ($(PJ_EXCLUDE_PJSUA2),)
 TARGETS += $(PJSUA2_LIB_LIB) $(PJSUA2_LIB_SONAME)
@@ -267,7 +241,6 @@ distclean: realclean
 .PHONY: $(PJSUA_LIB_LIB) $(PJSUA_LIB_SONAME)
 .PHONY: $(PJSUA2_LIB_LIB) $(PJSUA2_LIB_SONAME)
 .PHONY: $(TEST_EXE)
-.PHONY: $(PJSUA_STRESS_EXE)
 .PHONY: $(PJSUA2_TEST_EXE)
 
 pjsip: $(PJSIP_LIB)
@@ -302,14 +275,6 @@ $(TEST_EXE): $(PJSIP_SIMPLE_LIB) $(PJSIP_SIMPLE_SONAME)
 $(TEST_EXE): $(PJSUA_LIB_LIB) $(PJSUA_LIB_SONAME)
 $(TEST_EXE):
 	$(MAKE) -f $(RULES_MAK) APP=TEST app=pjsip-test $(subst /,$(HOST_PSEP),$(BINDIR)/$@)
-
-pjsua-stress: $(PJSUA_STRESS_EXE)
-$(PJSUA_STRESS_EXE): $(PJSIP_LIB) $(PJSIP_SONAME)
-$(PJSUA_STRESS_EXE): $(PJSIP_UA_LIB) $(PJSIP_UA_SONAME)
-$(PJSUA_STRESS_EXE): $(PJSIP_SIMPLE_LIB) $(PJSIP_SIMPLE_SONAME)
-$(PJSUA_STRESS_EXE): $(PJSUA_LIB_LIB) $(PJSUA_LIB_SONAME)
-$(PJSUA_STRESS_EXE):
-	$(MAKE) -f $(RULES_MAK) APP=PJSUA_STRESS app=pjsua-stress $(subst /,$(HOST_PSEP),$(BINDIR)/$@)
 
 pjsua2-test: $(PJSUA2_TEST_EXE)
 $(PJSUA2_TEST_EXE): $(PJSIP_LIB) $(PJSIP_SONAME)
@@ -351,7 +316,6 @@ clean:
 	$(MAKE) -f $(RULES_MAK) APP=PJSUA_LIB app=pjsua-lib $@
 	$(MAKE) -f $(RULES_MAK) APP=PJSUA2_LIB app=pjsua2-lib $@
 	$(MAKE) -f $(RULES_MAK) APP=TEST app=pjsip-test $@
-	$(MAKE) -f $(RULES_MAK) APP=PJSUA_STRESS app=pjsua-stress $@
 	$(MAKE) -f $(RULES_MAK) APP=PJSUA2_TEST app=pjsua2-test $@
 
 depend:
@@ -361,10 +325,8 @@ depend:
 	$(MAKE) -f $(RULES_MAK) APP=PJSUA_LIB app=pjsua-lib $@
 	$(MAKE) -f $(RULES_MAK) APP=PJSUA2_LIB app=pjsua2-lib $@
 	$(MAKE) -f $(RULES_MAK) APP=TEST app=pjsip-test $@
-	$(MAKE) -f $(RULES_MAK) APP=PJSUA_STRESS app=pjsua-stress $@
 	$(MAKE) -f $(RULES_MAK) APP=PJSUA2_TEST app=pjsua2-test $@
 	echo '$(BINDIR)/$(TEST_EXE): $(PJMEDIA_LIB) $(LIBDIR)/$(PJSUA_LIB_LIB) $(LIBDIR)/$(PJSIP_SIMPLE_LIB) $(LIBDIR)/$(PJSIP_UA_LIB) $(LIBDIR)/$(PJSIP_LIB) $(PJNATH_LIB) $(PJLIB_UTIL_LIB) $(PJLIB_LIB)' >> .pjsip-test-$(TARGET_NAME).depend
-	echo '$(BINDIR)/$(PJSUA_STRESS_EXE): $(PJMEDIA_LIB) $(LIBDIR)/$(PJSUA_LIB_LIB) $(LIBDIR)/$(PJSIP_SIMPLE_LIB) $(LIBDIR)/$(PJSIP_UA_LIB) $(LIBDIR)/$(PJSIP_LIB) $(PJNATH_LIB) $(PJLIB_UTIL_LIB) $(PJLIB_LIB)' >> .pjsua-stress-$(TARGET_NAME).depend
 	echo '$(BINDIR)/$(PJSUA2_TEST_EXE): $(LIBDIR)/$(PJSUA2_LIB_LIB) $(PJMEDIA_LIB) $(LIBDIR)/$(PJSUA_LIB_LIB) $(LIBDIR)/$(PJSIP_SIMPLE_LIB) $(LIBDIR)/$(PJSIP_UA_LIB) $(LIBDIR)/$(PJSIP_LIB) $(PJNATH_LIB) $(PJLIB_UTIL_LIB) $(PJLIB_LIB)' >> .pjsua2-test-$(TARGET_NAME).depend
 
 realclean:
@@ -373,7 +335,6 @@ realclean:
 	$(subst @@,$(subst /,$(HOST_PSEP),.pjsip-simple-$(TARGET_NAME).depend),$(HOST_RMR))
 	$(subst @@,$(subst /,$(HOST_PSEP),.pjsua-lib-$(TARGET_NAME).depend),$(HOST_RMR))
 	$(subst @@,$(subst /,$(HOST_PSEP),.pjsua2-lib-$(TARGET_NAME).depend),$(HOST_RMR))
-	$(subst @@,$(subst /,$(HOST_PSEP),.pjsua-stress-$(TARGET_NAME).depend),$(HOST_RMR))
 	$(subst @@,$(subst /,$(HOST_PSEP),.pjsua2-test-$(TARGET_NAME).depend),$(HOST_RMR))
 	$(MAKE) -f $(RULES_MAK) APP=PJSIP app=pjsip $@
 	$(MAKE) -f $(RULES_MAK) APP=PJSIP_UA app=pjsip-ua $@
@@ -381,7 +342,6 @@ realclean:
 	$(MAKE) -f $(RULES_MAK) APP=TEST app=pjsip-test $@
 	$(MAKE) -f $(RULES_MAK) APP=PJSUA_LIB app=pjsua-lib $@
 	$(MAKE) -f $(RULES_MAK) APP=PJSUA2_LIB app=pjsua2-lib $@
-	$(MAKE) -f $(RULES_MAK) APP=PJSUA_STRESS app=pjsua-stress $@
 	$(MAKE) -f $(RULES_MAK) APP=PJSUA2_TEST app=pjsua2-test $@
 
 

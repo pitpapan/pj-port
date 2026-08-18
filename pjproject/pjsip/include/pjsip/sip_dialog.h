@@ -164,7 +164,7 @@ struct pjsip_dialog
     pjsip_cid_hdr      *call_id;    /**< Call-ID header.                    */
     pjsip_route_hdr     route_set;  /**< Route set.                         */
     pj_bool_t           route_set_frozen; /**< Route set has been set.      */
-    pjsip_auth_clt_sess             auth_sess;  /**< Client auth session.   */
+    pjsip_auth_clt_sess auth_sess;  /**< Client authentication session.     */
     pj_str_t            initial_dest;/**< Initial destination host (used for
                                           verifying remote TLS cert).       */
 
@@ -173,9 +173,6 @@ struct pjsip_dialog
 
     /** Transaction counter. */
     int                 tsx_count;  /**< Number of pending transactions.    */
-
-    /** Teardown guard, set once destruction has started (see #1886). */
-    pj_bool_t           destroying; /**< Dialog is being destroyed?         */
 
     /** Transport selector. */
     pjsip_tpselector    tp_sel;

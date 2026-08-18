@@ -197,34 +197,31 @@ static void log_sec_err(int log_level, const char* sender,
                          FORMAT_MESSAGE_IGNORE_INSERTS,
                          NULL, ss, 0, (LPSTR)&str, 0, NULL);
     /* Trim new line chars */
-    if (str) {
-        while (len > 0 && (str[len-1] == '\r' || str[len-1] == '\n'))
-            str[--len] = 0;
-    }
+    while (len > 0 && (str[len-1] == '\r' || str[len-1] == '\n'))
+        str[--len] = 0;
 
     switch (log_level) {
     case 1:
-        PJ_LOG(1, (sender, "%s: 0x%x-%s", title, ss, (str? str : "")));
+        PJ_LOG(1, (sender, "%s: 0x%x-%s", title, ss, str));
         break;
     case 2:
-        PJ_LOG(2, (sender, "%s: 0x%x-%s", title, ss, (str? str : "")));
+        PJ_LOG(2, (sender, "%s: 0x%x-%s", title, ss, str));
         break;
     case 3:
-        PJ_LOG(3, (sender, "%s: 0x%x-%s", title, ss, (str? str : "")));
+        PJ_LOG(3, (sender, "%s: 0x%x-%s", title, ss, str));
         break;
     case 4:
-        PJ_LOG(4, (sender, "%s: 0x%x-%s", title, ss, (str? str : "")));
+        PJ_LOG(4, (sender, "%s: 0x%x-%s", title, ss, str));
         break;
     case 5:
-        PJ_LOG(5, (sender, "%s: 0x%x-%s", title, ss, (str? str : "")));
+        PJ_LOG(5, (sender, "%s: 0x%x-%s", title, ss, str));
         break;
     default:
-        PJ_LOG(6, (sender, "%s: 0x%x-%s", title, ss, (str? str : "")));
+        PJ_LOG(6, (sender, "%s: 0x%x-%s", title, ss, str));
         break;
     }
 
-    if (str)
-        LocalFree(str);
+    LocalFree(str);
 }
 
 static pj_str_t sch_err_print(pj_status_t e, char *msg, pj_size_t max)
@@ -335,12 +332,12 @@ static pj_status_t ssl_create(pj_ssl_sock_t *ssock)
     }
 
     /* Initialize input circular buffer */
-    status = circ_init(pf, &ssock->ssl_read_buf, read_cap);
+    status = circ_init(pf, &ssock->circ_buf_input, read_cap);
     if (status != PJ_SUCCESS)
         goto on_return;
 
     /* Initialize output circular buffer */
-    status = circ_init(pf, &ssock->ssl_write_buf, write_cap);
+    status = circ_init(pf, &ssock->circ_buf_output, write_cap);
     if (status != PJ_SUCCESS)
         goto on_return;
 
@@ -364,8 +361,8 @@ static void ssl_destroy(pj_ssl_sock_t* ssock)
     sch_ssl_sock_t* sch_ssock = (sch_ssl_sock_t*)ssock;
 
     /* Destroy circular buffers */
-    circ_deinit(&ssock->ssl_read_buf);
-    circ_deinit(&ssock->ssl_write_buf);
+    circ_deinit(&ssock->circ_buf_input);
+    circ_deinit(&ssock->circ_buf_output);
     circ_deinit(&sch_ssock->decrypted_buf);
 
     /* Free certificate */
@@ -382,7 +379,6 @@ static void ssl_reset_sock_state(pj_ssl_sock_t* ssock)
 {
     sch_ssl_sock_t* sch_ssock = (sch_ssl_sock_t*)ssock;
     SECURITY_STATUS ss;
-    int post_unlock_flush_write_buf = 0;
 
     LOG_DEBUG(SNAME(ssock), "SSL reset");
 
@@ -430,14 +426,15 @@ static void ssl_reset_sock_state(pj_ssl_sock_t* ssock)
             if (buf_out->cbBuffer > 0 && buf_out[0].pvBuffer) {
                 pj_status_t status;
 
-                status = circ_write(&ssock->ssl_write_buf,
+                status = circ_write(&ssock->circ_buf_output,
                                     buf_out[0].pvBuffer,
                                     buf_out[0].cbBuffer);
                 if (status != PJ_SUCCESS) {
                     PJ_PERROR(1, (SNAME(ssock), status,
-                        "Failed to queue shutdown packets"));
+                        "Failed to queuehandshake packets"));
                 } else {
-                    post_unlock_flush_write_buf = 1;
+                    flush_circ_buf_output(ssock, &ssock->shutdown_op_key,
+                                          0, 0);
                 }
             }
         } else {
@@ -456,22 +453,11 @@ static void ssl_reset_sock_state(pj_ssl_sock_t* ssock)
         FreeCredentialsHandle(&sch_ssock->cred_handle);
         SecInvalidateHandle(&sch_ssock->cred_handle);
     }
-    circ_reset(&ssock->ssl_read_buf);
-    if (!post_unlock_flush_write_buf)
-        circ_reset(&ssock->ssl_write_buf);
+    circ_reset(&ssock->circ_buf_input);
+    circ_reset(&ssock->circ_buf_output);
     circ_reset(&sch_ssock->decrypted_buf);
 
     pj_lock_release(ssock->write_mutex);
-
-    if (post_unlock_flush_write_buf) {
-        pj_status_t flush_st;
-        flush_st = flush_ssl_write_buf(ssock, &ssock->shutdown_op_key,
-                                       0, 0);
-        circ_reset(&ssock->ssl_write_buf);
-        if (flush_st == PJ_EPENDING) {
-            PJ_LOG(5, (SNAME(ssock), "close_notify send pending"));
-        }
-    }
 
     ssl_close_sockets(ssock);
 }
@@ -500,13 +486,11 @@ static void ssl_ciphers_populate()
     sch_dec();
 
     for (ULONG i = 0; i < fn->cFunctions; i++) {
-        char tmp_buf[SZ_ALG_MAX_SIZE] = {0};
+        char tmp_buf[SZ_ALG_MAX_SIZE];
         pj_str_t tmp_st;
 
-        pj_unicode_to_ansi(fn->rgpszFunctions[i], -1,
+        pj_unicode_to_ansi(fn->rgpszFunctions[i], SZ_ALG_MAX_SIZE,
                            tmp_buf, sizeof(tmp_buf));
-        if (tmp_buf[0] == '\0')
-            continue;
         pj_strdup2_with_null(sch_ssl.pool, &tmp_st, tmp_buf);
 
         /* Unfortunately we do not get the ID here.
@@ -540,13 +524,11 @@ static pj_ssl_cipher ssl_get_cipher(pj_ssl_sock_t *ssock)
         if (ssl_cipher_num < PJ_SSL_SOCK_MAX_CIPHERS &&
             !pj_ssl_cipher_name(c))
         {
-            char tmp_buf[SZ_ALG_MAX_SIZE+1] = {0};
+            char tmp_buf[SZ_ALG_MAX_SIZE+1];
             unsigned i;
 
-            pj_unicode_to_ansi(ci.szCipherSuite, -1,
+            pj_unicode_to_ansi(ci.szCipherSuite, SZ_ALG_MAX_SIZE,
                                tmp_buf, sizeof(tmp_buf));
-            if (tmp_buf[0] == '\0')
-                return c;
 
             /* If cipher is actually in the list and:
              * - if ID is 0, update it, or
@@ -583,7 +565,7 @@ static pj_status_t blob_to_str(DWORD enc_type, CERT_NAME_BLOB* blob,
 {
     DWORD ret;
     ret = CertNameToStrA(enc_type, blob, flag, buf, buf_len);
-    if (ret <= 1) {
+    if (ret < 0) {
         PJ_LOG(3,(SENDER, "Failed to convert cert blob to string"));
         return PJ_ETOOSMALL;
     }
@@ -720,7 +702,7 @@ static void cert_parse_info(pj_pool_t* pool, pj_ssl_cert_info* ci,
             switch (ane->dwAltNameChoice) {
             case CERT_ALT_NAME_DNS_NAME:
                 type = PJ_SSL_CERT_NAME_DNS;
-                len = pj_unicode_to_ansi(ane->pwszDNSName, -1,
+                len = pj_unicode_to_ansi(ane->pwszDNSName, sizeof(buf),
                                          buf, sizeof(buf)) != NULL;
                 break;
             case CERT_ALT_NAME_IP_ADDRESS:
@@ -731,12 +713,12 @@ static void cert_parse_info(pj_pool_t* pool, pj_ssl_cert_info* ci,
                 break;
             case CERT_ALT_NAME_URL:
                 type = PJ_SSL_CERT_NAME_URI;
-                len = pj_unicode_to_ansi(ane->pwszURL, -1,
+                len = pj_unicode_to_ansi(ane->pwszDNSName, sizeof(buf),
                                          buf, sizeof(buf)) != NULL;
                 break;
             case CERT_ALT_NAME_RFC822_NAME:
                 type = PJ_SSL_CERT_NAME_RFC822;
-                len = pj_unicode_to_ansi(ane->pwszRfc822Name, -1,
+                len = pj_unicode_to_ansi(ane->pwszDNSName, sizeof(buf),
                                          buf, sizeof(buf)) != NULL;
                 break;
             default:
@@ -869,11 +851,6 @@ static PCCERT_CONTEXT find_cert_in_stores(pj_ssl_cert_lookup_type type,
         /* Lookup based on type */
 
         if (type == PJ_SSL_CERT_LOOKUP_SUBJECT) {
-            /* CertFindCertificateInStore requires null-terminated string.
-             * The caller (ssl_sock_imp_common.c) always uses
-             * pj_strdup_with_null(), so keyword->ptr is safe to use
-             * directly here.
-             */
             cert = CertFindCertificateInStore(
                         store, X509_ASN_ENCODING, 0,
                         CERT_FIND_SUBJECT_STR_A, keyword->ptr, NULL);
@@ -890,10 +867,9 @@ static PCCERT_CONTEXT find_cert_in_stores(pj_ssl_cert_lookup_type type,
             WCHAR buf[256];
             DWORD buf_size;
 
-            if (keyword->slen >= PJ_ARRAY_SIZE(buf)) {
+            if (keyword->slen >= sizeof(buf)) {
                 PJ_LOG(1,(SENDER,"Cannot lookup certificate, friendly name "
-                                 "keyword is too long (max=%d)",
-                                 (int)PJ_ARRAY_SIZE(buf)));
+                                 "keyword is too long (max=%d)",sizeof(buf)));
             } else {
                 cert = NULL;
                 while (1) {
@@ -1149,6 +1125,7 @@ static void verify_remote_cert(pj_ssl_sock_t* ssock)
     }
 
     chain_para.cbSize = sizeof(chain_para);
+    chain_para.cbSize = sizeof(chain_para);
     if (!CertGetCertificateChain(HCCE_CURRENT_USER,
                                  (PCCERT_CONTEXT)cert_ctx,
                                  NULL, NULL, &chain_para, 0, 0,
@@ -1255,13 +1232,13 @@ static pj_status_t ssl_do_handshake(pj_ssl_sock_t* ssock)
 
     /* Start handshake iteration */
 
-    pj_lock_acquire(ssock->ssl_read_buf_mutex);
+    pj_lock_acquire(ssock->circ_buf_input_mutex);
 
-    if (!circ_empty(&ssock->ssl_read_buf) && !renego_req) {
+    if (!circ_empty(&ssock->circ_buf_input) && !renego_req) {
         data_in = sch_ssock->read_buf;
         data_in_size = PJ_MIN(sch_ssock->read_buf_cap,
-                              circ_size(&ssock->ssl_read_buf));
-        circ_read(&ssock->ssl_read_buf, data_in, data_in_size);
+                              circ_size(&ssock->circ_buf_input));
+        circ_read(&ssock->circ_buf_input, data_in, data_in_size);
     }
 
     SecBuffer buf_in[2]     = { {0} };
@@ -1329,7 +1306,7 @@ static pj_status_t ssl_do_handshake(pj_ssl_sock_t* ssock)
 
     /* Check for any unprocessed input data, put it back to buffer */
     if (buf_in[1].BufferType==SECBUFFER_EXTRA && buf_in[1].cbBuffer>0) {
-        circ_read_cancel(&ssock->ssl_read_buf, buf_in[1].cbBuffer);
+        circ_read_cancel(&ssock->circ_buf_input, buf_in[1].cbBuffer);
     }
 
     if (ss == SEC_E_OK && !renego_req) {
@@ -1351,7 +1328,7 @@ static pj_status_t ssl_do_handshake(pj_ssl_sock_t* ssock)
         }
 
         /* Adjust maximum message size to our allocated buffer size */
-        if (sch_ssock->write_buf) {
+        if (!sch_ssock->write_buf) {
             pj_size_t max_msg = sch_ssock->write_buf_cap -
                                 sch_ssock->strm_sizes.cbHeader -
                                 sch_ssock->strm_sizes.cbTrailer;
@@ -1391,7 +1368,7 @@ static pj_status_t ssl_do_handshake(pj_ssl_sock_t* ssock)
         LOG_DEBUG_ERR(SNAME(ssock), "Handshake progress", ss);
 
         /* Put back the incomplete message */
-        circ_read_cancel(&ssock->ssl_read_buf, data_in_size);
+        circ_read_cancel(&ssock->circ_buf_input, data_in_size);
     }
 
     else if (!renego_req) {
@@ -1400,19 +1377,27 @@ static pj_status_t ssl_do_handshake(pj_ssl_sock_t* ssock)
         status = sec_err_to_pj(ss);
     }
 
-    pj_lock_release(ssock->ssl_read_buf_mutex);
+    pj_lock_release(ssock->circ_buf_input_mutex);
 
     if ((ss == SEC_E_OK || ss == SEC_I_CONTINUE_NEEDED) &&
         buf_out[0].cbBuffer > 0 && buf_out[0].pvBuffer)
     {
         /* Queue output data to send */
-        status2 = circ_write(&ssock->ssl_write_buf, buf_out[0].pvBuffer,
+        status2 = circ_write(&ssock->circ_buf_output, buf_out[0].pvBuffer,
                              buf_out[0].cbBuffer);
         if (status2 != PJ_SUCCESS) {
             PJ_PERROR(1,(SNAME(ssock), status2,
                          "Failed to queue handshake packets"));
             status = status2;
         }
+    }
+
+    /* Send handshake packets to wire */
+    status2 = flush_circ_buf_output(ssock, &ssock->handshake_op_key, 0, 0);
+    if (status2 != PJ_SUCCESS && status2 != PJ_EPENDING) {
+        PJ_PERROR(1,(SNAME(ssock), status2,
+                     "Failed to send handshake packets"));
+        status = status2;
     }
 
 on_return:
@@ -1451,7 +1436,7 @@ static pj_status_t ssl_read(pj_ssl_sock_t* ssock, void* data, int* size)
     /* Avoid compile warning of unused debugging var */
     PJ_UNUSED_ARG(requested);
 
-    pj_lock_acquire(ssock->ssl_read_buf_mutex);
+    pj_lock_acquire(ssock->circ_buf_input_mutex);
 
     /* Try read from the decrypted buffer */
     size_ = circ_size(&sch_ssock->decrypted_buf);
@@ -1461,7 +1446,7 @@ static pj_status_t ssl_read(pj_ssl_sock_t* ssock, void* data, int* size)
         *size = (int)need;
         LOG_DEBUG1(SNAME(ssock),
                    "Read %d: returned all from decrypted buffer.", requested);
-        pj_lock_release(ssock->ssl_read_buf_mutex);
+        pj_lock_release(ssock->circ_buf_input_mutex);
         return PJ_SUCCESS;
     }
 
@@ -1473,15 +1458,15 @@ static pj_status_t ssl_read(pj_ssl_sock_t* ssock, void* data, int* size)
     need -= (int)size_;
 
     /* Decrypt data of network input buffer */
-    if (!circ_empty(&ssock->ssl_read_buf)) {
+    if (!circ_empty(&ssock->circ_buf_input)) {
         data_ = sch_ssock->read_buf;
         size_ = PJ_MIN(sch_ssock->read_buf_cap,
-                       circ_size(&ssock->ssl_read_buf));
-        circ_read(&ssock->ssl_read_buf, data_, size_);
+                       circ_size(&ssock->circ_buf_input));
+        circ_read(&ssock->circ_buf_input, data_, size_);
     } else {
         LOG_DEBUG2(SNAME(ssock), "Read %d: no data to decrypt, returned %d.",
                    requested, *size);
-        pj_lock_release(ssock->ssl_read_buf_mutex);
+        pj_lock_release(ssock->circ_buf_input_mutex);
         return PJ_SUCCESS;
     }
 
@@ -1503,7 +1488,7 @@ static pj_status_t ssl_read(pj_ssl_sock_t* ssock, void* data, int* size)
         /* Check for any unprocessed input data, put it back to buffer */
         i = find_sec_buffer(buf, ARRAYSIZE(buf), SECBUFFER_EXTRA);
         if (i >= 0) {
-            circ_read_cancel(&ssock->ssl_read_buf, buf[i].cbBuffer);
+            circ_read_cancel(&ssock->circ_buf_input, buf[i].cbBuffer);
         }
 
         /* Process any decrypted data */
@@ -1537,7 +1522,7 @@ static pj_status_t ssl_read(pj_ssl_sock_t* ssock, void* data, int* size)
     else if (ss == SEC_E_INCOMPLETE_MESSAGE)
     {
         /* Put back the incomplete message */
-        circ_read_cancel(&ssock->ssl_read_buf, size_);
+        circ_read_cancel(&ssock->circ_buf_input, size_);
     }
 
     else if (ss == SEC_I_RENEGOTIATE) {
@@ -1548,7 +1533,7 @@ static pj_status_t ssl_read(pj_ssl_sock_t* ssock, void* data, int* size)
         i = find_sec_buffer(buf, ARRAYSIZE(buf), SECBUFFER_EXTRA);
         if (i >= 0 && buf[i].pvBuffer && buf[i].cbBuffer) {
             /* Queue the token as input in the handshake */
-            circ_write(&ssock->ssl_read_buf, buf[i].pvBuffer,
+            circ_write(&ssock->circ_buf_input, buf[i].pvBuffer,
                        buf[i].cbBuffer);
         }
 
@@ -1570,14 +1555,13 @@ static pj_status_t ssl_read(pj_ssl_sock_t* ssock, void* data, int* size)
         status = sec_err_to_pj(ss);
     }
 
-    pj_lock_release(ssock->ssl_read_buf_mutex);
+    pj_lock_release(ssock->circ_buf_input_mutex);
 
     LOG_DEBUG2(SNAME(ssock), "Read %d: returned=%d.", requested, *size);
     return status;
 }
 
 
-/* Caller must hold ssock->write_mutex. */
 static pj_status_t ssl_write(pj_ssl_sock_t* ssock, const void* data,
                              pj_ssize_t size, int* nwritten)
 {
@@ -1626,7 +1610,7 @@ static pj_status_t ssl_write(pj_ssl_sock_t* ssock, const void* data,
 
         out_size = (pj_ssize_t)buf[0].cbBuffer + buf[1].cbBuffer +
                                buf[2].cbBuffer;
-        status = circ_write(&ssock->ssl_write_buf, sch_ssock->write_buf,
+        status = circ_write(&ssock->circ_buf_output, sch_ssock->write_buf,
                             out_size);
         if (status != PJ_SUCCESS) {
             PJ_PERROR(1, (SNAME(ssock), status,

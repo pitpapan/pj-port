@@ -53,8 +53,7 @@ pjsip_cfg_t pjsip_sip_cfg_var =
 
     /* Client registration client */
     {
-        PJSIP_REGISTER_CLIENT_CHECK_CONTACT,
-        PJSIP_REGISTER_CLIENT_ADD_XUID_PARAM
+        PJSIP_REGISTER_CLIENT_CHECK_CONTACT
     },
 
     /* TCP transport settings */

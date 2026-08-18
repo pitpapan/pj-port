@@ -99,22 +99,10 @@ static pj_status_t get_video_codec_info_param(pjmedia_vid_stream_info *si,
         i = 1;
         status = pjmedia_vid_codec_mgr_find_codecs_by_id(mgr, &codec_id_st,
                                                          &i, &p_info, NULL);
-        if (status == PJ_SUCCESS) {
-            si->codec_info = *p_info;
-        } else if (status == PJ_ENOTFOUND){
-            /* Codec not in registry but rtpmap provides encoding name.
-             * Build partial codec_info so 3rd-party media stacks can
-             * operate without registering dummy codecs.
-             */
-            pj_bzero(&si->codec_info, sizeof(si->codec_info));
-            si->codec_info.pt = (pj_uint8_t)pt;
-            pj_strdup(pool, &si->codec_info.encoding_name, &rtpmap->enc_name);
-            si->codec_info.clock_rate = rtpmap->clock_rate;
-            si->codec_info.dir = PJMEDIA_DIR_ENCODING_DECODING;
-            status = PJ_SUCCESS;
-        } else {
+        if (status != PJ_SUCCESS)
             return status;
-        }
+
+        si->codec_info = *p_info;
     }
 
 
@@ -127,50 +115,21 @@ static pj_status_t get_video_codec_info_param(pjmedia_vid_stream_info *si,
                                                      &si->codec_info,
                                                      si->codec_param);
 
-    /* When codec is not in the registry (e.g. for 3rd-party media), treat
-     * as non-fatal: clear codec_param so callers skip codec-specific tuning.
-     */
-    if (status == PJMEDIA_CODEC_EUNSUP && si->codec_info.encoding_name.slen > 0) {
-        si->codec_param = NULL;
-        status = PJ_SUCCESS;
-    }
-
     /* Adjust encoding bitrate, if higher than remote preference. The remote
      * bitrate preference is read from SDP "b=TIAS" line in media level.
      */
-    if (si->codec_param && (si->dir & PJMEDIA_DIR_ENCODING) &&
-        rem_m->bandw_count)
-    {
-        unsigned i, bandw = 0, bandw_as = 0;
+    if ((si->dir & PJMEDIA_DIR_ENCODING) && rem_m->bandw_count) {
+        unsigned i, bandw = 0;
 
         for (i = 0; i < rem_m->bandw_count; ++i) {
             const pj_str_t STR_BANDW_MODIFIER_TIAS = { "TIAS", 4 };
-            const pj_str_t STR_BANDW_MODIFIER_AS = { "AS", 2 };
             if (!pj_stricmp(&rem_m->bandw[i]->modifier,
                 &STR_BANDW_MODIFIER_TIAS))
             {
                 bandw = rem_m->bandw[i]->value;
                 break;
-            } else if (!pj_stricmp(&rem_m->bandw[i]->modifier,
-                &STR_BANDW_MODIFIER_AS))
-            {
-                /* "AS" (RFC 4566, kbps) is the total RTP session bandwidth,
-                 * including RTP/UDP/IP overhead and ~5% RTCP; "TIAS" (RFC 3890,
-                 * bps) is the payload rate and is preferred. Derive a
-                 * conservative payload ceiling from AS - the inverse of the
-                 * conversion in pjsua_media.c: drop the ~5% RTCP and ~16 kbps
-                 * overhead. Kept as a fallback when no TIAS is present. Use
-                 * 64-bit to avoid overflow on large/garbage values.
-                 */
-                pj_uint64_t as = (pj_uint64_t)rem_m->bandw[i]->value * 1000;
-                as = as * 100 / 105;
-                as = (as > 16000)? (as - 16000) : 0;
-                bandw_as = (as > 0xFFFFFFFFUL)? 0xFFFFFFFFU : (unsigned)as;
             }
         }
-
-        if (!bandw)
-            bandw = bandw_as;
 
         if (bandw) {
             pjmedia_video_format_detail *enc_vfd;
@@ -180,23 +139,16 @@ static pj_status_t get_video_codec_info_param(pjmedia_vid_stream_info *si,
                 enc_vfd->avg_bps = bandw * 3 / 4;
             if (!enc_vfd->max_bps || enc_vfd->max_bps > bandw)
                 enc_vfd->max_bps = bandw;
-
-            /* Remember the negotiated ceiling so a later
-             * modify_codec_param() cannot exceed it.
-             */
-            si->rem_max_bps = bandw;
         }
     }
 
-    if (si->codec_param) {
-        /* Get remote fmtp for our encoder. */
-        pjmedia_stream_info_parse_fmtp(pool, rem_m, si->tx_pt,
-                                       &si->codec_param->enc_fmtp);
+    /* Get remote fmtp for our encoder. */
+    pjmedia_stream_info_parse_fmtp(pool, rem_m, si->tx_pt,
+                                   &si->codec_param->enc_fmtp);
 
-        /* Get local fmtp for our decoder. */
-        pjmedia_stream_info_parse_fmtp(pool, local_m, si->rx_pt,
-                                       &si->codec_param->dec_fmtp);
-    }
+    /* Get local fmtp for our decoder. */
+    pjmedia_stream_info_parse_fmtp(pool, local_m, si->rx_pt,
+                                   &si->codec_param->dec_fmtp);
 
     /* When direction is NONE (it means SDP negotiation has failed) we don't
      * need to return a failure here, as returning failure will cause
@@ -248,22 +200,6 @@ PJ_DEF(pj_status_t) pjmedia_vid_stream_info_from_sdp(
 
     /* Get codec info and param */
     status = get_video_codec_info_param(si, pool, NULL, local_m, rem_m);
-    if (status != PJ_SUCCESS)
-        return status;
-
-    /* Get local RTCP-FB info */
-    status = pjmedia_rtcp_fb_decode_sdp2(pool, endpt, NULL, local,
-                                         stream_idx, si->rx_pt,
-                                         &si->loc_rtcp_fb);
-    if (status != PJ_SUCCESS)
-        return status;
-
-    /* Get remote RTCP-FB info */
-    status = pjmedia_rtcp_fb_decode_sdp2(pool, endpt, NULL, remote,
-                                         stream_idx, si->tx_pt,
-                                         &si->rem_rtcp_fb);
-    if (status != PJ_SUCCESS)
-        return status;
 
     return status;
 }

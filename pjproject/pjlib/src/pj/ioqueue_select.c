@@ -44,7 +44,6 @@
 #  include <fcntl.h>
 #endif
 
-
 /* Only build when the backend is using select(). */
 #if PJ_IOQUEUE_IMP == PJ_IOQUEUE_IMP_SELECT
 
@@ -60,7 +59,6 @@ _Static_assert(PJ_IOQUEUE_MAX_HANDLES <= FD_SETSIZE,
 #    error "PJ_IOQUEUE_MAX_HANDLES cannot be greater than FD_SETSIZE"
 #  endif
 #endif
-
 
 /*
  * Include declaration from common abstraction.
@@ -248,7 +246,7 @@ PJ_DEF(pj_status_t) pj_ioqueue_create2(pj_pool_t *pool,
                      sizeof(union operation_key), PJ_EBUG);
 
     /* Create and init common ioqueue stuffs */
-    ioqueue = PJ_POOL_ZALLOC_T(pool, pj_ioqueue_t);
+    ioqueue = PJ_POOL_ALLOC_T(pool, pj_ioqueue_t);
     ioqueue_init(ioqueue);
 
     if (cfg)
@@ -375,6 +373,7 @@ PJ_DEF(pj_status_t) pj_ioqueue_register_sock2(pj_pool_t *pool,
                                               pj_ioqueue_key_t **p_key)
 {
     pj_ioqueue_key_t *key = NULL;
+
     pj_status_t rc = PJ_SUCCESS;
     
     PJ_ASSERT_RETURN(pool && ioqueue && sock != PJ_INVALID_SOCKET &&
@@ -406,6 +405,7 @@ PJ_DEF(pj_status_t) pj_ioqueue_register_sock2(pj_pool_t *pool,
     /* Scan closing_keys first to let them come back to free_list */
     scan_closing_keys(ioqueue);
 
+    pj_assert(!pj_list_empty(&ioqueue->free_list));
     if (pj_list_empty(&ioqueue->free_list)) {
         rc = PJ_ETOOMANY;
         goto on_return;
@@ -442,28 +442,10 @@ on_return:
     if (rc != PJ_SUCCESS) {
         if (key && key->grp_lock)
             pj_grp_lock_dec_ref_dbg(key->grp_lock, "ioqueue", 0);
-#if PJ_IOQUEUE_HAS_SAFE_UNREG
-        if (key) {
-            /* Return the pre-created key to the free list instead of leaking
-             * it (it was removed from the free list above). init_key() cannot
-             * fail in SAFE_UNREG mode, so a non-NULL key here is fully
-             * initialized and safe to recycle.
-             *
-             * This error path is reached before the key is added to the
-             * active list / fd_sets, so no other thread references it; unlike
-             * the scan_closing_keys() recycle it is safe to clear grp_lock
-             * here (init_key() re-sets it on the next reuse).
-             */
-            key->grp_lock = NULL;
-            key->ref_count = 0;
-            pj_list_push_back(&ioqueue->free_list, key);
-            key = NULL;
-        }
-#endif
     }
     *p_key = key;
     pj_lock_release(ioqueue->lock);
-
+    
     return rc;
 }
 
@@ -571,6 +553,12 @@ PJ_DEF(pj_status_t) pj_ioqueue_unregister( pj_ioqueue_key_t *key)
         key->fd = PJ_INVALID_SOCKET;
     }
 
+    /* Clear callback */
+    key->cb.on_accept_complete = NULL;
+    key->cb.on_connect_complete = NULL;
+    key->cb.on_read_complete = NULL;
+    key->cb.on_write_complete = NULL;
+
     /* Must release ioqueue lock first before decrementing counter, to
      * prevent deadlock.
      */
@@ -580,19 +568,6 @@ PJ_DEF(pj_status_t) pj_ioqueue_unregister( pj_ioqueue_key_t *key)
     key->closing = 1;
 
     pj_ioqueue_unlock_key(key);
-
-#if PJ_IOQUEUE_HAS_SAFE_UNREG
-    /* Drain pending write callbacks. See #4864, #4878.
-     * Must be done before clearing callbacks below.
-     */
-    ioqueue_drain_pending_writes(key);
-#endif
-
-    /* Clear callback */
-    key->cb.on_accept_complete = NULL;
-    key->cb.on_connect_complete = NULL;
-    key->cb.on_read_complete = NULL;
-    key->cb.on_write_complete = NULL;
 
 #if PJ_IOQUEUE_HAS_SAFE_UNREG
     /* Decrement counter. */
@@ -895,6 +870,7 @@ static pj_status_t replace_udp_sock(pj_ioqueue_key_t *h)
         goto on_error;
     
     /* Set socket to nonblocking. */
+    val = 1;
     if (set_nonblocking(new_sock)) {
         status = pj_get_netos_error();
         goto on_error;

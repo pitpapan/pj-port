@@ -1,166 +1,154 @@
 # PJSIP/PJPROJECT
 
-Open-source multimedia communication library in C (SIP, SDP, RTP, STUN, TURN, ICE).
+PJSIP is a free and open source multimedia communication library written in C with high level API in C, C++, Java, C#, and Python languages. It implements standard based protocols such as SIP, SDP, RTP, STUN, TURN, and ICE. It combines signaling protocol (SIP) with rich multimedia framework and NAT traversal functionality into high level API that is portable and suitable for almost any type of systems ranging from desktops, embedded systems, to mobile handsets.
 
-## Build & Test
+Always reference these instructions first and fallback to search or bash commands only when you encounter unexpected information that does not match the info here.
 
-- **Build**: `./configure && make -j3` (timeout 120s+, NEVER CANCEL)
-- **Skip `make dep`** — it often produces corrupt `.depend` files. `make` generates deps automatically. If build fails with "missing separator" in `.depend`, run `find . -name "*.depend" -delete` and retry.
-- **Targeted build**: `cd pjlib/build && make` (or `pjsip/build`, etc.)
-- **Full clean**: `make clean` (required when switching SSL backends or configure options)
-- Get target arch: `make infotarget` (e.g., `x86_64-pc-linux-gnu`)
-- **Three build systems** — when adding/removing source files, update all three:
-  1. GNU Makefile (e.g., `pjlib/build/Makefile`)
-  2. MSVC project (e.g., `pjlib/build/pjlib.vcxproj`)
-  3. CMake (`CMakeLists.txt`)
+## Working Effectively
 
-### Running Tests
+- Bootstrap, build, and test the repository:
+  - `./configure` - takes ~7 seconds to configure build system
+  - `make dep` - generate dependencies, takes ~13 seconds  
+  - `make -j3` - build everything with parallel jobs, takes ~65 seconds. NEVER CANCEL. Set timeout to 120+ seconds.
+- Run individual component tests:
+  - `make pjlib-test` - core library tests, takes 5+ minutes. NEVER CANCEL. Set timeout to 600+ seconds.
+  - `make pjlib-util-test` - utility library tests, takes ~3 minutes. NEVER CANCEL. Set timeout to 360+ seconds.
+  - `make pjnath-test` - NAT traversal tests, takes 3+ minutes. NEVER CANCEL. Set timeout to 360+ seconds.
+  - `make pjmedia-test` - media framework tests, takes 5+ minutes. NEVER CANCEL. Set timeout to 600+ seconds.
+  - `make pjsip-test` - SIP stack tests, takes 5+ minutes. NEVER CANCEL. Set timeout to 600+ seconds.
+  - `make pjsua-test` - high-level API tests (Python-based), takes 5+ minutes. NEVER CANCEL. Set timeout to 600+ seconds.
+- Get target architecture name:
+  - `make infotarget` - returns target name (e.g., x86_64-pc-linux-gnu)
+- Run main PJSUA application:
+  - `./pjsip-apps/bin/pjsua-x86_64-pc-linux-gnu --help` - show all options
+  - `./pjsip-apps/bin/pjsua-x86_64-pc-linux-gnu --null-audio --no-cli-console` - basic test run
+  - Note: pjsua binary name depends on the target architecture name
 
-Run via Makefile (NEVER CANCEL, 5+ min each, timeout 600s):
-```
-make pjlib-test        # core library
-make pjsip-test        # SIP stack
-make pjsua-test        # high-level API (Python)
-```
+## Coding Style
 
-Run specific test directly — **must run from the bin/ directory**:
-```
-cd pjlib/bin && ./pjlib-test-x86_64-pc-linux-gnu timer_test
-cd pjlib/bin && ./pjlib-test-x86_64-pc-linux-gnu --list
-```
-Options: `-w N` (worker threads), `--shuffle`, `--ci-mode`, `--stop-err`
+- Follow the official PJSIP coding style guidelines: https://docs.pjsip.org/en/latest/get-started/coding-style.html
+- The coding style covers naming conventions, indentation, formatting, and other code organization principles
+- Consistent style is essential for maintainability across the large PJSIP codebase
 
-Quick smoke test: `cd tests/pjsua && python3 run.py mod_run.py scripts-run/100_simple.py`
+## Validation
 
-### Minimum Validation (mandatory after every change)
+- ALWAYS run through at least one complete validation scenario after making changes.
+- Test PJSUA basic functionality: run PJSUA with null audio device and verify it starts without errors.
+- For quick validation: `cd tests/pjsua && python3 run.py mod_run.py scripts-run/100_simple.py` (takes ~2 seconds).
+- ALWAYS run appropriate test suites for the component you're modifying before completing your work.
+- SSL tests will fail with timeouts in sandboxed environments - this is expected and normal.
 
-- **Always run `make -j3`** — zero errors, zero warnings (`-Wall` enabled).
-- For targeted builds: `cd pjlib/build && make` or `cd pjsip/build && make`.
-- **Known warning**: `PJ_TODO(id)` macro triggers `-Wunused-label` intentionally. Suppress with `#define PJ_TODO(x)` in `config_site.h`.
+### Manual Validation Scenarios
 
-### Configure Options
+After making changes, validate functionality by:
+1. **Basic SIP functionality**: Run `echo "Cp\nq" | ./pjsip-apps/bin/pjsua-x86_64-pc-linux-gnu --null-audio --no-cli-console` and verify codec list includes speex, G.711, etc.
+2. **Configuration check**: Run `./pjlib/bin/pjlib-test-x86_64-pc-linux-gnu --config --list | grep PJ_SSL` to verify SSL support is enabled
+3. **Quick component test**: Run one of the shorter unit tests like `make pjlib-util-test` which completes in ~3 minutes
 
-- `--with-gnutls=/usr/` — GnuTLS instead of OpenSSL (requires `make clean` first)
-- `--disable-ssl` — disable SSL/TLS
-- `--enable-shared` — shared libraries
-- Feature toggles: `#define` in `pjlib/include/pj/config_site.h`
+## Common Tasks
 
-### Config Site
+The following are outputs from frequently run commands. Reference them instead of viewing, searching, or running bash commands to save time.
 
-- `pjlib/include/pj/config_site.h` — local configuration overrides, NOT tracked by git
-- CI uses `config_site_test.h` (copied to `config_site.h` in workflows)
-- SSL tests will fail with timeouts in sandboxed environments — expected
-
-## Repository Structure
+### Repository Structure
 
 ```
-pjlib/           # Base framework (OS abstraction, data structures, pool allocator)
-pjlib-util/      # Utilities (DNS, STUN, XML, JSON, WebSocket)
-pjnath/          # NAT traversal (STUN, TURN, ICE)
-pjmedia/         # Media framework (codecs, transport, audio/video)
-pjsip/           # SIP stack (transactions, dialogs, UA layer)
-pjsip-apps/      # Applications and samples
-third_party/     # Bundled third-party libs (srtp, resample, etc.)
-tests/pjsua/     # Python-based PJSUA tests
-.github/         # CI workflows
+/home/runner/work/pjproject/pjproject/
+├── pjlib/              # Portable library (core)
+├── pjlib-util/         # Utility library  
+├── pjnath/            # NAT traversal library
+├── pjmedia/           # Media framework
+├── pjsip/             # SIP stack
+├── pjsip-apps/        # Applications and samples
+│   ├── bin/           # Built executables
+│   └── src/           # Source for applications
+├── third_party/       # Third-party dependencies
+├── tests/             # Test frameworks
+│   ├── pjsua/         # Python-based PJSUA tests
+│   └── automated/     # Other automated tests
+├── build/             # Build system files
+├── .github/           # GitHub workflows and configs
+├── configure          # Main configure script (calls aconfigure)
+├── aconfigure         # Real autotools configure script
+├── Makefile           # Main makefile
+└── build.mak.in       # Build configuration template
 ```
 
-### Architecture Layers (top → bottom)
+### Main Applications Built
 
-1. **PJSUA2** (C++) / **PJSUA** (C high-level) — `pjsip/include/pjsua-lib/`
-2. **PJSIP UA** — dialogs, calls, presence — `pjsip/include/pjsip-ua/`
-3. **PJSIP Core** — transactions, transport, parsing — `pjsip/include/pjsip/`
-4. **PJMEDIA** — media sessions, codecs, RTP — `pjmedia/include/pjmedia/`
-5. **PJNATH** — ICE, STUN, TURN — `pjnath/include/pjnath/`
-6. **PJLIB** — pool allocator, OS abstraction — `pjlib/include/pj/`
+After running `make`:
+- `pjsip-apps/bin/pjsua-x86_64-pc-linux-gnu` - Main SIP user agent application
+- `pjsip-apps/bin/pjsystest-x86_64-pc-linux-gnu` - Audio system test application
+- `pjsip-apps/bin/samples/x86_64-pc-linux-gnu/` - Various sample applications
 
-### Key Files
+### Test Executables Built
 
-- `pjlib/include/pj/config_site.h` — main configuration overrides
-- `pjlib/include/pj/config.h` — default configuration values
-- `build.mak` — generated build configuration
-- ICE/NAT: `pjnath/include/pjnath/ice_strmtp.h`
-- Call handling: `pjsip/src/pjsua-lib/pjsua_call.c`
-- Transport: `pjsip/include/pjsip/sip_transport.h`
+- `pjlib/bin/pjlib-test-x86_64-pc-linux-gnu` - Core library tests
+- `pjlib-util/bin/pjlib-util-test-x86_64-pc-linux-gnu` - Utility tests  
+- `pjnath/bin/pjnath-test-x86_64-pc-linux-gnu` - NAT traversal tests
+- `pjmedia/bin/pjmedia-test-x86_64-pc-linux-gnu` - Media framework tests
+- `pjsip/bin/pjsip-test-x86_64-pc-linux-gnu` - SIP stack tests
+- `pjsip/bin/pjsua2-test-x86_64-pc-linux-gnu` - High-level C++ API tests
 
-## Coding Conventions
+### Key Configuration Options
 
-Follow: https://docs.pjsip.org/en/latest/get-started/coding-style.html
+The configure script supports many options. Key ones:
+- `--disable-ssl` - Disable SSL/TLS support
+- `--with-gnutls=/usr/` - Use GnuTLS instead of OpenSSL
+- `--enable-shared` - Build shared libraries
+- `CFLAGS="-g -fPIC"` - Add debug symbols and position-independent code
 
-Documentation source (for when the docs site is not directly accessible):
-https://github.com/pjsip/pjproject_docs
+### Testing Framework
 
-### Essentials
-- **ANSI C (C89/C90)** for core modules. No declarations after statements.
-- **4 spaces** indentation (no tabs). ~80 char lines.
-- **K&R braces**: same line for control statements, next line for functions/structs.
-- **`/* */` comments** for C code, `/** */` for Doxygen on public APIs.
-- **Minimal comments**: avoid adding code comments unless necessary (i.e. only if the code itself is not self explanatory). When necessary, code comments must be as brief as possible to ensure readability and avoid overbloating.
-- **Module prefixes**: `pj_` (pjlib), `pjsip_` (sip), `pjmedia_` (media), `pjnath_` (nat)
-- **Constants**: ALL_CAPS with prefix (`PJSIP_MAX_URL_SIZE`, `PJ_TRUE`)
+- Python-based test framework in `tests/pjsua/`
+- Use `cd tests/pjsua && python3 run.py MODULE CONFIG` for individual tests
+- Example: `cd tests/pjsua && python3 run.py mod_run.py scripts-run/100_simple.py`
+- Use `cd tests/pjsua && python3 runall.py` for complete test suite
+- Test modules include: mod_run, mod_call, mod_pres, mod_sendto, mod_media_playrec
 
-### Memory Management
-- Core C modules use **pool-based allocation** (`pj_pool_t`).
-- Use `PJ_POOL_ALLOC_T()`, `PJ_POOL_ZALLOC_T()`, `pj_pool_alloc()`.
-- Pools freed as a whole — no individual deallocation.
-- **No `malloc()`/`free()`** in core C code.
+### Build System Details
 
-### String Handling
-- `pj_str_t` (pointer + length), NOT null-terminated.
-- Never assume null-termination. Use `pj_strcmp()`, `pj_stricmp()`.
+- Uses autotools (configure/make) build system
+- Main build controlled by top-level Makefile
+- Each component has its own build/ subdirectory with component-specific Makefiles
+- Parallel builds supported with `make -j<N>`
+- Dependencies generated with `make dep`
 
-### Error Handling
-- Functions return `pj_status_t`. `PJ_SUCCESS` (0) = success.
-- Always check return values. Use `PJ_ASSERT_RETURN()` for preconditions.
+### Key Environment Variables
 
-### Logging
-- `PJ_LOG(level, (sender, format, ...))` — note double parentheses.
-- Each file defines `THIS_FILE`. Levels: 0 (fatal) to 6 (trace).
+- `TARGET_NAME` - Target architecture (set by configure)
+- `CI_ARGS` - Additional arguments for CI testing
+- `CI_MODE` - CI mode flag
+- `CI_RUNNER` - CI runner command wrapper
 
-## Architecture Notes
+### SSL/TLS Support
 
-### Threading Model
-- Single-threaded (polling) or multi-threaded.
-- Use `pj_mutex_t` / `pj_lock_t` — NOT pthread directly.
-- Callbacks may fire from worker threads — be thread-safe.
-- **Avoid invoking user callbacks while holding a mutex** — release lock first to prevent deadlock.
+- Default build includes OpenSSL support
+- SSL implementation ID: 1=OpenSSL, 2=GnuTLS  
+- Check SSL support: `./pjlib/bin/pjlib-test-x86_64-pc-linux-gnu --config --list | grep SSL`
+- SSL tests may timeout in sandboxed environments (this is normal)
 
-### Group Lock (`pj_grp_lock_t`)
-- Mutual exclusion + reference counting + lock ordering in one primitive.
-- `add_ref()` before scheduling timer/callback, `dec_ref()` in the callback.
-- Never destroy a lock that other threads may reference — use ref counting.
-- Lock ordering: PJSUA_LOCK > dialog grp_lock > transaction grp_lock.
-- Debug: enable `PJ_GRP_LOCK_DEBUG` in `config_site.h`.
+### Media Codecs
 
-### Platform Differences
-- **I/O Queue backends**: epoll (Linux), kqueue (macOS/BSD), select (portable), IOCP (Windows)
-- IOCP backend has different threading semantics than epoll/select.
+Built-in codecs include:
+- G.711 (PCMU/PCMA)
+- G.722
+- G.722.1
+- GSM
+- iLBC  
+- L16 (linear PCM)
+- Speex
 
-## Do's and Don'ts
+### Important Paths for Development
 
-### DO:
-- Reference existing patterns before writing new code
-- Follow module prefix naming strictly
-- Check `pj_status_t` return values everywhere
-- Declare all variables at top of block (C89)
-- Add Doxygen `/** */` for new public APIs
-- Prefer param structs over many positional arguments for extensibility
+- `pjlib/include/pj/config_site.h` - Main configuration overrides
+- `user.mak` - User-specific build customizations
+- `build.mak` - Generated build configuration  
+- `pjsip-apps/src/pjsua/` - Main PJSUA application source
+- `pjsip-apps/src/samples/` - Sample application sources
 
-### DON'T:
-- Don't use malloc/free in core C modules
-- Don't assume null-terminated strings with `pj_str_t`
-- Don't add C++ in core C modules
-- Don't modify public headers without understanding downstream impact
-- Don't destroy objects with pending timers/async callbacks
-- Don't declare variables after statements (C89)
+### CI Integration
 
-## CI Integration
-
-- GitHub Actions: `.github/workflows/` (Linux, Mac, Windows)
+- GitHub Actions workflows in `.github/workflows/`
+- Primary CI runs on Linux, Mac, and Windows
 - Uses `cirunner` tool for test execution with timeouts
-- Tests multiple configurations (SSL/no-SSL, GnuTLS, video codecs, etc.)
-- `--ci-mode` widens timing tolerances for slow CI runners
-
-### Writing Robust Tests
-- **No precise timing** — use generous tolerances or event-driven sync. CI runners can be 5-10x slower.
-- Verify ASan compatibility for platform-specific features (sigaltstack, thread stacks).
+- Builds test multiple configurations (SSL/no-SSL, video codecs, etc.)

@@ -43,26 +43,18 @@ void app_perror(const char *msg, pj_status_t rc)
 static int test_inner(int argc, char *argv[])
 {
     pj_caching_pool caching_pool;
-    int rc = 0;
-    pj_bool_t pj_initialized = PJ_FALSE;
-    pj_bool_t ut_app_initialized = PJ_FALSE;
 
     mem = &caching_pool.factory;
 
     pj_log_set_level(3);
     pj_log_set_decor(test_app.param_log_decor);
 
-    PJ_TEST_SUCCESS(pj_init(), NULL, { rc = 1; goto on_return; })
-    pj_initialized = PJ_TRUE;
-
-    PJ_TEST_SUCCESS(pjlib_util_init(), NULL, { rc = 2; goto on_return; });
+    PJ_TEST_SUCCESS(pj_init(), NULL, { return 1; })
+    PJ_TEST_SUCCESS(pjlib_util_init(), NULL, { return 2; });
     pj_caching_pool_init( &caching_pool, &pj_pool_factory_default_policy, 0 );
-
-    if (ut_app_init1(&test_app.ut_app, mem) != PJ_SUCCESS) {
-        rc = 1;
-        goto on_return;
-    }
-    ut_app_initialized = PJ_TRUE;
+    
+    if (ut_app_init1(&test_app.ut_app, mem) != PJ_SUCCESS)
+        return 1;
 
     if (test_app.ut_app.prm_config)
         pj_dump_config();
@@ -94,25 +86,13 @@ static int test_inner(int argc, char *argv[])
     UT_ADD_TEST(&test_app.ut_app, http_client_test, 0);
 #endif
 
-#if INCLUDE_WEBSOCK_TEST
-    UT_ADD_TEST(&test_app.ut_app, websock_test, 0);
-#endif
-
     if (ut_run_tests(&test_app.ut_app, "pjlib-util tests", argc, argv)) {
-        rc = 1;
-    }
-
-on_return:
-    if (ut_app_initialized) {
         ut_app_destroy(&test_app.ut_app);
+        return 1;
     }
 
-    if (pj_initialized) {
-        pj_caching_pool_destroy(&caching_pool);
-        pj_shutdown();
-    }
-
-    return rc;
+    ut_app_destroy(&test_app.ut_app);
+    return 0;
 }
 
 int test_main(int argc, char *argv[])

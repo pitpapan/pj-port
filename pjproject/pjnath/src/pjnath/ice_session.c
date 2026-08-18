@@ -68,14 +68,10 @@ enum timer_type
 {
     TIMER_NONE,                 /**< Timer not active                   */
     TIMER_COMPLETION_CALLBACK,  /**< Call on_ice_complete() callback    */
-    TIMER_CONTROLLED_WAIT_NOM,  /**< Controlled agent is waiting for
+    TIMER_CONTROLLED_WAIT_NOM,  /**< Controlled agent is waiting for 
                                      controlling agent to send connectivity
                                      check with nominated flag after it has
                                      valid check for every components.  */
-    TIMER_WAIT_VALID_PAIR,      /**< Agent is waiting for a valid pair to be
-                                     created from incoming checks after all of
-                                     its own checks have completed without any
-                                     valid pair.                        */
     TIMER_START_NOMINATED_CHECK,/**< Controlling agent start connectivity
                                      checks with USE-CANDIDATE flag.    */
     TIMER_KEEP_ALIVE            /**< ICE keep-alive timer.              */
@@ -136,7 +132,6 @@ typedef struct timer_data
 
 /* Forward declarations */
 static void on_timer(pj_timer_heap_t *th, pj_timer_entry *te);
-static pj_bool_t check_ice_complete(pj_ice_sess *ice);
 static void on_ice_complete(pj_ice_sess *ice, pj_status_t status);
 static void ice_keep_alive(pj_ice_sess *ice, pj_bool_t send_now);
 static void ice_on_destroy(void *obj);
@@ -327,9 +322,8 @@ PJ_DEF(void) pj_ice_sess_options_default(pj_ice_sess_options *opt)
 {
     opt->aggressive = PJ_TRUE;
     opt->nominated_check_delay = PJ_ICE_NOMINATED_CHECK_DELAY;
-    opt->controlled_agent_want_nom_timeout =
+    opt->controlled_agent_want_nom_timeout = 
         ICE_CONTROLLED_AGENT_WAIT_NOMINATION_TIMEOUT;
-    opt->wait_valid_pair_timeout = PJ_ICE_WAIT_VALID_PAIR_TIMEOUT;
     opt->trickle = PJ_ICE_SESS_TRICKLE_DISABLED;
     opt->check_src_addr = PJ_ICE_SESS_CHECK_SRC_ADDR;
 }
@@ -1264,49 +1258,10 @@ static void on_timer(pj_timer_heap_t *th, pj_timer_entry *te)
 
     switch (type) {
     case TIMER_CONTROLLED_WAIT_NOM:
-        LOG4((ice->obj_name,
+        LOG4((ice->obj_name, 
               "Controlled agent timed-out in waiting for the controlling "
               "agent to send nominated check. Setting state to fail now.."));
         on_ice_complete(ice, PJNATH_EICENOMTIMEOUT);
-        break;
-    case TIMER_WAIT_VALID_PAIR:
-        {
-            /* Grace period elapsed. Only fail if all checks have completed
-             * and at least one component still lacks a valid pair. If some
-             * checks are still pending (e.g. a triggered check from a late
-             * incoming check is in progress), or valid pairs have meanwhile
-             * been created, don't force a failure here: let the normal
-             * completion handling proceed instead.
-             */
-            unsigned k;
-            pj_bool_t pending = PJ_FALSE;
-
-            for (k=0; k<ice->clist.count; ++k) {
-                if (ice->clist.checks[k].state <
-                        PJ_ICE_SESS_CHECK_STATE_SUCCEEDED)
-                {
-                    pending = PJ_TRUE;
-                    break;
-                }
-            }
-
-            for (k=0; k<ice->comp_cnt; ++k) {
-                if (ice->comp[k].valid_check == NULL)
-                    break;
-            }
-
-            if (!pending && k < ice->comp_cnt) {
-                LOG4((ice->obj_name,
-                      "Timed-out in waiting for a valid pair to be created "
-                      "from incoming checks. Setting state to fail now.."));
-                on_ice_complete(ice, PJNATH_EICEFAILED);
-            } else {
-                LOG4((ice->obj_name,
-                      "Grace period for valid pair elapsed, but checks are "
-                      "still pending or valid pairs now exist; continuing.."));
-                check_ice_complete(ice);
-            }
-        }
         break;
     case TIMER_COMPLETION_CALLBACK:
         {
@@ -1483,50 +1438,6 @@ static void update_comp_check(pj_ice_sess *ice, unsigned comp_id,
     }
 }
 
-/* All of the agent's own connectivity checks have completed but there is no
- * valid pair yet. Instead of failing immediately, wait for a while: the remote
- * agent may still be able to reach us and trigger a valid pair via incoming
- * checks (e.g. when our own checks could not be sent because the local routing
- * or firewall rejects the remote candidate address).
- *
- * Returns PJ_TRUE if ICE has been marked failed (grace disabled or another
- * timer is active), or PJ_FALSE if the agent is now waiting.
- */
-static pj_bool_t wait_valid_pair_or_fail(pj_ice_sess *ice)
-{
-    /* Grace timer already running, keep waiting. */
-    if (ice->timer.id == TIMER_WAIT_VALID_PAIR)
-        return PJ_FALSE;
-
-    if (ice->timer.id == TIMER_NONE &&
-        ice->opt.wait_valid_pair_timeout >= 0)
-    {
-        pj_time_val delay;
-
-        delay.sec = 0;
-        delay.msec = ice->opt.wait_valid_pair_timeout;
-        pj_time_val_normalize(&delay);
-
-        pj_timer_heap_schedule_w_grp_lock(ice->stun_cfg.timer_heap,
-                                          &ice->timer, &delay,
-                                          TIMER_WAIT_VALID_PAIR,
-                                          ice->grp_lock);
-
-        LOG5((ice->obj_name,
-              "All checks have completed but there is no valid pair yet. "
-              "Agent now waits for a valid pair to be created from incoming "
-              "checks (timeout=%d msec)",
-              ice->opt.wait_valid_pair_timeout));
-        return PJ_FALSE;
-    }
-
-    /* Grace timer is disabled (or another timer is active), mark ICE as
-     * failed.
-     */
-    on_ice_complete(ice, PJNATH_EICEFAILED);
-    return PJ_TRUE;
-}
-
 /* Check if ICE nego completed */
 static pj_bool_t check_ice_complete(pj_ice_sess *ice)
 {
@@ -1614,26 +1525,17 @@ static pj_bool_t check_ice_complete(pj_ice_sess *ice)
             }
 
             if (i < ice->comp_cnt) {
-                /* This component ID doesn't have a valid pair yet. Don't fail
-                 * immediately, wait for a valid pair from incoming checks.
+                /* This component ID doesn't have valid pair.
+                 * Mark ICE as failed. 
                  */
-                return wait_valid_pair_or_fail(ice);
+                on_ice_complete(ice, PJNATH_EICEFAILED);
+                return PJ_TRUE;
             } else {
                 /* All components have a valid pair.
                  * We should wait until we receive nominated checks.
                  */
-
-                /* If we were waiting for a valid pair to be created from
-                 * incoming checks, cancel that grace timer now that we have
-                 * one, so we can wait for nomination instead.
-                 */
-                if (ice->timer.id == TIMER_WAIT_VALID_PAIR) {
-                    pj_timer_heap_cancel_if_active(ice->stun_cfg.timer_heap,
-                                                   &ice->timer, TIMER_NONE);
-                }
-
                 if (ice->timer.id == TIMER_NONE &&
-                    ice->opt.controlled_agent_want_nom_timeout >= 0)
+                    ice->opt.controlled_agent_want_nom_timeout >= 0) 
                 {
                     pj_time_val delay;
 
@@ -1677,27 +1579,17 @@ static pj_bool_t check_ice_complete(pj_ice_sess *ice)
             }
 
             if (i < ice->comp_cnt) {
-                /* At least one component doesn't have a valid check yet.
-                 * Don't fail immediately: the controlled agent may still be
-                 * able to reach us and trigger a valid pair via incoming
-                 * checks, after which we can nominate. Wait for a while.
+                /* At least one component doesn't have a valid check. Mark
+                 * ICE as failed.
                  */
-                return wait_valid_pair_or_fail(ice);
+                on_ice_complete(ice, PJNATH_EICEFAILED);
+                return PJ_TRUE;
             }
 
-            /* All components have a valid pair. If we were waiting for one to
-             * be created from incoming checks, cancel that grace timer before
-             * starting our nominated checks.
-             */
-            if (ice->timer.id == TIMER_WAIT_VALID_PAIR) {
-                pj_timer_heap_cancel_if_active(ice->stun_cfg.timer_heap,
-                                               &ice->timer, TIMER_NONE);
-            }
-
-            /* Now it's time to send connectivity check with nomination
+            /* Now it's time to send connectivity check with nomination 
              * flag set.
              */
-            LOG4((ice->obj_name,
+            LOG4((ice->obj_name, 
                   "All checks have completed, starting nominated checks now"));
             start_nominated_check(ice);
             return PJ_FALSE;
@@ -2210,8 +2102,7 @@ PJ_DEF(pj_status_t) pj_ice_sess_create_check_list(
                               const pj_ice_sess_cand rem_cand[])
 {
     pj_ice_sess_checklist *clist;
-    enum { MAX_USERNAME_LEN = 512 };
-    char buf[MAX_USERNAME_LEN];
+    char buf[128];
     pj_str_t username;
     timer_data *td;
     pj_status_t status;
@@ -2224,27 +2115,6 @@ PJ_DEF(pj_status_t) pj_ice_sess_create_check_list(
         /* Checklist has been created */
         pj_grp_lock_release(ice->grp_lock);
         return PJ_SUCCESS;
-    }
-
-    /* Verify credentials lengths:
-     * - The ufrag must be at least 4 bytes, passwd at least 22 bytes.
-     * - Combined usernames and +1 for colon must not exceed MAX_USERNAME_LEN.
-     */
-    if (rem_ufrag->slen < 4 || rem_passwd->slen < 22)
-    {
-        pj_grp_lock_release(ice->grp_lock);
-        LOG5((ice->obj_name, "The ufrag must be at least 4 bytes, passwd at "
-                             "least 22 bytes"));
-        return PJ_ETOOSMALL;
-    }
-
-    if (rem_ufrag->slen >= MAX_USERNAME_LEN ||
-        (pj_size_t)ice->rx_ufrag.slen > 
-                (pj_size_t)MAX_USERNAME_LEN - 1 - (pj_size_t)rem_ufrag->slen)
-    {
-        pj_grp_lock_release(ice->grp_lock);
-        LOG5((ice->obj_name, "Combined usernames must not exceed 512 bytes"));
-        return PJ_ETOOBIG;
     }
 
     /* Save credentials */
@@ -2851,7 +2721,7 @@ static void on_stun_request_complete(pj_stun_session *stun_sess,
 
     /* Check if ICE has been completed */
     if (ice->is_complete) {
-        PJ_LOG(5, (ice->obj_name,
+        LOG4((ice->obj_name,
               "Ignored completed STUN request after ICE nego has been "
               "completed!"));
         pj_grp_lock_release(ice->grp_lock);
@@ -3452,7 +3322,7 @@ static void handle_incoming_check(pj_ice_sess *ice,
 
     /* Check if ICE has been completed */
     if (ice->is_complete) {
-        PJ_LOG(5, (ice->obj_name,
+        LOG4((ice->obj_name,
               "Ignored incoming check after ICE nego has been completed!"));
         return;
     }
@@ -3504,31 +3374,44 @@ static void handle_incoming_check(pj_ice_sess *ice,
         rcand = &ice->rcand[i];
     }
 
-    /* Find a local candidate with matching component ID and transport ID.
-     * We search in ice->lcand (all known local candidates) rather than
-     * the checklist, because the checklist may be empty if no remote
-     * candidates have been received yet (e.g., trickle ICE with no
-     * candidates sent). This allows us to process incoming binding requests
-     * and create triggered checks even with an empty checklist.
+#if 0
+    /* Find again the local candidate by matching the base address
+     * with the local candidates in the checklist. Checks may have
+     * been pruned before, so it's possible that if we use the lcand
+     * as it is, we wouldn't be able to find the check in the checklist
+     * and we will end up creating a new check unnecessarily.
      */
-    for (i=0; i<ice->lcand_cnt; ++i) {
-        pj_ice_sess_cand *c = &ice->lcand[i];
-        if (c->comp_id == rcheck->comp_id &&
-            c->transport_id == rcheck->transport_id)
+    for (i=0; i<ice->clist.count; ++i) {
+        pj_ice_sess_check *c = &ice->clist.checks[i];
+        if (/*c->lcand == lcand ||*/
+            pj_sockaddr_cmp(&c->lcand->base_addr, &lcand->base_addr)==0)
         {
-            /* Prefer higher priority candidate */
-            if (lcand == NULL || c->prio > lcand->prio)
-                lcand = c;
+            lcand = c->lcand;
+            break;
+        }
+    }
+#else
+    /* Just get candidate with the highest priority and same transport ID
+     * for the specified  component ID in the checklist.
+     */
+    for (i=0; i<ice->clist.count; ++i) {
+        pj_ice_sess_check *c = &ice->clist.checks[i];
+        if (c->lcand->comp_id == rcheck->comp_id &&
+            c->lcand->transport_id == rcheck->transport_id) 
+        {
+            lcand = c->lcand;
+            break;
         }
     }
     if (lcand == NULL) {
         /* Should not happen, but just in case remote is sending a
          * Binding request for a component which it doesn't have.
          */
-        LOG4((ice->obj_name,
+        LOG4((ice->obj_name, 
              "Received Binding request but no local candidate is found!"));
         return;
     }
+#endif
 
     /* 
      * Create candidate pair for this request. 
@@ -3775,10 +3658,7 @@ PJ_DEF(pj_status_t) pj_ice_sess_send_data(pj_ice_sess *ice,
     transport_id = cand->transport_id;
     pj_sockaddr_cp(&addr, &comp->valid_check->rcand->addr);
 
-    /* Release the mutex now to avoid deadlock (see ticket #1451),
-     * but add ref first to avoid premature destruction in the cb.
-     */
-    pj_grp_lock_add_ref(ice->grp_lock);
+    /* Release the mutex now to avoid deadlock (see ticket #1451). */
     pj_grp_lock_release(ice->grp_lock);
 
     PJ_RACE_ME(5);
@@ -3787,8 +3667,6 @@ PJ_DEF(pj_status_t) pj_ice_sess_send_data(pj_ice_sess *ice,
                                   data, data_len, 
                                   &addr, 
                                   pj_sockaddr_get_len(&addr));
-
-    pj_grp_lock_dec_ref(ice->grp_lock);
 
 on_return:
     return status;
@@ -3856,9 +3734,7 @@ PJ_DEF(pj_status_t) pj_ice_sess_on_rx_pkt(pj_ice_sess *ice,
     } else {
         /* Not a STUN packet. Call application's callback instead, but release
          * the mutex now or otherwise we may get deadlock.
-         * Add ref first to avoid race with session destruction.
          */
-        pj_grp_lock_add_ref(ice->grp_lock);
         pj_grp_lock_release(ice->grp_lock);
 
         PJ_RACE_ME(5);
@@ -3915,9 +3791,6 @@ PJ_DEF(pj_status_t) pj_ice_sess_on_rx_pkt(pj_ice_sess *ice,
                          "component [%d] because source addr %s unrecognized "
                          "or unchecked",
                          comp_id, paddr));
-
-                pj_grp_lock_dec_ref(ice->grp_lock);
-
                 return PJ_SUCCESS;
             }
         } 
@@ -3925,8 +3798,6 @@ PJ_DEF(pj_status_t) pj_ice_sess_on_rx_pkt(pj_ice_sess *ice,
         (*ice->cb.on_rx_data)(ice, comp_id, transport_id, pkt, pkt_size, 
                               src_addr, src_addr_len);
         status = PJ_SUCCESS;
-
-        pj_grp_lock_dec_ref(ice->grp_lock);
     }
 
     return status;

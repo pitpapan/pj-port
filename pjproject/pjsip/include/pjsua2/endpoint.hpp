@@ -996,26 +996,6 @@ struct UaConfig : public PersistentObject
      */
     string              upnpIfName;
 
-    /**
-     * When set to true, "norefersub" is advertised in the SIP Supported
-     * header per RFC 4488, indicating that this endpoint is capable of
-     * suppressing the implicit REFER event subscription.  The actual
-     * suppression is negotiated per-call via the Refer-Sub header; this
-     * flag only controls whether the capability is announced.
-     *
-     * Default: true
-     */
-    bool                noRefersub;
-
-    /**
-     * Default value for AccountConfig::serverAffinity. New accounts with
-     * server_affinity set to PJSUA_SERVER_AFFINITY_UNSPECIFIED inherit
-     * this value.
-     *
-     * Default: PJSUA_ACC_SERVER_AFFINITY_DEFAULT
-     */
-    bool                accServerAffinityDefault;
-
 public:
     /**
      * Default constructor to initialize with default values.
@@ -2349,8 +2329,6 @@ private:
                            pjsua_acc_id acc_id);
     static void on_mwi_info(pjsua_acc_id acc_id,
                             pjsua_mwi_info *mwi_info);
-    static void on_auth_challenge(
-                            pjsua_on_auth_challenge_param *param);
     static void on_acc_find_for_incoming(const pjsip_rx_data *rdata,
                                          pjsua_acc_id* acc_id);
     static void on_buddy_state(pjsua_buddy_id buddy_id);
@@ -2367,9 +2345,6 @@ private:
     static void on_call_tsx_state(pjsua_call_id call_id,
                                   pjsip_transaction *tsx,
                                   pjsip_event *e);
-    static pj_bool_t on_call_tsx_terminate_session(pjsua_call_id call_id,
-                                                   pjsip_transaction *tsx,
-                                                   pjsip_event *e);
     static void on_call_media_state(pjsua_call_id call_id);
     static void on_call_sdp_created(pjsua_call_id call_id,
                                     pjmedia_sdp_session *sdp,

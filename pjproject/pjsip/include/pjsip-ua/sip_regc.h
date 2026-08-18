@@ -480,31 +480,18 @@ PJ_DECL(pj_status_t) pjsip_regc_send(pjsip_regc *regc, pjsip_tx_data *tdata);
 
 
 /**
- * Set a shared authentication session to be used by this client registration.
+ * set a shared auth session to be used by this register client.
  * This will try to reuse authorization headers from another source
  * (e.g. subscribe dialog).
  *
  * If available, the internal auth session will be ignored.
  * To reset client registration, pass NULL as session parameter.
  *
- * @param regc      The client registration structure.
- * @param session   Pointer to the external session.
- *
- * @return          PJ_SUCCESS on success.
+ * @param regc     The client registration structure.
+ * @param session  Pointer to the external session.
  */
 PJ_DECL(pj_status_t) pjsip_regc_set_auth_sess( pjsip_regc *regc,
-                                               pjsip_auth_clt_sess *session );
-
-
-/**
- * Get the authentication session used by this client registration.
- *
- * @param regc      The client registration structure.
- *
- * @return          The client authentication session.
- */
-PJ_DECL(pjsip_auth_clt_sess*) pjsip_regc_get_auth_sess( pjsip_regc *regc );
-
+                                              pjsip_auth_clt_sess *session );
 
 PJ_END_DECL
 

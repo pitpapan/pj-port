@@ -1,3 +1,4 @@
+pjlib/include/pj/config_site.h
 lib/
 bin/
 output/
@@ -87,9 +88,6 @@ tests/fuzz/*.o
 */docs/xml/
 */docs/latex/
 */docs/*.tag
-
-# CMake stuff
-__cmake_systeminformation/
 
 # Coverity scan stuff
 cov-int/

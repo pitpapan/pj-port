@@ -17,7 +17,6 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA 
  */
 #include <pjlib-util/xml.h>
-#include <pjlib-util/config.h>
 #include <pjlib-util/scanner.h>
 #include <pj/except.h>
 #include <pj/pool.h>
@@ -51,57 +50,46 @@ static pj_xml_attr *alloc_attr( pj_pool_t *pool )
 }
 
 /* This is a recursive function! */
-static pj_xml_node *xml_parse_node( pj_pool_t *pool, pj_scanner *scanner,
-                                    unsigned rec_level)
+static pj_xml_node *xml_parse_node( pj_pool_t *pool, pj_scanner *scanner)
 {
     pj_xml_node *node;
     pj_str_t end_name;
 
     PJ_CHECK_STACK();
 
-    if (rec_level >= PJ_XML_MAX_NESTING)
+    if (*scanner->curptr != '<')
         on_syntax_error(scanner);
 
-    /* Consume any leading PI and comment constructs. These are not nesting,
-     * so loop rather than recurse.
-     */
-    for (;;) {
-        if (*scanner->curptr != '<')
-            on_syntax_error(scanner);
-
-        /* Handle Processing Instructino (PI) construct (i.e. "<?") */
-        if (*scanner->curptr == '<' && *(scanner->curptr+1) == '?') {
-            pj_scan_advance_n(scanner, 2, PJ_FALSE);
-            for (;;) {
-                pj_str_t dummy;
-                pj_scan_get_until_ch(scanner, '?', &dummy);
-                if (*scanner->curptr=='?' && *(scanner->curptr+1)=='>') {
-                    pj_scan_advance_n(scanner, 2, PJ_TRUE);
-                    break;
-                } else {
-                    pj_scan_advance_n(scanner, 1, PJ_FALSE);
-                }
+    /* Handle Processing Instructino (PI) construct (i.e. "<?") */
+    if (*scanner->curptr == '<' && *(scanner->curptr+1) == '?') {
+        pj_scan_advance_n(scanner, 2, PJ_FALSE);
+        for (;;) {
+            pj_str_t dummy;
+            pj_scan_get_until_ch(scanner, '?', &dummy);
+            if (*scanner->curptr=='?' && *(scanner->curptr+1)=='>') {
+                pj_scan_advance_n(scanner, 2, PJ_TRUE);
+                break;
+            } else {
+                pj_scan_advance_n(scanner, 1, PJ_FALSE);
             }
-            continue;
         }
+        return xml_parse_node(pool, scanner);
+    }
 
-        /* Handle comments construct (i.e. "<!") */
-        if (pj_scan_strcmp(scanner, "<!", 2) == 0) {
-            pj_scan_advance_n(scanner, 2, PJ_FALSE);
-            for (;;) {
-                pj_str_t dummy;
-                pj_scan_get_until_ch(scanner, '>', &dummy);
-                if (pj_scan_strcmp(scanner, ">", 1) == 0) {
-                    pj_scan_advance_n(scanner, 1, PJ_TRUE);
-                    break;
-                } else {
-                    pj_scan_advance_n(scanner, 1, PJ_FALSE);
-                }
+    /* Handle comments construct (i.e. "<!") */
+    if (pj_scan_strcmp(scanner, "<!", 2) == 0) {
+        pj_scan_advance_n(scanner, 2, PJ_FALSE);
+        for (;;) {
+            pj_str_t dummy;
+            pj_scan_get_until_ch(scanner, '>', &dummy);
+            if (pj_scan_strcmp(scanner, ">", 1) == 0) {
+                pj_scan_advance_n(scanner, 1, PJ_TRUE);
+                break;
+            } else {
+                pj_scan_advance_n(scanner, 1, PJ_FALSE);
             }
-            continue;
         }
-
-        break;
+        return xml_parse_node(pool, scanner);
     }
 
     /* Alloc node. */
@@ -144,7 +132,7 @@ static pj_xml_node *xml_parse_node( pj_pool_t *pool, pj_scanner *scanner,
     while (*scanner->curptr == '<' && *(scanner->curptr+1) != '/'
                                    && *(scanner->curptr+1) != '!')
     {
-        pj_xml_node *sub_node = xml_parse_node(pool, scanner, rec_level+1);
+        pj_xml_node *sub_node = xml_parse_node(pool, scanner);
         pj_list_push_back( &node->node_head, sub_node );
     }
 
@@ -199,7 +187,7 @@ PJ_DEF(pj_xml_node*) pj_xml_parse( pj_pool_t *pool, char *msg, pj_size_t len)
                   PJ_SCAN_AUTOSKIP_WS|PJ_SCAN_AUTOSKIP_NEWLINE, 
                   &on_syntax_error);
     PJ_TRY {
-        node =  xml_parse_node(pool, &scanner, 0);
+        node =  xml_parse_node(pool, &scanner);
     }
     PJ_CATCH_ANY {
         PJ_LOG(4,(THIS_FILE, "Syntax error parsing XML in line %d column %d",

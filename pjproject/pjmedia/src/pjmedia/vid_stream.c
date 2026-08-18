@@ -114,11 +114,6 @@ struct pjmedia_vid_stream
     unsigned                 frame_size;    /**< Size of encoded base frame.*/
     unsigned                 frame_ts_len;  /**< Frame length in timestamp. */
 
-    unsigned                 tx_max_bps;    /**< SDP-negotiated max TX bitrate
-                                                 in bps (0 = no limit).     */
-    pj_bool_t                rc_auto_bw;    /**< RC bandwidth budget was
-                                                 auto-derived from codec?   */
-
     unsigned                 rx_frame_cnt;  /**< # of array in rx_frames    */
     pjmedia_frame           *rx_frames;     /**< Temp. buffer for incoming
                                                  frame assembly.            */
@@ -197,8 +192,6 @@ typedef struct send_stream
     pj_size_t            rc_total;
     unsigned             rc_bandwidth;
     pj_timestamp         ts_freq;
-    pj_uint64_t          rc_max_delay;  /**< Max pacing delay, in ts_freq
-                                             ticks (0 = unbounded).         */
     unsigned             rtp_tx_err_cnt;
 
 #if TRACE_RC
@@ -276,6 +269,12 @@ static void send_mgr_on_destroy(void *arg)
 {
     send_manager* mgr = (send_manager*)arg;
 
+    if (mgr->thread) {
+        mgr->is_quitting = PJ_TRUE;
+        pj_thread_join(mgr->thread);
+        pj_thread_destroy(mgr->thread);
+    }
+
     if (mgr->pool)
         pj_pool_safe_release(&mgr->pool);
 }
@@ -286,10 +285,11 @@ static void send_mgr_on_destroy(void *arg)
 static pj_status_t attach_send_manager(send_stream *ss, send_manager *mgr)
 {
     pj_status_t status = PJ_SUCCESS;
-    pj_pool_t *pool = NULL;
 
     /* Initialize manager if not yet */
     if (!mgr->pool) {
+        pj_pool_t *pool;
+
         /* Create pool */
         pool = pj_pool_create(ss->pool->factory, "stream_send_mgr",
                               1024, 1024, NULL);
@@ -306,17 +306,13 @@ static pj_status_t attach_send_manager(send_stream *ss, send_manager *mgr)
                                               &mgr->grp_lock);
         if (status != PJ_SUCCESS)
             goto on_return;
-    }
 
-    /* Add ref counter */
-    status = pj_grp_lock_add_ref(mgr->grp_lock);
-    if (status != PJ_SUCCESS)
-        goto on_return;
-
-    /* Create thread if manager was initialized */
-    if (pool)
+        /* Create thread */
         status = pj_thread_create(pool, "send_mgr", &send_worker_thread, mgr,
                                   0, 0, &mgr->thread);
+        if (status != PJ_SUCCESS)
+            goto on_return;
+    }
 
 on_return:
     if (status != PJ_SUCCESS) {
@@ -328,7 +324,9 @@ on_return:
     }
 
     ss->mgr = mgr;
-    return PJ_SUCCESS;
+
+    /* Add ref counter */
+    return pj_grp_lock_add_ref(mgr->grp_lock);
 }
 
 /* Detach send manager from stream.
@@ -358,21 +356,8 @@ static pj_status_t detach_send_manager(send_stream *ss)
         }
         e = next;
     }
-    /* Also hold ss->grp_lock for the write so send_rtp()'s read of
-     * ss->mgr (taken under ss->grp_lock) doesn't race with this store.
-     * Lock order is mgr->grp_lock -> ss->grp_lock; no other path holds
-     * the two nested in the opposite order. */
-    pj_grp_lock_acquire(ss->grp_lock);
     ss->mgr = NULL;
-    pj_grp_lock_release(ss->grp_lock);
     pj_grp_lock_release(mgr->grp_lock);
-
-    /* Stop send manager thread */
-    if (mgr->thread) {
-        mgr->is_quitting = PJ_TRUE;
-        pj_thread_join(mgr->thread);
-        pj_thread_destroy(mgr->thread);
-    }
 
     /* Decrease ref counter */
     return pj_grp_lock_dec_ref(mgr->grp_lock);
@@ -382,6 +367,7 @@ static pj_status_t detach_send_manager(send_stream *ss)
 static send_entry* get_send_entry(send_stream *ss)
 {
     send_entry *e;
+    void *buf;
     pj_timestamp min_sent_ts, idle_ts;
 
     /* Find entry which has idled for at least 1/16 seconds */
@@ -410,13 +396,12 @@ static send_entry* get_send_entry(send_stream *ss)
 
     if (e == &ss->free_list) {
         /* Not found, allocate a new one */
-        e = pj_pool_alloc(ss->pool, sizeof(send_entry) + ss->buf_size);
-        if (!e) {
-            pj_grp_lock_release(ss->grp_lock);
+        e = PJ_POOL_ZALLOC_T(ss->pool, send_entry);
+        buf = pj_pool_alloc(ss->pool, ss->buf_size);
+        if (!e || !buf)
             return NULL;
-        }
 
-        e->buf = e + 1;
+        e->buf = buf;
         e->buf_size = ss->buf_size;
         e->stream = ss;
 #if TRACE_RC
@@ -432,7 +417,6 @@ static send_entry* get_send_entry(send_stream *ss)
 static void send_rtp(send_stream *ss, send_entry *entry)
 {
     pj_timestamp send_ts;
-    send_manager *mgr;
 
     pj_grp_lock_acquire(ss->grp_lock);
 
@@ -441,9 +425,6 @@ static void send_rtp(send_stream *ss, send_entry *entry)
         pj_grp_lock_release(ss->grp_lock);
         return;
     }
-    /* Snapshot under ss->grp_lock — detach_send_manager() will NULL
-     * ss->mgr later, but we need a stable pointer to lock against. */
-    mgr = ss->mgr;
 
     /* Calculate earliest sending time allowed by rate control */
     ss->rc_total += entry->buf_size;
@@ -452,22 +433,6 @@ static void send_rtp(send_stream *ss, send_entry *entry)
         pj_get_timestamp(&ss->rc_start);
     entry->send_ts = ss->rc_start;
     pj_add_timestamp(&entry->send_ts, &send_ts);
-
-    /* Bound the pacing debt. If the scheduled send time has drifted too far
-     * ahead of real time, the encoder is outpacing the RC budget (e.g. after
-     * a mid-call bitrate increase). Cap the delay and re-anchor the pacing
-     * baseline to real time, forgiving the excess debt, so sender-side
-     * latency cannot grow without bound.
-     */
-    if (ss->rc_max_delay) {
-        pj_timestamp now;
-        pj_get_timestamp(&now);
-        if (entry->send_ts.u64 > now.u64 + ss->rc_max_delay) {
-            entry->send_ts.u64 = now.u64 + ss->rc_max_delay;
-            ss->rc_start = entry->send_ts;
-            ss->rc_total = 0;
-        }
-    }
 
     /* Reset counter to avoid overflow in calculating timestamp */
     if (ss->rc_total > 0xFF000000) {
@@ -478,32 +443,12 @@ static void send_rtp(send_stream *ss, send_entry *entry)
     /* Add ref stream to avoid premature destroy of stream */
     pj_grp_lock_add_ref(ss->grp_lock);
 
-    /* Keep mgr alive across the ss->grp_lock release, even if a
-     * concurrent detach drops the per-stream mgr ref. */
-    pj_grp_lock_add_ref(mgr->grp_lock);
-
     pj_grp_lock_release(ss->grp_lock);
 
-    /* Queue the packet. detach_send_manager() mutates ss->mgr under
-     * mgr->grp_lock, so the recheck below is sufficient to know whether
-     * the queue is still being drained by the worker thread. */
-    pj_grp_lock_acquire(mgr->grp_lock);
-    if (ss->mgr == mgr) {
-        pj_list_push_back(&mgr->send_list, entry);
-        pj_grp_lock_release(mgr->grp_lock);
-    } else {
-        /* Detach drained the queue and stopped the worker between our
-         * release of ss->grp_lock and now; the entry would never be
-         * processed. Recycle it to ss->free_list (matching the worker
-         * thread pattern) and drop the stream ref we just added. */
-        pj_grp_lock_release(mgr->grp_lock);
-        pj_grp_lock_acquire(ss->grp_lock);
-        pj_list_push_back(&ss->free_list, entry);
-        pj_grp_lock_release(ss->grp_lock);
-        pj_grp_lock_dec_ref(ss->grp_lock);
-    }
-
-    pj_grp_lock_dec_ref(mgr->grp_lock);
+    /* Queue the packet */
+    pj_grp_lock_acquire(ss->mgr->grp_lock);
+    pj_list_push_back(&ss->mgr->send_list, entry);
+    pj_grp_lock_release(ss->mgr->grp_lock);
 }
 
 
@@ -1720,27 +1665,8 @@ PJ_DEF(pj_status_t) pjmedia_vid_stream_create(
 
     /* Initialize send rate states */
     pj_get_timestamp_freq(&stream->ts_freq);
-
-    /* Remember the SDP-negotiated TX ceiling (0 = no limit) so that a later
-     * modify_codec_param() cannot raise the outgoing bitrate above it.
-     */
-    stream->tx_max_bps = info->rem_max_bps;
-
-    /* Auto-derive the pacing budget from the codec max bitrate when the app
-     * did not pin rc_cfg.bandwidth. A margin is added for RTP/UDP/IP overhead
-     * and encoder burstiness so the pacer does not fall behind a compliant
-     * encoder; this is pacing headroom only and does not raise the actual
-     * media bitrate (which stays bounded by the codec and the SDP ceiling).
-     */
-    stream->rc_auto_bw = (info->rc_cfg.bandwidth == 0);
-    if (info->rc_cfg.bandwidth == 0) {
-        pj_uint64_t bw = (pj_uint64_t)vfd_enc->max_bps +
-                         (pj_uint64_t)vfd_enc->max_bps *
-                         PJMEDIA_VID_STREAM_RC_OVERHEAD_PCT / 100;
-        /* Saturate to unsigned before storing. */
-        info->rc_cfg.bandwidth = (bw > 0xFFFFFFFFUL)? 0xFFFFFFFFU
-                                                    : (unsigned)bw;
-    }
+    if (info->rc_cfg.bandwidth == 0)
+        info->rc_cfg.bandwidth = vfd_enc->max_bps;
 
     /* For simple blocking, need to have bandwidth large enough, otherwise
      * we can slow down the transmission too much
@@ -1750,12 +1676,6 @@ PJ_DEF(pj_status_t) pjmedia_vid_stream_create(
     {
         info->rc_cfg.bandwidth = vfd_enc->avg_bps * 3;
     }
-
-    /* Guard against a zero budget (e.g. codec reported a zero max bitrate),
-     * which would divide by zero in the send rate control pacer.
-     */
-    if (info->rc_cfg.bandwidth == 0)
-        info->rc_cfg.bandwidth = PJMEDIA_VID_STREAM_RC_MIN_BANDWIDTH;
 
     /* Override the initial framerate in the decoding direction. This initial
      * value will be used by the renderer to configure its clock, and setting
@@ -1779,18 +1699,7 @@ PJ_DEF(pj_status_t) pjmedia_vid_stream_create(
     if (status != PJ_SUCCESS)
         goto err_cleanup;
 
-    /* Create temporary buffer for immediate decoding, reject decoding size
-     * that is zero, too large, or would overflow the size calculation.
-     */
-    if (vfd_dec->size.w == 0 || vfd_dec->size.h == 0 ||
-        vfd_dec->size.w > PJMEDIA_MAX_VIDEO_DEC_FRAME_SIZE / 4 /
-                          vfd_dec->size.h)
-    {
-        PJ_LOG(3,(THIS_FILE, "Invalid decoding size %dx%d in creating "
-                  "video stream %s",
-                  (int)vfd_dec->size.w, (int)vfd_dec->size.h, name.ptr));
-        goto err_cleanup;
-    }
+    /* Create temporary buffer for immediate decoding */
     stream->dec_max_size = vfd_dec->size.w * vfd_dec->size.h * 4;
     stream->dec_frame.buf = pj_pool_alloc(pool, stream->dec_max_size);
 
@@ -1916,30 +1825,17 @@ PJ_DEF(pj_status_t) pjmedia_vid_stream_create(
     att_param.addr_len = pj_sockaddr_get_len(&info->rem_addr);
     att_param.rtp_cb2 = &on_rx_rtp;
     att_param.rtcp_cb = &on_rx_rtcp;
-    /* Let the transport hold a reference on the stream's group lock across
-     * each rx callback, so the stream cannot be destroyed while an in-flight
-     * RTP/RTCP callback is running on it.
-     */
-    att_param.grp_lock = c_strm->grp_lock;
 
-    /* Only attach transport when stream is ready. Publish the transport and
-     * ref its group lock before attaching: once attached, an rx callback may
-     * arrive immediately and dereference c_strm->transport.
-     */
-    c_strm->transport = tp;
-    if (tp->grp_lock)
-        pj_grp_lock_add_ref(tp->grp_lock);
-
+    /* Only attach transport when stream is ready. */
     status = pjmedia_transport_attach2(tp, &att_param);
-    if (status != PJ_SUCCESS) {
-        /* Unpublish, so cleanup below won't send RTCP BYE nor detach from a
-         * transport we are not attached to.
-         */
-        c_strm->transport = NULL;
-        if (tp->grp_lock)
-            pj_grp_lock_dec_ref(tp->grp_lock);
+    if (status != PJ_SUCCESS)
         goto err_cleanup;
-    }
+
+    c_strm->transport = tp;
+
+    /* Also add ref the transport group lock */
+    if (c_strm->transport->grp_lock)
+        pj_grp_lock_add_ref(c_strm->transport->grp_lock);
 
     /* Send RTCP SDES */
     if (!c_strm->rtcp_sdes_bye_disabled) {
@@ -2029,20 +1925,18 @@ PJ_DEF(pj_status_t) pjmedia_vid_stream_create(
         send_manager *send_mgr;
         send_stream *ss;
 
-        send_mgr = PJ_POOL_ZALLOC_T(pool, send_manager);
-        ss = PJ_POOL_ZALLOC_T(pool, send_stream);
+        send_mgr = PJ_POOL_ZALLOC_T(c_strm->own_pool, send_manager);
+        ss = PJ_POOL_ZALLOC_T(c_strm->own_pool, send_stream);
         if (!send_mgr || !ss)
             goto err_cleanup;
 
         pj_list_init(&ss->free_list);
         ss->grp_lock = c_strm->grp_lock;
         ss->tp = c_strm->transport;
-        ss->pool = pool;
+        ss->pool = c_strm->own_pool;
         ss->buf_size = c_strm->enc->buf_size;
         ss->ts_freq = stream->ts_freq;
         ss->rc_bandwidth = stream->info.rc_cfg.bandwidth;
-        ss->rc_max_delay = (pj_uint64_t)PJMEDIA_VID_STREAM_RC_MAX_DELAY_MSEC *
-                           stream->ts_freq.u64 / 1000;
         ss->name = c_strm->enc->port.info.name.ptr;
 
         status = attach_send_manager(ss, send_mgr);
@@ -2083,17 +1977,11 @@ PJ_DEF(pj_status_t) pjmedia_vid_stream_destroy( pjmedia_vid_stream *stream )
     if (c_strm->dec)
         c_strm->dec->port.get_frame = NULL;
 
-    /* Detach from sending manager.
-     * MUST NOT hold stream mutex while detaching from send manager, as
-     * it may cause deadlock. The send_worker_thread() acquires manager's
-     * group lock first, then tries to acquire stream's group lock, while
-     * holding the stream lock here and then trying to acquire manager's
-     * lock in detach_send_manager() creates AB-BA deadlock.
-     * This is safe because the streaming has already been stopped above
-     * and detach_send_manager() provides its own synchronization.
-     */
+    /* Detach from sending manager */
     if (stream->send_stream) {
+        pj_grp_lock_acquire(c_strm->grp_lock);
         detach_send_manager(stream->send_stream);
+        pj_grp_lock_release(c_strm->grp_lock);
     }
 
 #if TRACE_RC
@@ -2259,70 +2147,9 @@ PJ_DEF(pj_status_t)
 pjmedia_vid_stream_modify_codec_param(pjmedia_vid_stream *stream,
                                       const pjmedia_vid_codec_param *param)
 {
-    pjmedia_vid_codec_param mod_param;
-    pjmedia_video_format_detail *vfd;
-    pj_status_t status;
-
     PJ_ASSERT_RETURN(stream && param, PJ_EINVAL);
 
-    mod_param = *param;
-    vfd = pjmedia_format_get_video_format_detail(&mod_param.enc_fmt, PJ_FALSE);
-
-    /* Do not allow the outgoing bitrate to exceed the bandwidth negotiated
-     * with the remote in SDP (b=TIAS/AS). Sending above what the peer agreed
-     * to receive is a protocol violation; the correct way to use more is to
-     * renegotiate (re-INVITE) with a higher "b=" line.
-     */
-    if (vfd && stream->tx_max_bps) {
-        /* max_bps == 0 means "unlimited" to some encoders and would bypass the
-         * SDP ceiling, so clamp both zero and over-limit values. */
-        if (vfd->max_bps == 0 || vfd->max_bps > stream->tx_max_bps) {
-            PJ_LOG(3,(THIS_FILE, "Requested TX max bitrate %u bps not within "
-                      "SDP-negotiated limit %u bps, clamping",
-                      vfd->max_bps, stream->tx_max_bps));
-            vfd->max_bps = stream->tx_max_bps;
-        }
-        if (vfd->avg_bps > stream->tx_max_bps)
-            vfd->avg_bps = stream->tx_max_bps;
-    }
-
-    status = pjmedia_vid_codec_modify(stream->codec, &mod_param);
-    if (status != PJ_SUCCESS)
-        return status;
-
-    /* Recompute the send rate-control budget so the pacer tracks the new
-     * bitrate. Only when the pacer is in use and the budget was auto-derived
-     * (the app did not pin rc_cfg.bandwidth); an app-pinned budget is left
-     * untouched. Re-anchor the pacing baseline to avoid a scheduling jump.
-     */
-    if (vfd && stream->rc_auto_bw && stream->send_stream &&
-        stream->info.rc_cfg.method == PJMEDIA_VID_STREAM_RC_SEND_THREAD)
-    {
-        send_stream *ss = stream->send_stream;
-        pj_uint64_t bw64 = (pj_uint64_t)vfd->max_bps +
-                           (pj_uint64_t)vfd->max_bps *
-                           PJMEDIA_VID_STREAM_RC_OVERHEAD_PCT / 100;
-        unsigned bw = (bw64 > 0xFFFFFFFFUL)? 0xFFFFFFFFU : (unsigned)bw64;
-
-        if (bw < PJMEDIA_VID_STREAM_RC_MIN_BANDWIDTH)
-            bw = PJMEDIA_VID_STREAM_RC_MIN_BANDWIDTH;
-
-        pj_grp_lock_acquire(ss->grp_lock);
-        /* Re-anchor the pacing timeline to the current schedule high-water
-         * mark (computed with the old bandwidth) before applying the new
-         * bitrate, so packets already queued with a later send time are not
-         * reordered by the send worker.
-         */
-        if (ss->rc_start.u64 != 0) {
-            ss->rc_start.u64 += ss->rc_total * ss->ts_freq.u64 * 8 /
-                                ss->rc_bandwidth;
-        }
-        ss->rc_bandwidth = bw;
-        ss->rc_total = 0;
-        pj_grp_lock_release(ss->grp_lock);
-    }
-
-    return status;
+    return pjmedia_vid_codec_modify(stream->codec, param);
 }
 
 

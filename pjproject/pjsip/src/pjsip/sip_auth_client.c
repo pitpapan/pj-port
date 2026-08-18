@@ -148,18 +148,6 @@ const pjsip_auth_algorithm pjsip_auth_algorithms[] = {
         } \
     } while(0)
 
-
-/* Signature of async auth token, used to detect double-use (zeroed on
- * consumption) and provide minimal protection against invalid token pointers.
- *
- * Note: the check-then-clear of the signature in send_req/abandon is not
- * atomic, but this is safe under PJSIP's single-worker-thread model.  When
- * a parent session lock is configured (via DO_ON_PARENT_LOCKED), the lock
- * serializes concurrent access.
- */
-#define AUTH_TOKEN_SIGNATURE    "AUTH"
-
-
 static void dup_bin(pj_pool_t *pool, pj_str_t *dst, const pj_str_t *src)
 {
     dst->slen = src->slen;
@@ -382,7 +370,7 @@ PJ_DEF(pj_status_t) pjsip_auth_create_digest2( pj_str_t *result,
     } else {
         AUTH_TRACE_((THIS_FILE, " Using pre computed digest for %.*s digest",
                 (int)algorithm->iana_name.slen, algorithm->iana_name.ptr));
-        pj_memcpy( ha1, cred_info->data.ptr, digest_strlen );
+        pj_memcpy( ha1, cred_info->data.ptr, cred_info->data.slen );
     }
 
     AUTH_TRACE_((THIS_FILE, " ha1=%.*s", algorithm->digest_str_length, ha1));
@@ -921,11 +909,9 @@ PJ_DEF(pj_status_t) pjsip_auth_clt_init(  pjsip_auth_clt_sess *sess,
     sess->cred_cnt = 0;
     sess->cred_info = NULL;
     pj_list_init(&sess->cached_auth);
-    pj_bzero(&sess->pref, sizeof(sess->pref));
 
     sess->parent = NULL;
     sess->lock = NULL;
-    sess->async_opt = NULL;
     return PJ_SUCCESS;
 }
 
@@ -1015,14 +1001,6 @@ PJ_DEF(pj_status_t) pjsip_auth_clt_clone( pj_pool_t *pool,
 
         if (status != PJ_SUCCESS)
             return status;
-    }
-
-    /* Clone async auth setting so forked dialogs inherit the
-     * async callback configuration.
-     */
-    if (rhs->async_opt) {
-        sess->async_opt = PJ_POOL_ALLOC_T(pool, pjsip_auth_clt_async_setting);
-        *sess->async_opt = *rhs->async_opt;
     }
 
     /* TODO note:
@@ -1860,133 +1838,4 @@ PJ_DEF(pj_status_t) pjsip_auth_clt_reinit_req(  pjsip_auth_clt_sess *sess,
     *new_request = tdata;
     return PJ_SUCCESS;
 
-}
-
-
-PJ_DEF(pj_status_t) pjsip_auth_clt_async_configure(
-                                    pjsip_auth_clt_sess *sess,
-                                    const pjsip_auth_clt_async_setting *opt)
-{
-    PJ_ASSERT_RETURN(sess && opt && opt->cb, PJ_EINVAL);
-    DO_ON_PARENT_LOCKED(sess, pjsip_auth_clt_async_configure(sess->parent,
-                        opt));
-
-    if (!sess->async_opt) {
-        sess->async_opt = PJ_POOL_ZALLOC_T(sess->pool,
-                                           pjsip_auth_clt_async_setting);
-    }
-    *sess->async_opt = *opt;
-
-    return PJ_SUCCESS;
-}
-
-
-PJ_DEF(pj_status_t) pjsip_auth_clt_async_send_req(
-                                    pjsip_auth_clt_sess *sess,
-                                    void *token,
-                                    pjsip_tx_data *new_request)
-{
-    pjsip_auth_clt_async_impl_token *send_token =
-                                (pjsip_auth_clt_async_impl_token*)token;
-    pj_status_t status;
-
-    PJ_ASSERT_RETURN(sess && token && new_request, PJ_EINVAL);
-    DO_ON_PARENT_LOCKED(sess, pjsip_auth_clt_async_send_req(
-                                                        sess->parent,
-                                                        token, new_request));
-    PJ_ASSERT_RETURN(sess->async_opt && sess->async_opt->cb, PJ_EINVALIDOP);
-
-    /* Best effort to verify the integrity of the token */
-    if (!send_token->send_impl ||
-        pj_memcmp(send_token->signature, AUTH_TOKEN_SIGNATURE, 4) != 0)
-    {
-        return PJ_EINVAL;
-    }
-
-    /* Save grp_lock before send_impl — after dec_ref the token memory
-     * may be freed.
-     */
-    {
-        pj_grp_lock_t *grp_lock = send_token->grp_lock;
-
-        status = (*send_token->send_impl)(sess, send_token->user_data,
-                                          new_request);
-        /* Always invalidate the token after use.  Send failures are
-         * transport-level errors — not retryable with the same tdata.
-         */
-        pj_bzero(send_token->signature, 4);
-        if (grp_lock)
-            pj_grp_lock_dec_ref(grp_lock);
-    }
-
-    return status;
-}
-
-
-PJ_DEF(pj_status_t) pjsip_auth_clt_async_abandon(
-                                    pjsip_auth_clt_sess *sess,
-                                    void *token)
-{
-    pjsip_auth_clt_async_impl_token *impl_token =
-                                (pjsip_auth_clt_async_impl_token*)token;
-
-    PJ_ASSERT_RETURN(sess && token, PJ_EINVAL);
-    DO_ON_PARENT_LOCKED(sess, pjsip_auth_clt_async_abandon(sess->parent,
-                                                           token));
-
-    /* Best effort to verify the integrity of the token */
-    if (pj_memcmp(impl_token->signature, AUTH_TOKEN_SIGNATURE, 4) != 0)
-        return PJ_EINVAL;
-
-    /* Save grp_lock before any operation — after dec_ref the token memory
-     * may be freed.
-     */
-    {
-        pj_grp_lock_t *grp_lock = impl_token->grp_lock;
-
-        /* Clear the signature FIRST to prevent any further use of the
-         * token, even if abandon_impl triggers destruction of the session.
-         */
-        pj_bzero(impl_token->signature, 4);
-
-        if (impl_token->abandon_impl)
-            (*impl_token->abandon_impl)(sess, impl_token->user_data);
-
-        if (grp_lock)
-            pj_grp_lock_dec_ref(grp_lock);
-    }
-
-    return PJ_SUCCESS;
-}
-
-
-PJ_DEF(pj_status_t) pjsip_auth_clt_async_impl_on_challenge(
-                            pjsip_auth_clt_sess* sess,
-                            pjsip_auth_clt_async_impl_token *token,
-                            const pjsip_auth_clt_async_on_chal_param *param)
-{
-    pjsip_auth_clt_async_on_chal_param cb_param;
-
-    PJ_ASSERT_RETURN(sess && token && param && param->rdata && param->tdata,
-                     PJ_EINVAL);
-    DO_ON_PARENT_LOCKED(sess, pjsip_auth_clt_async_impl_on_challenge(
-                                                    sess->parent,
-                                                    token, param));
-
-    if (!sess->async_opt || !sess->async_opt->cb)
-        return PJ_EINVALIDOP;
-
-    pj_memcpy(token->signature, AUTH_TOKEN_SIGNATURE, 4);
-
-    cb_param           = *param;
-    cb_param.user_data = sess->async_opt->user_data;
-    if ((*sess->async_opt->cb)(sess, token, &cb_param)) {
-        return PJ_SUCCESS;
-    }
-
-    /* Callback chose not to handle — invalidate token, let caller
-     * fall through to synchronous path.
-     */
-    pj_bzero(token->signature, 4);
-    return PJ_EIGNORED;
 }

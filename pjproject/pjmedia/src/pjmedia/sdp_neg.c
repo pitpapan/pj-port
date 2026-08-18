@@ -41,16 +41,6 @@ typedef pj_int8_t pt_to_codec_map[DYNAMIC_PT_SIZE];
 /* Array for mapping codec ID to PT number. */
 typedef pj_int8_t codec_to_pt_map[PJMEDIA_CODEC_MGR_MAX_CODECS];
 
-/* Check whether a payload type is a dynamic PT that fits in the map,
- * i.e. in the range START_DYNAMIC_PT..127. Payload numbers parsed from
- * remote SDP attributes must be validated with this before being used as
- * an index into the fixed-size dynamic PT map arrays.
- */
-PJ_INLINE(pj_bool_t) is_dynamic_pt(unsigned pt)
-{
-    return pt >= START_DYNAMIC_PT && pt < START_DYNAMIC_PT + DYNAMIC_PT_SIZE;
-}
-
 /**
  * This structure describes SDP media negotiator.
  */
@@ -71,8 +61,6 @@ struct pjmedia_sdp_neg
     pj_int8_t             vid_dyn_codecs_cnt;
     pj_str_t              vid_dyn_codecs[PJMEDIA_CODEC_MGR_MAX_CODECS];
 #endif
-    pj_int8_t             txt_dyn_codecs_cnt;
-    pj_str_t              txt_dyn_codecs[2];     /**< "red", "t140"          */
 
     pjmedia_sdp_session *initial_sdp,       /**< Initial local SDP           */
                         *initial_sdp_tmp,   /**< Temporary initial local SDP */
@@ -140,11 +128,6 @@ static void init_mapping(pjmedia_sdp_neg *neg)
     pjmedia_vid_codec_mgr_get_dyn_codecs(NULL, &neg->vid_dyn_codecs_cnt,
                                          neg->vid_dyn_codecs);
 #endif
-
-    /* Text has no codec mgr; sort by pj_stricmp for binary search. */
-    neg->txt_dyn_codecs[0] = pj_str("red");
-    neg->txt_dyn_codecs[1] = pj_str("t140");
-    neg->txt_dyn_codecs_cnt = PJ_ARRAY_SIZE(neg->txt_dyn_codecs);
 
     pj_memset(neg->pt_to_codec, -1, PJ_ARRAY_SIZE(neg->pt_to_codec) *
               PJ_ARRAY_SIZE(neg->pt_to_codec[0]));
@@ -487,13 +470,6 @@ PJ_DEF(pj_status_t) pjmedia_sdp_neg_modify_local_offer2(
             if (!found) {
                 pjmedia_sdp_media *m;
 
-                if (new_offer->media_count >= PJMEDIA_MAX_SDP_MEDIA) {
-                    PJ_LOG(3,(THIS_FILE, "Too many media in SDP, "
-                                         "modify local offer failed"));
-                    neg->state = PJMEDIA_SDP_NEG_STATE_DONE;
-                    return PJ_ETOOMANY;
-                }
-
                 m = sdp_media_clone_deactivate(pool, om, om, local);
 
                 pj_array_insert(new_offer->media, sizeof(new_offer->media[0]),
@@ -507,13 +483,6 @@ PJ_DEF(pj_status_t) pjmedia_sdp_neg_modify_local_offer2(
          */
         for (oi = new_offer->media_count; oi < old_offer->media_count; ++oi) {
             pjmedia_sdp_media *m;
-
-            if (new_offer->media_count >= PJMEDIA_MAX_SDP_MEDIA) {
-                PJ_LOG(3,(THIS_FILE, "Too many media in SDP, "
-                                     "modify local offer failed"));
-                neg->state = PJMEDIA_SDP_NEG_STATE_DONE;
-                return PJ_ETOOMANY;
-            }
 
             m = sdp_media_clone_deactivate(pool, old_offer->media[oi],
                                            old_offer->media[oi], local);
@@ -1273,89 +1242,10 @@ static void apply_answer_symmetric_pt(pj_pool_t *pool,
 }
 
 
-/* Return PJ_TRUE if a session-level group attribute contains the supplied MID
- * in a BUNDLE group.
- */
-static pj_bool_t bundle_group_contains_mid(const pjmedia_sdp_session *sdp,
-                                           const pj_str_t *mid)
-{
-    unsigned i;
-
-    for (i = 0; i < sdp->attr_count; ++i) {
-        const pjmedia_sdp_attr *attr = sdp->attr[i];
-        const char *pos, *end;
-        unsigned token_index = 0;
-        pj_bool_t is_bundle = PJ_FALSE;
-
-        if (pj_stricmp2(&attr->name, "group") != 0)
-            continue;
-
-        if (attr->value.ptr == NULL || attr->value.slen == 0)
-            continue;
-
-        pos = attr->value.ptr;
-        end = attr->value.ptr + attr->value.slen;
-        while (pos < end) {
-            const char *token_start;
-            pj_str_t token;
-
-            while (pos < end && (*pos == ' ' || *pos == '\t'))
-                ++pos;
-            if (pos == end)
-                break;
-
-            token_start = pos;
-            while (pos < end && *pos != ' ' && *pos != '\t')
-                ++pos;
-
-            token.ptr = (char *)token_start;
-            token.slen = pos - token_start;
-
-            if (token_index++ == 0) {
-                is_bundle = (pj_stricmp2(&token, "BUNDLE") == 0);
-                if (!is_bundle)
-                    break;
-                continue;
-            }
-
-            if (is_bundle && pj_strcmp(&token, mid) == 0)
-                return PJ_TRUE;
-        }
-    }
-
-    return PJ_FALSE;
-}
-
-
-/* RFC 9143 allows a bundled m= section in an offer to use port zero when
- * a=bundle-only is present.  The exception only applies when the section has
- * a MID and that MID is actually listed in a session-level group:BUNDLE
- * attribute.
- */
-static pj_bool_t is_bundle_only_offer(const pjmedia_sdp_session *sdp,
-                                      const pjmedia_sdp_media *media)
-{
-    const pjmedia_sdp_attr *mid;
-
-    if (media->desc.port != 0 ||
-        !pjmedia_sdp_media_find_attr2(media, "bundle-only", NULL))
-    {
-        return PJ_FALSE;
-    }
-
-    mid = pjmedia_sdp_media_find_attr2(media, "mid", NULL);
-    if (!mid)
-        return PJ_FALSE;
-
-    return bundle_group_contains_mid(sdp, &mid->value);
-}
-
-
 /* Try to match offer with answer. */
 static pj_status_t match_offer(pj_pool_t *pool,
                                pj_bool_t prefer_remote_codec_order,
                                pj_bool_t answer_with_multiple_codecs,
-                               pj_bool_t bundle_only,
                                const pjmedia_sdp_media *offer,
                                const pjmedia_sdp_media *preanswer,
                                const pjmedia_sdp_session *preanswer_sdp,
@@ -1377,11 +1267,8 @@ static pj_status_t match_offer(pj_pool_t *pool,
     unsigned nclockrate = 0, clockrate[PJMEDIA_MAX_SDP_FMT];
     unsigned ntel_clockrate = 0, tel_clockrate[PJMEDIA_MAX_SDP_FMT];
 
-    /* A zero port normally disables an offered media section. RFC 9143
-     * defines an exception for a valid bundle-only section, which must be
-     * answered using the BUNDLE transport rather than being rejected.
-     */
-    if (offer->desc.port == 0 && !bundle_only) {
+    /* If offer has zero port, just clone the offer */
+    if (offer->desc.port == 0) {
         answer = sdp_media_clone_deactivate(pool, offer, preanswer,
                                             preanswer_sdp);
         *p_answer = answer;
@@ -1442,12 +1329,8 @@ static pj_status_t match_offer(pj_pool_t *pool,
                         unsigned k;
 
                         found_matching_codec = 1;
-                        pt_offer[pt_answer_count] = prefer_remote_codec_order?
-                                                    master->desc.fmt[i]:
-                                                    slave->desc.fmt[j];
-                        pt_answer[pt_answer_count++] = prefer_remote_codec_order?
-                                                       slave->desc.fmt[j]:
-                                                       master->desc.fmt[i];
+                        pt_offer[pt_answer_count] = slave->desc.fmt[j];
+                        pt_answer[pt_answer_count++] = slave->desc.fmt[j];
 
                         /* Take note of clock rate for tel-event. Note: for
                          * static PT, we assume the clock rate is 8000.
@@ -1641,13 +1524,10 @@ static pj_status_t match_offer(pj_pool_t *pool,
             unsigned pt;
             pj_status_t status;
 
-            /* Get the rtpmap. Static payload types (e.g. PCMU/PCMA) may not
-             * have an rtpmap attribute and can never be RED, so skip them.
-             */
+            /* Get the rtpmap. */
             a = pjmedia_sdp_media_find_attr2(preanswer, "rtpmap",
                                              &preanswer->desc.fmt[i]);
-            if (!a)
-                continue;
+            pj_assert(a);
             pjmedia_sdp_attr_get_rtpmap(a, &r);
 
             /* Only care for redundancy format */
@@ -1669,11 +1549,10 @@ static pj_status_t match_offer(pj_pool_t *pool,
                                                  &preanswer->desc.fmt[i]);
                 if (a) {
                     int lvl = 0;
-                    unsigned j;
-                    for (j = 0; j < (unsigned)a->value.slen; j++) {
-                        if (*(a->value.ptr + j) == '/') {
+                    for (i = 0; i < (unsigned)a->value.slen; i++) {
+                        if (*(a->value.ptr + i) == '/') {
                             if (lvl++ >= o_red_level) {
-                                a->value.slen = j;
+                                a->value.slen = i;
                                 break;
                             }
                         }
@@ -1703,16 +1582,10 @@ static pj_status_t match_offer(pj_pool_t *pool,
                 continue;
             }
 
-            /* Get the rtpmap for format. A dynamic PT without an rtpmap
-             * attribute can never be telephone-event, so skip it instead of
-             * dereferencing NULL (pj_assert() is a no-op in release builds).
-             */
+            /* Get the rtpmap for format. */
             a = pjmedia_sdp_media_find_attr2(preanswer, "rtpmap",
                                              &pt_answer[i]);
-            if (!a) {
-                ++i;
-                continue;
-            }
+            pj_assert(a);
             pjmedia_sdp_attr_get_rtpmap(a, &r);
 
             /* Only care for telephone-event format */
@@ -1813,11 +1686,10 @@ static pj_status_t create_answer( pj_pool_t *pool,
     char media_used[PJMEDIA_MAX_SDP_MEDIA];
     unsigned i;
 
-    /* Validate remote offer.
+    /* Validate remote offer. 
      * This should have been validated before.
-     * Use lenient validation (allow missing c= for disabled media).
      */
-    status = pjmedia_sdp_validate2(offer, PJ_FALSE);
+    status = pjmedia_sdp_validate(offer);
     PJ_ASSERT_RETURN(status==PJ_SUCCESS, status);
 
     /* Create initial answer by duplicating initial SDP,
@@ -1837,12 +1709,10 @@ static pj_status_t create_answer( pj_pool_t *pool,
         const pjmedia_sdp_media *om;    /* offer */
         const pjmedia_sdp_media *im;    /* initial media */
         pjmedia_sdp_media *am = NULL;   /* answer/result */
-        pj_bool_t bundle_only;
         pj_uint32_t om_tp;
         unsigned j;
 
         om = offer->media[i];
-        bundle_only = is_bundle_only_offer(offer, om);
 
         om_tp = pjmedia_sdp_transport_get_proto(&om->desc.transport);
         PJMEDIA_TP_PROTO_TRIM_FLAG(om_tp, PJMEDIA_TP_PROFILE_RTCP_FB);
@@ -1867,7 +1737,7 @@ static pj_status_t create_answer( pj_pool_t *pool,
 
                 /* See if it has matching codec. */
                 status2 = match_offer(pool, prefer_remote_codec_order,
-                                      answer_with_multiple_codecs, bundle_only,
+                                      answer_with_multiple_codecs,
                                       om, im, initial, &am);
                 if (status2 == PJ_SUCCESS) {
                     /* Mark media as used. */
@@ -2007,9 +1877,6 @@ static pj_status_t assign_pt_and_update_map(pj_pool_t *pool,
             dyn_codecs = neg->vid_dyn_codecs;
             count = neg->vid_dyn_codecs_cnt;
 #endif
-        } else if (med_type == PJMEDIA_TYPE_TEXT) {
-            dyn_codecs = neg->txt_dyn_codecs;
-            count = neg->txt_dyn_codecs_cnt;
         } else {
             continue;
         }
@@ -2041,7 +1908,7 @@ static pj_status_t assign_pt_and_update_map(pj_pool_t *pool,
 
             /* We only need to handle mapping for dynamic PT */
             pt = pj_strtoul(&rtpmap.pt);
-            if (!is_dynamic_pt(pt))
+            if (pt < START_DYNAMIC_PT)
                 continue;
 
             if (med_type == PJMEDIA_TYPE_AUDIO) {
@@ -2153,7 +2020,6 @@ static pj_status_t assign_pt_and_update_map(pj_pool_t *pool,
             const pjmedia_sdp_attr *attr;
             pjmedia_sdp_fmtp fmtp;
             unsigned pt, new_pt = 0;
-            pj_bool_t is_red = PJ_FALSE;
 
             attr = sdp_m->attr[j];
             if (pj_strcmp2(&attr->name, "fmtp") != 0)
@@ -2163,95 +2029,16 @@ static pj_status_t assign_pt_and_update_map(pj_pool_t *pool,
 
             /* We only need to handle mapping for dynamic PT */
             pt = pj_strtoul(&fmtp.fmt);
-            if (!is_dynamic_pt(pt))
+            if (pt < START_DYNAMIC_PT)
                 continue;
 
             new_pt = pt_change[pt - START_DYNAMIC_PT];
-            if (new_pt == 0)
-                new_pt = pt;
-
-            /* Detect RED so we can also rewrite its redundancy PT refs
-             * (the body, e.g. "100 98/98/98", references other PTs).
-             * Look up rtpmap by new_pt: the rtpmap loop above may have
-             * already rewritten the rtpmap value in place.
-             */
-            {
-                const pjmedia_sdp_attr *rtpmap_attr;
-                pjmedia_sdp_rtpmap r;
-                pj_str_t npt_str;
-                char npt_buf[8];
-
-                npt_str.ptr = npt_buf;
-                npt_str.slen = pj_utoa(new_pt, npt_buf);
-                rtpmap_attr = pjmedia_sdp_media_find_attr2(sdp_m, "rtpmap",
-                                                           &npt_str);
-                if (rtpmap_attr &&
-                    pjmedia_sdp_attr_get_rtpmap(rtpmap_attr, &r)==PJ_SUCCESS &&
-                    pj_stricmp2(&r.enc_name, "red") == 0)
-                {
-                    is_red = PJ_TRUE;
-                }
-            }
-
-            if (is_red) {
-                pjmedia_codec_fmtp parsed;
-
-                pj_bzero(&parsed, sizeof(parsed));
-                if (pjmedia_stream_info_parse_fmtp_data(pool, &fmtp.fmt_param,
-                                                        &parsed) == PJ_SUCCESS
-                    && parsed.cnt > 0)
-                {
-                    /* Same bound as create_redundancy_rtpmap() (producer)
-                     * and apply_answer_symmetric_pt().
-                     */
-                    enum { MAX_FMTP_STR_LEN = 32 };
-                    char buf[MAX_FMTP_STR_LEN];
-                    int buf_len, len;
-                    unsigned k;
-                    pj_bool_t modified = (new_pt != pt);
-                    pj_str_t new_val;
-
-                    buf_len = pj_ansi_snprintf(buf, MAX_FMTP_STR_LEN, "%u ",
-                                               new_pt);
-                    if (buf_len < 0 || buf_len >= MAX_FMTP_STR_LEN)
-                        continue;
-
-                    for (k = 0; k < parsed.cnt; ++k) {
-                        unsigned ref_pt = pj_strtoul(&parsed.param[k].val);
-                        unsigned new_ref = ref_pt;
-
-                        if (is_dynamic_pt(ref_pt) &&
-                            pt_change[ref_pt - START_DYNAMIC_PT] != 0)
-                        {
-                            new_ref = pt_change[ref_pt - START_DYNAMIC_PT];
-                            if (new_ref != ref_pt)
-                                modified = PJ_TRUE;
-                        }
-                        len = pj_ansi_snprintf(buf + buf_len,
-                                               MAX_FMTP_STR_LEN - buf_len,
-                                               (k == 0)? "%u": "/%u",
-                                               new_ref);
-                        if (len < 0 || len >= MAX_FMTP_STR_LEN - buf_len) {
-                            buf_len = -1;
-                            break;
-                        }
-                        buf_len += len;
-                    }
-
-                    if (buf_len > 0 && modified) {
-                        new_val.ptr = buf;
-                        new_val.slen = buf_len;
-                        pj_strdup(pool, (pj_str_t *)&attr->value, &new_val);
-                    }
-                    continue;
-                }
-                /* Parse failed or empty body: fall through. */
-            }
-
-            /* Only the fmtp's own PT needs rewriting. */
-            if (new_pt == pt)
+            /* No PT change */
+            if (new_pt == 0 || new_pt == pt)
                 continue;
-            rewrite_pt2(pool, (pj_str_t *)&attr->value, pt, new_pt);
+
+            rewrite_pt2(pool, (pj_str_t *)&attr->value,
+                        pt, new_pt);
         }
 
         /* Modify format list */
@@ -2259,7 +2046,7 @@ static pj_status_t assign_pt_and_update_map(pj_pool_t *pool,
             unsigned pt, new_pt = 0;
 
             pt = pj_strtoul(&sdp_m->desc.fmt[j]);
-            if (!is_dynamic_pt(pt))
+            if (pt < START_DYNAMIC_PT)
                  continue;
 
             new_pt = pt_change[pt - START_DYNAMIC_PT];

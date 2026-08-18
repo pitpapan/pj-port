@@ -164,25 +164,6 @@ static void call_timeout_callback(pj_timer_heap_t *timer_heap,
 }
 
 /*
- * Handler that lets the application veto the library's automatic
- * teardown of the call after an in-dialog UAC 408/481.
- * Enabled via --keep-call-on-tsx-fail; emits a marker log so tests
- * can detect that suppression actually took effect.
- */
-static pj_bool_t on_call_tsx_terminate_session(pjsua_call_id call_id,
-                                               pjsip_transaction *tsx,
-                                               pjsip_event *e)
-{
-    PJ_UNUSED_ARG(e);
-    PJ_LOG(3, (THIS_FILE,
-               "Call %d: suppressing termination after %.*s %d",
-               call_id,
-               (int)tsx->method.name.slen, tsx->method.name.ptr,
-               tsx->status_code));
-    return PJ_TRUE;
-}
-
-/*
  * Handler when invite state has changed.
  */
 static void on_call_state(pjsua_call_id call_id, pjsip_event *e)
@@ -211,56 +192,12 @@ static void on_call_state(pjsua_call_id call_id, pjsip_event *e)
             pjsip_endpt_cancel_timer(endpt, &cd->timer);
         }
 
-        /* Rewind play file when hangup automatically,
+        /* Rewind play file when hangup automatically, 
          * since file is not looped
          */
         if (app_config.auto_play_hangup)
             pjsua_player_set_pos(app_config.wav_id, 0);
 
-        /* Cleanup dynamic playback if attached to this call */
-        if (app_config.dyn_player_active &&
-            app_config.dyn_player_call == call_id)
-        {
-            PJ_LOG(3, (THIS_FILE, "Call ended, stopping playback"));
-
-            /* Disconnect and destroy player if created */
-            if (app_config.dyn_player_id != PJSUA_INVALID_ID) {
-                /* Destroy player (connections to call's slot will be cleaned
-                 * up automatically as the call is terminating) */
-                pjsua_player_destroy(app_config.dyn_player_id);
-            }
-
-            /* Reset state */
-            app_config.dyn_player_id = PJSUA_INVALID_ID;
-            app_config.dyn_player_port = PJSUA_INVALID_ID;
-            app_config.dyn_player_call = PJSUA_INVALID_ID;
-            app_config.dyn_player_active = PJ_FALSE;
-            app_config.dyn_play_filename[0] = '\0';
-        }
-
-        /* Cleanup dynamic recording if attached to this call */
-        if (app_config.dyn_rec_active &&
-            app_config.dyn_rec_call == call_id)
-        {
-            PJ_LOG(3, (THIS_FILE, "Call ended, stopping recording"));
-
-            /* Disconnect and destroy recorder if created */
-            if (app_config.dyn_rec_id != PJSUA_INVALID_ID) {
-                /* Disconnect microphone from recorder (mic is always slot 0)
-                 * (call's slot is being torn down, so that disconnects automatically) */
-                pjsua_conf_disconnect(0, app_config.dyn_rec_port);
-
-                /* Destroy recorder */
-                pjsua_recorder_destroy(app_config.dyn_rec_id);
-            }
-
-            /* Reset state */
-            app_config.dyn_rec_id = PJSUA_INVALID_ID;
-            app_config.dyn_rec_port = PJSUA_INVALID_ID;
-            app_config.dyn_rec_call = PJSUA_INVALID_ID;
-            app_config.dyn_rec_active = PJ_FALSE;
-            app_config.dyn_rec_filename[0] = '\0';
-        }
 
         PJ_LOG(3,(THIS_FILE, "Call %d is DISCONNECTED [reason=%d (%.*s)]", 
                   call_id,
@@ -486,41 +423,6 @@ static void on_call_audio_state(pjsua_call_info *ci, unsigned mi,
             pjsua_conf_connect(call_conf_slot, app_config.rec_port);
         }
 
-        /* Dynamic recording - start if queued */
-        if (app_config.dyn_rec_active &&
-            app_config.dyn_rec_id == PJSUA_INVALID_ID &&
-            app_config.dyn_rec_filename[0] != '\0')
-        {
-            pj_status_t status;
-            pjsua_recorder_id rec_id;
-            pjsua_conf_port_id rec_port;
-            pj_str_t rec_file;
-
-            /* Create recorder */
-            rec_file = pj_str(app_config.dyn_rec_filename);
-            status = pjsua_recorder_create(&rec_file, 0, NULL, 0, 0, &rec_id);
-            if (status == PJ_SUCCESS) {
-                rec_port = pjsua_recorder_get_conf_port(rec_id);
-
-                /* Connect call to recorder */
-                pjsua_conf_connect(call_conf_slot, rec_port);
-
-                /* Connect microphone to recorder */
-                pjsua_conf_connect(0, rec_port);
-
-                /* Save state */
-                app_config.dyn_rec_id = rec_id;
-                app_config.dyn_rec_port = rec_port;
-                app_config.dyn_rec_call = ci->id;
-
-                PJ_LOG(3, (THIS_FILE, "Dynamic recording auto-started"));
-            } else {
-                PJ_LOG(2, (THIS_FILE, "Failed to auto-start recording: %d", status));
-                app_config.dyn_rec_active = PJ_FALSE;
-                app_config.dyn_rec_filename[0] = '\0';
-            }
-        }
-
         /* Record audio into AVI, if desired */
         if (app_config.avi_auto_rec && app_config.avi_rec_audio &&
             app_config.avi_aud_slot != PJSUA_INVALID_ID)
@@ -529,47 +431,11 @@ static void on_call_audio_state(pjsua_call_info *ci, unsigned mi,
         }
 
         /* Stream a file, if desired */
-        if ((app_config.auto_play || app_config.auto_play_hangup) &&
+        if ((app_config.auto_play || app_config.auto_play_hangup) && 
             app_config.wav_port != PJSUA_INVALID_ID)
         {
             pjsua_conf_connect(app_config.wav_port, call_conf_slot);
             connect_sound = PJ_FALSE;
-        }
-
-        /* Dynamic playback - start if queued */
-        if (app_config.dyn_player_active &&
-            app_config.dyn_player_id == PJSUA_INVALID_ID &&
-            app_config.dyn_play_filename[0] != '\0')
-        {
-            pj_status_t status;
-            pjsua_player_id player_id;
-            pjsua_conf_port_id player_port;
-            pj_str_t play_file;
-
-            /* Create player */
-            play_file = pj_str(app_config.dyn_play_filename);
-            status = pjsua_player_create(&play_file, 0, &player_id);
-            if (status == PJ_SUCCESS) {
-                player_port = pjsua_player_get_conf_port(player_id);
-
-                /* Connect player to call */
-                pjsua_conf_connect(player_port, call_conf_slot);
-
-                /* Disconnect microphone (like auto-play) */
-                pjsua_conf_disconnect(0, call_conf_slot);
-
-                /* Save state */
-                app_config.dyn_player_id = player_id;
-                app_config.dyn_player_port = player_port;
-                app_config.dyn_player_call = ci->id;
-
-                PJ_LOG(3, (THIS_FILE, "Dynamic playback auto-started"));
-                connect_sound = PJ_FALSE;
-            } else {
-                PJ_LOG(2, (THIS_FILE, "Failed to auto-start playback: %d", status));
-                app_config.dyn_player_active = PJ_FALSE;
-                app_config.dyn_play_filename[0] = '\0';
-            }
         }
 
         /* Stream AVI, if desired */
@@ -747,9 +613,8 @@ static void call_on_dtmf_callback2(pjsua_call_id call_id,
                          info->duration);
         break;
     };    
-    PJ_LOG(3,(THIS_FILE, "Incoming DTMF on call %d: %c%s, using %s method, "
-           "stream %d", call_id, info->digit, duration, method,
-           info->med_idx));
+    PJ_LOG(3,(THIS_FILE, "Incoming DTMF on call %d: %c%s, using %s method", 
+           call_id, info->digit, duration, method));
 }
 
 /* Incoming text stream callback. */
@@ -757,12 +622,11 @@ static void call_on_rx_text(pjsua_call_id call_id,
                             const pjsua_txt_stream_data *data)
 {
     if (data->text.slen == 0) {
-        PJ_LOG(4, (THIS_FILE, "Received empty T140 block on stream %d "
-                              "with seq %d", data->med_idx, data->seq));
+        PJ_LOG(4, (THIS_FILE, "Received empty T140 block with seq %d",
+                              data->seq));
     } else {
-        PJ_LOG(3, (THIS_FILE, "Incoming text on call %d stream %d, "
-                              "seq %d: %.*s (%d bytes)",
-                              call_id, data->med_idx, data->seq,
+        PJ_LOG(3, (THIS_FILE, "Incoming text on call %d, seq %d: %.*s "
+                              "(%d bytes)", call_id, data->seq,
                               (int)data->text.slen, data->text.ptr,
                               (int)data->text.slen));
     }
@@ -1293,44 +1157,6 @@ void on_playfile_done(pjmedia_port *port, void *usr_data)
                                &delay);
 }
 
-/* Callback to replace the generated SDP with a custom one (--custom-sdp).
- * Only compiled when PJSUA_MEDIA_HAS_PJMEDIA=0 (alt media backend). */
-#if !PJSUA_MEDIA_HAS_PJMEDIA
-static void on_call_sdp_created_cb(pjsua_call_id call_id,
-                                   pjmedia_sdp_session *sdp,
-                                   pj_pool_t *pool,
-                                   const pjmedia_sdp_session *rem_sdp)
-{
-    pjmedia_sdp_session *custom = NULL;
-    pj_str_t sdp_str;
-    pj_status_t status;
-
-    PJ_UNUSED_ARG(call_id);
-    PJ_UNUSED_ARG(rem_sdp);
-
-    if (app_config.custom_sdp.slen == 0)
-        return;
-
-    /* Make a writable copy since pjmedia_sdp_parse modifies the buffer */
-    sdp_str.ptr = (char*)pj_pool_alloc(pool,
-                                       (pj_size_t)(app_config.custom_sdp.slen + 1));
-    pj_memcpy(sdp_str.ptr, app_config.custom_sdp.ptr,
-              (pj_size_t)app_config.custom_sdp.slen);
-    sdp_str.ptr[app_config.custom_sdp.slen] = '\0';
-    sdp_str.slen = app_config.custom_sdp.slen;
-
-    status = pjmedia_sdp_parse(pool, sdp_str.ptr, (pj_size_t)sdp_str.slen,
-                               &custom);
-    if (status != PJ_SUCCESS) {
-        PJ_PERROR(1,(THIS_FILE, status,
-                     "Failed to parse custom SDP, using generated SDP"));
-        return;
-    }
-
-    pj_memcpy(sdp, custom, sizeof(*sdp));
-}
-#endif /* !PJSUA_MEDIA_HAS_PJMEDIA */
-
 /* IP change progress callback. */
 void on_ip_change_progress(pjsua_ip_change_op op,
                            pj_status_t status,
@@ -1706,16 +1532,9 @@ static pj_status_t app_init(void)
     app_config.cfg.cb.on_mwi_info = &on_mwi_info;
     app_config.cfg.cb.on_transport_state = &on_transport_state;
     app_config.cfg.cb.on_ice_transport_error = &on_ice_transport_error;
-    if (app_config.keep_call_on_tsx_fail) {
-        app_config.cfg.cb.on_call_tsx_terminate_session =
-                                            &on_call_tsx_terminate_session;
-    }
     app_config.cfg.cb.on_snd_dev_operation = &on_snd_dev_operation;
     app_config.cfg.cb.on_call_media_event = &on_call_media_event;
     app_config.cfg.cb.on_ip_change_progress = &on_ip_change_progress;
-#if !PJSUA_MEDIA_HAS_PJMEDIA
-    app_config.cfg.cb.on_call_sdp_created = &on_call_sdp_created_cb;
-#endif
 #ifdef TRANSPORT_ADAPTER_SAMPLE
     app_config.cfg.cb.on_create_media_transport = &on_create_media_transport;
 #endif
@@ -1967,8 +1786,6 @@ static pj_status_t app_init(void)
             app_config_init_video(&acc_cfg);
             acc_cfg.txt_red_level = app_config.txt_red_level;
             acc_cfg.rtp_cfg = app_config.rtp_cfg;
-            acc_cfg.enable_rtcp_mux = app_config.enable_rtcp_mux;
-            acc_cfg.enable_rtcp_xr = app_config.enable_rtcp_xr;
             pjsua_acc_modify(aid, &acc_cfg);
         }
 
@@ -2014,8 +1831,6 @@ static pj_status_t app_init(void)
             app_config_init_video(&acc_cfg);
             acc_cfg.txt_red_level = app_config.txt_red_level;
             acc_cfg.rtp_cfg = app_config.rtp_cfg;
-            acc_cfg.enable_rtcp_mux = app_config.enable_rtcp_mux;
-            acc_cfg.enable_rtcp_xr = app_config.enable_rtcp_xr;
             // acc_cfg.ipv6_media_use = PJSUA_IPV6_ENABLED;
             pjsua_acc_modify(aid, &acc_cfg);
         }
@@ -2052,8 +1867,6 @@ static pj_status_t app_init(void)
             app_config_init_video(&acc_cfg);
             acc_cfg.txt_red_level = app_config.txt_red_level;
             acc_cfg.rtp_cfg = app_config.rtp_cfg;
-            acc_cfg.enable_rtcp_mux = app_config.enable_rtcp_mux;
-            acc_cfg.enable_rtcp_xr = app_config.enable_rtcp_xr;
             pjsua_acc_modify(aid, &acc_cfg);
         }
 
@@ -2085,8 +1898,6 @@ static pj_status_t app_init(void)
             app_config_init_video(&acc_cfg);
             acc_cfg.txt_red_level = app_config.txt_red_level;
             acc_cfg.rtp_cfg = app_config.rtp_cfg;
-            acc_cfg.enable_rtcp_mux = app_config.enable_rtcp_mux;
-            acc_cfg.enable_rtcp_xr = app_config.enable_rtcp_xr;
             // acc_cfg.ipv6_media_use = PJSUA_IPV6_ENABLED;
             pjsua_acc_modify(aid, &acc_cfg);
         }
@@ -2127,8 +1938,6 @@ static pj_status_t app_init(void)
             app_config_init_video(&acc_cfg);
             acc_cfg.txt_red_level = app_config.txt_red_level;
             acc_cfg.rtp_cfg = app_config.rtp_cfg;
-            acc_cfg.enable_rtcp_mux = app_config.enable_rtcp_mux;
-            acc_cfg.enable_rtcp_xr = app_config.enable_rtcp_xr;
             pjsua_acc_modify(acc_id, &acc_cfg);
         }
 
@@ -2159,8 +1968,6 @@ static pj_status_t app_init(void)
             app_config_init_video(&acc_cfg);
             acc_cfg.txt_red_level = app_config.txt_red_level;
             acc_cfg.rtp_cfg = app_config.rtp_cfg;
-            acc_cfg.enable_rtcp_mux = app_config.enable_rtcp_mux;
-            acc_cfg.enable_rtcp_xr = app_config.enable_rtcp_xr;
             // acc_cfg.ipv6_media_use = PJSUA_IPV6_ENABLED;
             pjsua_acc_modify(aid, &acc_cfg);
         }
@@ -2321,10 +2128,8 @@ pj_status_t pjsua_app_run(pj_bool_t wait_telnet_cli)
         call_opt.vid_cnt = app_config.vid.vid_cnt;
         call_opt.txt_cnt = app_config.txt_cnt;
 
-        status = pjsua_call_make_call(current_acc, &uri_arg, &call_opt, NULL,
-                                      NULL, NULL);
-        if (status != PJ_SUCCESS)
-            pjsua_perror(THIS_FILE, "Unable to make call", status);
+        pjsua_call_make_call(current_acc, &uri_arg, &call_opt, NULL, 
+                             NULL, NULL);
     }   
 
     app_running = PJ_TRUE;

@@ -721,7 +721,6 @@ PJ_DEF(void) pj_grp_lock_dump(pj_grp_lock_t *grp_lock)
     grp_lock_ref *ref;
     char info_buf[1000];
     pj_str_t info;
-    int null_char_pos;
 
     info.ptr = info_buf;
     info.slen = 0;
@@ -755,8 +754,7 @@ PJ_DEF(void) pj_grp_lock_dump(pj_grp_lock_t *grp_lock)
         for (i=0; i<4; ++i)
             info_buf[sizeof(info_buf)-i-1] = '.';
     }
-    null_char_pos = info.slen > 0 ? info.slen-1 : 0;
-    info.ptr[null_char_pos] = '\0';
+    info.ptr[info.slen-1] = '\0';
 
     pj_leave_critical_section();
 

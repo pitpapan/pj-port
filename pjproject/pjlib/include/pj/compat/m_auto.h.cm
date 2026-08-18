@@ -37,7 +37,7 @@
 #endif
 #else
 /* Endianness, as detected by autoconf */
-#cmakedefine WORDS_BIGENDIAN 1
+#cmakedefine01 WORDS_BIGENDIAN
 #endif
 
 #if defined(WORDS_BIGENDIAN) && WORDS_BIGENDIAN == 1

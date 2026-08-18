@@ -680,13 +680,6 @@ static void send_prompt_str(cli_telnet_sess *sess)
     telnet_sess_send(sess, &send_data);
 }
 
-/* Buffer of spaces, used to stream the caret offset in bounded chunks
- * instead of writing an attacker-influenced number of spaces into a
- * fixed-size stack buffer. Shared by send_err_arg() and send_ambi_arg().
- */
-static const unsigned char SPACES[64] =
-    "                                                                ";
-
 /*
  * This method is used to send error message to client, including
  * the error position of the source command.
@@ -697,45 +690,32 @@ static void send_err_arg(cli_telnet_sess *sess,
                          pj_bool_t with_return,
                          pj_bool_t with_last_cmd)
 {
-    pj_size_t len, remaining;
+    pj_str_t send_data;
+    char data_str[256];
+    pj_size_t len;
+    unsigned i;
     cli_telnet_fe *fe = (cli_telnet_fe *)sess->base.fe;
 
+    send_data.ptr = data_str;
+    send_data.slen = 0;
+
     if (with_return)
-        telnet_sess_send2(sess, (const unsigned char*)"\r\n", 2);
+        pj_strcat2(&send_data, "\r\n");
 
-    /* Compute the caret offset. info->err_pos is derived from
-     * attacker-supplied input (pj_cli_sess_parse) and is bounded only by
-     * PJ_CLI_MAX_CMDBUF, so clamp it before emitting spaces. Otherwise a
-     * ~500-byte command line would overflow the fixed-size stack buffer
-     * this function previously used.
-     */
     len = fe->cfg.prompt_str.slen + info->err_pos;
-    if (len > PJ_CLI_MAX_CMDBUF)
-        len = PJ_CLI_MAX_CMDBUF;
 
-    remaining = len;
-    while (remaining > 0) {
-        pj_size_t chunk = (remaining > sizeof(SPACES)) ? sizeof(SPACES)
-                                                       : remaining;
-        telnet_sess_send2(sess, SPACES, (int)chunk);
-        remaining -= chunk;
+    /* Set the error pointer mark */
+    for (i=0;i<len;++i) {
+        pj_strcat2(&send_data, " ");
     }
+    pj_strcat2(&send_data, "^");
+    pj_strcat2(&send_data, "\r\n");
+    pj_strcat(&send_data, msg);
+    pj_strcat(&send_data, &fe->cfg.prompt_str);
+    if (with_last_cmd)
+        pj_strcat2(&send_data, (char *)sess->rcmd->rbuf);
 
-    telnet_sess_send2(sess, (const unsigned char*)"^\r\n", 3);
-
-    if (msg && msg->slen > 0)
-        telnet_sess_send(sess, msg);
-    if (fe->cfg.prompt_str.slen > 0)
-        telnet_sess_send(sess, &fe->cfg.prompt_str);
-    if (with_last_cmd) {
-        pj_str_t last;
-        last.ptr = (char *)sess->rcmd->rbuf;
-        last.slen = (pj_ssize_t)pj_ansi_strlen((const char *)sess->rcmd->rbuf);
-        if (last.slen > PJ_CLI_MAX_CMDBUF)
-            last.slen = PJ_CLI_MAX_CMDBUF;
-        if (last.slen > 0)
-            telnet_sess_send(sess, &last);
-    }
+    telnet_sess_send(sess, &send_data);
 }
 
 static void send_inv_arg(cli_telnet_sess *sess,
@@ -785,7 +765,7 @@ static void send_ambi_arg(cli_telnet_sess *sess,
                           pj_bool_t with_last_cmd)
 {
     unsigned i;
-    pj_size_t len, remaining;
+    pj_size_t len;
     pj_str_t send_data;
     char data[1028];
     cli_telnet_fe *fe = (cli_telnet_fe *)sess->base.fe;
@@ -799,25 +779,14 @@ static void send_ambi_arg(cli_telnet_sess *sess,
     send_data.slen = 0;
 
     if (with_return)
-        telnet_sess_send2(sess, (const unsigned char*)"\r\n", 2);
+        pj_strcat2(&send_data, "\r\n");
 
-    /* Compute and clamp the caret offset, then stream the spaces, like
-     * send_err_arg(). info->err_pos is attacker-bounded only by
-     * PJ_CLI_MAX_CMDBUF, so it must not drive writes into data[].
-     */
     len = fe->cfg.prompt_str.slen + info->err_pos;
-    if (len > PJ_CLI_MAX_CMDBUF)
-        len = PJ_CLI_MAX_CMDBUF;
 
-    remaining = len;
-    while (remaining > 0) {
-        pj_size_t chunk = (remaining > sizeof(SPACES)) ? sizeof(SPACES)
-                                                       : remaining;
-        telnet_sess_send2(sess, SPACES, (int)chunk);
-        remaining -= chunk;
+    for (i=0;i<len;++i) {
+        pj_strcat2(&send_data, " ");
     }
-    telnet_sess_send2(sess, (const unsigned char*)"^", 1);
-
+    pj_strcat2(&send_data, "^");
     /* Get the max length of the command name */
     for (i=0;i<info->hint_cnt;++i) {
         if (hint[i].type.slen > 0) {
@@ -905,21 +874,10 @@ static void send_ambi_arg(cli_telnet_sess *sess,
     }
     pj_strcat2(&send_data, "\r\n");
     pj_strcat(&send_data, &fe->cfg.prompt_str);
-    telnet_sess_send(sess, &send_data);
+    if (with_last_cmd)
+        pj_strcat2(&send_data, (char *)sess->rcmd->rbuf);
 
-    /* Stream the last command separately with a clamp; sess->rcmd->rbuf
-     * is attacker-bounded only by PJ_CLI_MAX_CMDBUF, so appending it into
-     * data[] could overflow the fixed-size buffer.
-     */
-    if (with_last_cmd) {
-        pj_str_t last;
-        last.ptr = (char *)sess->rcmd->rbuf;
-        last.slen = (pj_ssize_t)pj_ansi_strlen((const char *)sess->rcmd->rbuf);
-        if (last.slen > PJ_CLI_MAX_CMDBUF)
-            last.slen = PJ_CLI_MAX_CMDBUF;
-        if (last.slen > 0)
-            telnet_sess_send(sess, &last);
-    }
+    telnet_sess_send(sess, &send_data);
 }
 
 /*
@@ -1077,20 +1035,10 @@ static pj_bool_t handle_tab(cli_telnet_sess *sess)
                 }
                 send_comp_arg(sess, &info);
 
-                /* Append the matched name into the fixed-size rbuf. len is
-                 * attacker-influenced (the typed command length), so clamp
-                 * the copy to leave room for the NUL terminator and avoid
-                 * overflowing rbuf.
-                 */
-                if (len < sizeof(sess->rcmd->rbuf) - 1) {
-                    pj_size_t avail = sizeof(sess->rcmd->rbuf) - 1 - len;
-                    pj_size_t cplen = (pj_size_t)info.hint[0].name.slen;
-                    if (cplen > avail)
-                        cplen = avail;
-                    pj_memcpy(&sess->rcmd->rbuf[len],
-                              info.hint[0].name.ptr, cplen);
-                    len += (unsigned)cplen;
-                }
+                pj_memcpy(&sess->rcmd->rbuf[len], info.hint[0].name.ptr,
+                          info.hint[0].name.slen);
+
+                len += (unsigned)info.hint[0].name.slen;
                 sess->rcmd->rbuf[len] = 0;
             }
         } else {
@@ -1193,14 +1141,7 @@ static pj_bool_t handle_up_down(cli_telnet_sess *sess, pj_bool_t is_up)
     history = get_prev_history(sess, is_up);
     if (history) {
         pj_str_t send_data;
-        /* The redraw sequence can accumulate up to
-         *   cur_pos + 2 * rcmd->len + history->slen
-         * bytes, each term bounded by PJ_CLI_MAX_CMDBUF, so size the
-         * local buffer for the worst case and clamp each term below.
-         */
-        char str[PJ_CLI_MAX_CMDBUF * 4];
-        unsigned cur_pos, buf_len;
-        pj_size_t hist_len;
+        char str[PJ_CLI_MAX_CMDBUF];
         enum {
             MOVE_CURSOR_LEFT = 0x08,
             CLEAR_CHAR = 0x20
@@ -1208,24 +1149,15 @@ static pj_bool_t handle_up_down(cli_telnet_sess *sess, pj_bool_t is_up)
         send_data.ptr = str;
         send_data.slen = 0;
 
-        cur_pos = sess->rcmd->cur_pos;
-        buf_len = sess->rcmd->len;
-        hist_len = history->slen;
-        if (cur_pos > PJ_CLI_MAX_CMDBUF)
-            cur_pos = PJ_CLI_MAX_CMDBUF;
-        if (buf_len > PJ_CLI_MAX_CMDBUF)
-            buf_len = PJ_CLI_MAX_CMDBUF;
-        if (hist_len > PJ_CLI_MAX_CMDBUF)
-            hist_len = PJ_CLI_MAX_CMDBUF;
-
         /* Move cursor position to the beginning of line */
-        if (cur_pos > 0) {
-            pj_memset(send_data.ptr, MOVE_CURSOR_LEFT, cur_pos);
-            send_data.slen = cur_pos;
+        if (sess->rcmd->cur_pos > 0) {
+            pj_memset(send_data.ptr, MOVE_CURSOR_LEFT, sess->rcmd->cur_pos);
+            send_data.slen = sess->rcmd->cur_pos;
         }
 
-        if (buf_len > (unsigned)hist_len) {
+        if (sess->rcmd->len > (unsigned)history->slen) {
             /* Clear the command currently shown*/
+            unsigned buf_len = sess->rcmd->len;
             pj_memset(&send_data.ptr[send_data.slen], CLEAR_CHAR, buf_len);
             send_data.slen += buf_len;
 
@@ -1235,10 +1167,7 @@ static pj_bool_t handle_up_down(cli_telnet_sess *sess, pj_bool_t is_up)
             send_data.slen += buf_len;
         }
         /* Send data */
-        if (hist_len > 0) {
-            pj_memcpy(&send_data.ptr[send_data.slen], history->ptr, hist_len);
-            send_data.slen += hist_len;
-        }
+        pj_strcat(&send_data, history);
         telnet_sess_send(sess, &send_data);
         pj_ansi_strxcpy2((char*)sess->rcmd->rbuf, history, 
                          sizeof(sess->rcmd->rbuf));

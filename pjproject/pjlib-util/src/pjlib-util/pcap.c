@@ -140,10 +140,8 @@ PJ_DEF(pj_status_t) pj_pcap_open(pj_pool_t *pool,
         file->swap = PJ_FALSE;
     } else if (file->hdr.magic_number == 0xd4c3b2a1) {
         file->swap = PJ_TRUE;
-        file->hdr.network = pj_swap32(file->hdr.network);
+        file->hdr.network = pj_ntohl(file->hdr.network);
     } else {
-        /* If we add support for nanosecond pcap, adapt timestamp handling below */
-
         /* Not PCAP file */
         pj_file_close(file->fd);
         return PJ_EINVALIDOP;
@@ -203,27 +201,11 @@ static pj_status_t skip(pj_oshandle_t fd, pj_off_t bytes)
                 return status; \
         }
 
-/* Maximum record length accepted from file, as libpcap's MAXIMUM_SNAPLEN */
-#define MAX_REC_LEN     262144u
-
 /* Read UDP packet */
 PJ_DEF(pj_status_t) pj_pcap_read_udp(pj_pcap_file *file,
                                      pj_pcap_udp_hdr *udp_hdr,
                                      pj_uint8_t *udp_payload,
                                      pj_size_t *udp_payload_size)
-{
-
-    return pj_pcap_read_udp_with_timestamp(file, udp_hdr, udp_payload,
-                                           udp_payload_size, NULL);
-}
-
-PJ_DEF(pj_status_t) pj_pcap_read_udp_with_timestamp(
-    pj_pcap_file *file,
-    pj_pcap_udp_hdr *udp_hdr,
-    pj_uint8_t *udp_payload,
-    pj_size_t *udp_payload_size,
-    pj_timestamp *ts
-)
 {
     PJ_ASSERT_RETURN(file && udp_payload && udp_payload_size, PJ_EINVAL);
     PJ_ASSERT_RETURN(*udp_payload_size, PJ_EINVAL);
@@ -262,34 +244,14 @@ PJ_DEF(pj_status_t) pj_pcap_read_udp_with_timestamp(
             return status;
         }
 
-        /* Swap byte ordering */
-        if (file->swap) {
-            tmp.rec.incl_len = pj_swap32(tmp.rec.incl_len);
-            tmp.rec.orig_len = pj_swap32(tmp.rec.orig_len);
-            tmp.rec.ts_sec = pj_swap32(tmp.rec.ts_sec);
-            tmp.rec.ts_usec = pj_swap32(tmp.rec.ts_usec);
-        }
-
         rec_incl = tmp.rec.incl_len;
 
-        /* Record length is unvalidated file data, check it before parsing.
-         * Too long is rejected rather than skipped, as seeking by such a
-         * length may overflow pj_off_t.
-         */
-        if (rec_incl > MAX_REC_LEN) {
-            TRACE_((file->obj_name, "Invalid record length %u", rec_incl));
-            return PJ_EINVAL;
-        }
-        if (rec_incl < sizeof(tmp.eth) + sizeof(tmp.ip)) {
-            TRACE_((file->obj_name, "Record length %u too short, skipping",
-                    rec_incl));
-            SKIP_PKT();
-            continue;
-        }
-
-        if (ts) {
-            /* If we add support for nanosecond pcap, this should be adapted accordingly */
-            ts->u64 = 1000000000ull * tmp.rec.ts_sec + 1000ull * tmp.rec.ts_usec;
+        /* Swap byte ordering */
+        if (file->swap) {
+            tmp.rec.incl_len = pj_ntohl(tmp.rec.incl_len);
+            tmp.rec.orig_len = pj_ntohl(tmp.rec.orig_len);
+            tmp.rec.ts_sec = pj_ntohl(tmp.rec.ts_sec);
+            tmp.rec.ts_usec = pj_ntohl(tmp.rec.ts_usec);
         }
 
         /* Read link layer header */
@@ -349,12 +311,6 @@ PJ_DEF(pj_status_t) pj_pcap_read_udp_with_timestamp(
         /* Read transport layer header */
         switch (tmp.ip.proto) {
         case PJ_PCAP_PROTO_TYPE_UDP:
-            /* Don't read past the record into the next one */
-            if (rec_incl - sz_read < sizeof(tmp.udp)) {
-                TRACE_((file->obj_name, "Truncated UDP header, skipping"));
-                SKIP_PKT();
-                continue;
-            }
             sz = sizeof(tmp.udp);
             status = read_file(file, &tmp.udp, &sz);
             if (status != PJ_SUCCESS) {
@@ -389,24 +345,8 @@ PJ_DEF(pj_status_t) pj_pcap_read_udp_with_timestamp(
                 pj_memcpy(udp_hdr, &tmp.udp, sizeof(*udp_hdr));
             }
 
-            /* Calculate payload size. The UDP length field covers the
-             * header plus payload, so anything below the header size is
-             * malformed; subtracting it would underflow sz and defeat the
-             * buffer check below.
-             */
-            if (pj_ntohs(tmp.udp.len) < sizeof(tmp.udp)) {
-                TRACE_((file->obj_name, "Invalid UDP length %d, skipping",
-                        pj_ntohs(tmp.udp.len)));
-                SKIP_PKT();
-                continue;
-            }
+            /* Calculate payload size */
             sz = pj_ntohs(tmp.udp.len) - sizeof(tmp.udp);
-
-            /* Clamp to what the record actually holds, the UDP length may
-             * describe a packet that the capture truncated.
-             */
-            if (sz > (pj_ssize_t)(rec_incl - sz_read))
-                sz = (pj_ssize_t)(rec_incl - sz_read);
             break;
         default:
             TRACE_((file->obj_name, "Not UDP, skipping"));
@@ -438,7 +378,15 @@ PJ_DEF(pj_status_t) pj_pcap_read_udp_with_timestamp(
         //PJ_ASSERT_RETURN(sz_read == rec_incl, PJ_EBUG);
 
         /* Skip trailer */
-        SKIP_PKT();
+        while (sz_read < rec_incl) {
+            sz = rec_incl - sz_read;
+            status = read_file(file, &tmp.eth, &sz);
+            if (status != PJ_SUCCESS) {
+                TRACE_((file->obj_name, "Error reading trailer: %d", status));
+                return status;
+            }
+            sz_read += sz;
+        }
 
         return PJ_SUCCESS;
     }

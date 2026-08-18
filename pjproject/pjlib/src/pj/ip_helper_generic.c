@@ -481,17 +481,12 @@ static pj_status_t get_ipv6_deprecated(unsigned *count, pj_sockaddr addr[])
         struct nlmsghdr        nlmsg_info;
         struct ifaddrmsg    ifaddrmsg_info;
     } netlink_req;
-    long pagesize;
-    int fd;
-    int rtn;
-    char *read_buffer;
-    size_t idx = 0;
 
-    pagesize = sysconf(_SC_PAGESIZE);
+    long pagesize = sysconf(_SC_PAGESIZE);
     if (pagesize <= 0)
         pagesize = 4096; /* Assume pagesize is 4096 if sysconf() failed */
 
-    fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+    int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
     if (fd < 0)
         return PJ_RETURN_OS_ERROR(pj_get_native_netos_error());
 
@@ -503,28 +498,25 @@ static pj_status_t get_ipv6_deprecated(unsigned *count, pj_sockaddr addr[])
     netlink_req.nlmsg_info.nlmsg_pid = getpid();
     netlink_req.ifaddrmsg_info.ifa_family = AF_INET6;
 
-    rtn = send(fd, &netlink_req, netlink_req.nlmsg_info.nlmsg_len, 0);
+    int rtn = send(fd, &netlink_req, netlink_req.nlmsg_info.nlmsg_len, 0);
     if (rtn < 0) {
         close(fd);
         return PJ_RETURN_OS_ERROR(pj_get_native_netos_error());
     }
 
-    read_buffer = (char*)alloca(pagesize);
+    char read_buffer[pagesize];
+    size_t idx = 0;
 
     while(1) {
-        struct nlmsghdr *nlmsg_ptr;
-        int nlmsg_len;
-        int read_size;
-
         bzero(read_buffer, pagesize);
-        read_size = recv(fd, read_buffer, pagesize, 0);
+        int read_size = recv(fd, read_buffer, pagesize, 0);
         if (read_size < 0) {
             close(fd);
             return PJ_RETURN_OS_ERROR(pj_get_native_netos_error());
         }
 
-        nlmsg_ptr = (struct nlmsghdr *) read_buffer;
-        nlmsg_len = read_size;
+        struct nlmsghdr *nlmsg_ptr = (struct nlmsghdr *) read_buffer;
+        int nlmsg_len = read_size;
 
         if (nlmsg_len < (int)sizeof (struct nlmsghdr)) {
             close(fd);
@@ -534,12 +526,12 @@ static pj_status_t get_ipv6_deprecated(unsigned *count, pj_sockaddr addr[])
         for(; NLMSG_OK(nlmsg_ptr, nlmsg_len);
             nlmsg_ptr = NLMSG_NEXT(nlmsg_ptr, nlmsg_len))
         {
+            if (nlmsg_ptr->nlmsg_type == NLMSG_DONE)
+                goto on_return;
+
             struct ifaddrmsg *ifaddrmsg_ptr;
             struct rtattr *rtattr_ptr;
             int ifaddrmsg_len;
-
-            if (nlmsg_ptr->nlmsg_type == NLMSG_DONE)
-                goto on_return;
 
             ifaddrmsg_ptr = (struct ifaddrmsg*)NLMSG_DATA(nlmsg_ptr);
 
@@ -554,24 +546,21 @@ static pj_status_t get_ipv6_deprecated(unsigned *count, pj_sockaddr addr[])
                 {
                     switch(rtattr_ptr->rta_type) {
                     case IFA_ADDRESS:
-                    {
-                        /* Check if addr can contain more data */
-                        char deprecatedAddr[PJ_INET6_ADDRSTRLEN];
-                        pj_str_t pj_addr_str;
-
+                        // Check if addr can contains more data
                         if (idx >= *count)
                             break;
-                        /* Store deprecated IP */
+                        // Store deprecated IP
+                        char deprecatedAddr[PJ_INET6_ADDRSTRLEN];
                         inet_ntop(ifaddrmsg_ptr->ifa_family,
                                   RTA_DATA(rtattr_ptr),
                                   deprecatedAddr,
                                   sizeof(deprecatedAddr));
+                        pj_str_t pj_addr_str;
                         pj_cstr(&pj_addr_str, deprecatedAddr);
                         pj_sockaddr_init(pj_AF_INET6(), &addr[idx],
                                          &pj_addr_str, 0);
                         ++idx;
                         break;
-                    }
                     default:
                         break;
                     }

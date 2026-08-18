@@ -1051,10 +1051,6 @@ PJ_DEF(pj_status_t) pj_turn_session_sendto( pj_turn_session *sess,
         cd->ch_number = pj_htons((pj_uint16_t)ch->num);
         cd->length = pj_htons((pj_uint16_t)pkt_len);
         pj_memcpy(cd+1, pkt, pkt_len);
-        /* Add zero padding, if data is not 4-bytes aligned. */
-        if (pkt_len & 0x03) {
-            pj_bzero(((pj_uint8_t *)(cd+1)) + pkt_len, 4 - (pkt_len & 0x03));
-        }
 
         pj_assert(sess->srv_addr != NULL);
 
@@ -1284,8 +1280,6 @@ PJ_DEF(pj_status_t) pj_turn_session_on_rx_pkt2(
     pj_bool_t is_stun;
     pj_status_t status;
     pj_bool_t is_datagram;
-
-    PJ_ASSERT_RETURN(sess && prm && prm->pkt && prm->pkt_len, PJ_EINVAL);
 
     /* Packet could be ChannelData or STUN message (response or
      * indication).

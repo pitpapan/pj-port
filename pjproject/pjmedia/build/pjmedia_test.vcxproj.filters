@@ -30,9 +30,6 @@
     <ClCompile Include="..\src\test\rtp_test.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\src\test\tone_detector_test.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\src\test\sdp_neg_test.c">
       <Filter>Source Files</Filter>
     </ClCompile>

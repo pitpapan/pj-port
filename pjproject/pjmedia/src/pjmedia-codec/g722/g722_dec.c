@@ -124,8 +124,7 @@ static int block4l (g722_dec_t *dec, int dl)
     dec->sgl[1] = dec->plt[1] >> 15 ;
     dec->sgl[2] = dec->plt[2] >> 15 ;
 
-    // orig: wd1 = dec->al[1] << 2;
-    wd1 = dec->al[1] * 4;
+    wd1 = dec->al[1] << 2;
     SATURATE(wd1, 32767, -32768);
 
     if ( dec->sgl[0] == dec->sgl[1] )  wd2 = - wd1 ;
@@ -133,7 +132,7 @@ static int block4l (g722_dec_t *dec, int dl)
     if (wd2 > 32767) wd2 = 32767;
     wd2 = wd2 >> 7 ;
 
-    if ( dec->sgl[0] == dec->sgl[2] )  wd3 = 128 ;
+    if ( dec->sgl[0] == dec->sgl[2] )  wd3 = 128 ; 
     else  wd3 = - 128 ;
 
     wd4 = wd2 + wd3 ;
@@ -141,7 +140,7 @@ static int block4l (g722_dec_t *dec, int dl)
 
     dec->apl[2] = wd4 + wd5 ;
     SATURATE(dec->apl[2], 12288, -12288);
-
+    
     /* UPPOL1 */
     dec->sgl[0] = dec->plt[0] >> 15 ;
     dec->sgl[1] = dec->plt[1] >> 15 ;
@@ -187,13 +186,11 @@ static int block4l (g722_dec_t *dec, int dl)
     }
 
     /* FILTEP */
-    // orig: wd1 = dec->rlt[1] << 1;
-    wd1 = dec->rlt[1] + dec->rlt[1];
+    wd1 = dec->rlt[1] << 1;
     SATURATE(wd1, 32767, -32768);
     wd1 = ( dec->al[1] * wd1 ) >> 15 ;
 
-    // orig: wd2 = dec->rlt[2] << 1;
-    wd2 = dec->rlt[2] + dec->rlt[2];
+    wd2 = dec->rlt[2] << 1;
     SATURATE(wd2, 32767, -32768);
     wd2 = ( dec->al[2] * wd2 ) >> 15 ;
 
@@ -203,8 +200,7 @@ static int block4l (g722_dec_t *dec, int dl)
     /* FILTEZ */
     dec->szl = 0 ;
     for (i=6; i>0; i--) {
-        // orig: wd = dec->dlt[i] << 1;
-        wd = dec->dlt[i] + dec->dlt[i];
+        wd = dec->dlt[i] << 1;
         SATURATE(wd, 32767, -32768);
         dec->szl += (dec->bl[i] * wd) >> 15 ;
         SATURATE(dec->szl, 32767, -32768);
@@ -351,8 +347,7 @@ static int block4h (g722_dec_t *dec, int d)
     dec->sgh[1] = dec->ph[1] >> 15 ;
     dec->sgh[2] = dec->ph[2] >> 15 ;
 
-    // orig: wd1 = dec->ah[1] << 2;
-    wd1 = dec->ah[1] * 4;
+    wd1 = dec->ah[1] << 2;
     SATURATE(wd1, 32767, -32768);
 
     if ( dec->sgh[0] == dec->sgh[1] )  wd2 = - wd1 ;
@@ -361,7 +356,7 @@ static int block4h (g722_dec_t *dec, int d)
 
     wd2 = wd2 >> 7 ;
 
-    if ( dec->sgh[0] == dec->sgh[2] )  wd3 = 128 ;
+    if ( dec->sgh[0] == dec->sgh[2] )  wd3 = 128 ; 
     else  wd3 = - 128 ;
 
     wd4 = wd2 + wd3 ;
@@ -369,7 +364,7 @@ static int block4h (g722_dec_t *dec, int d)
 
     dec->aph[2] = wd4 + wd5 ;
     SATURATE(dec->aph[2], 12288, -12288);
-
+    
     /* UPPOL1 */
     dec->sgh[0] = dec->ph[0] >> 15 ;
     dec->sgh[1] = dec->ph[1] >> 15 ;
@@ -403,7 +398,7 @@ static int block4h (g722_dec_t *dec, int d)
         wd3 = (dec->bh[i] * 32640) >> 15 ;
         dec->bph[i] = wd2 + wd3 ;
     }
-
+ 
     /* DELAYA */
     for ( i = 6; i > 0; i-- ) {
         dec->dh[i] = dec->dh[i-1] ;
@@ -417,13 +412,11 @@ static int block4h (g722_dec_t *dec, int d)
     }
 
     /* FILTEP */
-    // orig: wd1 = dec->rh[1] << 1 ;
-    wd1 = dec->rh[1] + dec->rh[1] ;
+    wd1 = dec->rh[1] << 1 ;
     SATURATE(wd1, 32767, -32768);
     wd1 = ( dec->ah[1] * wd1 ) >> 15 ;
 
-    // orig: wd2 = dec->rh[2] << 1;
-    wd2 = dec->rh[2] + dec->rh[2];
+    wd2 = dec->rh[2] << 1;
     SATURATE(wd2, 32767, -32768);
     wd2 = ( dec->ah[2] * wd2 ) >> 15 ;
 
@@ -433,8 +426,7 @@ static int block4h (g722_dec_t *dec, int d)
     /* FILTEZ */
     dec->szh = 0 ;
     for (i=6; i>0; i--) {
-        // orig: wd = dec->dh[i] << 1;
-        wd = dec->dh[i] + dec->dh[i];
+        wd = dec->dh[i] << 1;
         SATURATE(wd, 32767, -32768);
         dec->szh += (dec->bh[i] * wd) >> 15 ;
         SATURATE(dec->szh, 32767, -32768);

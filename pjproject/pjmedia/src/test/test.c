@@ -102,25 +102,14 @@ int test_main(int argc, char *argv[])
 #if HAS_SDP_NEG_TEST
     UT_ADD_TEST(&test_app.ut_app, sdp_neg_test, 0);
 #endif
-#if HAS_SDP_ATTR_TEST
-    UT_ADD_TEST(&test_app.ut_app, sdp_attr_test, 0);
-#endif
     //DO_TEST(sdp_test (&caching_pool.factory));
     //DO_TEST(rtp_test(&caching_pool.factory));
     //DO_TEST(session_test (&caching_pool.factory));
 #if HAS_JBUF_TEST
     UT_ADD_TEST(&test_app.ut_app, jbuf_test, 0);
 #endif
-#if HAS_TONE_DETECTOR_TEST
-    UT_ADD_TEST(&test_app.ut_app, tone_detector_test, 0);
-#endif
 #if HAS_CODEC_VECTOR_TEST
-    /* Run in exclusive mode: creates/destroys a local pjmedia_endpt which
-     * sets/clears the global def_codec_mgr. If sdp_neg_test runs
-     * concurrently, it may access the codec manager mutex after it has
-     * been destroyed, causing an assertion failure.
-     */
-    UT_ADD_TEST(&test_app.ut_app, codec_test_vectors, PJ_TEST_EXCLUSIVE);
+    UT_ADD_TEST(&test_app.ut_app, codec_test_vectors, 0);
 #endif
 
     if (ut_run_tests(&test_app.ut_app, "pjmedia tests", argc, argv)) {

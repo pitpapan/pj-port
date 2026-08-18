@@ -405,7 +405,7 @@ static void on_rx_rtp( pjmedia_tp_cb_param *param)
                                     param->user_data;
     void *pkt = param->pkt;
     pj_ssize_t bytes_read = param->size;
-    pjmedia_channel *channel;
+    pjmedia_channel *channel = c_strm->dec;
     const pjmedia_rtp_hdr *hdr;
     const void *payload;
     unsigned payloadlen;
@@ -414,19 +414,11 @@ static void on_rx_rtp( pjmedia_tp_cb_param *param)
     pj_status_t status;
     pj_bool_t pkt_discarded = PJ_FALSE;
 
-    /* Hold a reference to the stream for the entire callback so it cannot
-     * be destroyed by another thread while we are reading and updating its
-     * state or sending RTCP below. The ref used to be taken further down,
-     * leaving this prologue (which also writes c_strm state) unprotected.
-     */
-    pj_grp_lock_add_ref(c_strm->grp_lock);
-    channel = c_strm->dec;
-
     /* Check for errors */
     if (bytes_read < 0) {
         status = (pj_status_t)-bytes_read;
         if (status == PJ_STATUS_FROM_OS(OSERR_EWOULDBLOCK)) {
-            goto on_ret;
+            return;
         }
 
         LOGERR_((c_strm->port.info.name.ptr, status,
@@ -437,12 +429,12 @@ static void on_rx_rtp( pjmedia_tp_cb_param *param)
             publish_tp_event(PJMEDIA_EVENT_MEDIA_TP_ERR, status, PJ_TRUE,
                              PJMEDIA_DIR_DECODING, c_strm);
         }
-        goto on_ret;
+        return;
     }
 
     /* Ignore non-RTP keep-alive packets */
     if (bytes_read < (pj_ssize_t) sizeof(pjmedia_rtp_hdr))
-        goto on_ret;
+        return;
 
     /* Update RTP and RTCP session. */
     status = pjmedia_rtp_decode_rtp(&channel->rtp, pkt, (int)bytes_read,
@@ -450,13 +442,13 @@ static void on_rx_rtp( pjmedia_tp_cb_param *param)
     if (status != PJ_SUCCESS) {
         LOGERR_((c_strm->port.info.name.ptr, status, "RTP decode error"));
         c_strm->rtcp.stat.rx.discard++;
-        goto on_ret;
+        return;
     }
 
     /* Check if multiplexing is allowed and the payload indicates RTCP. */
     if (c_strm->si->rtcp_mux && hdr->pt >= 64 && hdr->pt <= 95) {
         on_rx_rtcp(c_strm, pkt, bytes_read);
-        goto on_ret;
+        return;
     }
 
     /* See if source address of RTP packet is different than the
@@ -492,7 +484,7 @@ static void on_rx_rtp( pjmedia_tp_cb_param *param)
                      * - we have ever received packet with bad ssrc from
                      *   remote address and this packet also has bad ssrc.
                      */
-                    goto on_ret;
+                    return;                 
                 }
                 if (!badssrc && c_strm->rem_rtp_flag != 1)
                 {
@@ -520,6 +512,9 @@ static void on_rx_rtp( pjmedia_tp_cb_param *param)
             }
         }
     }
+
+    /* Add ref counter to avoid premature destroy from callbacks */
+    pj_grp_lock_add_ref(c_strm->grp_lock);
 
     pj_bzero(&seq_st, sizeof(seq_st));
 
@@ -639,7 +634,6 @@ on_return:
         }
     }
 
-on_ret:
     pj_grp_lock_dec_ref(c_strm->grp_lock);
 }
 

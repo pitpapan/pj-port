@@ -23,7 +23,6 @@
 #include <pjsip/sip_event.h>
 #include <pjsip/sip_errno.h>
 #include <pj/assert.h>
-#include <pj/lock.h>
 #include <pj/log.h>
 #include <pj/pool.h>
 #include <pj/string.h>
@@ -114,19 +113,9 @@ PJ_DEF(pj_status_t) pjsip_endpt_send_request(  pjsip_endpoint *endpt,
 
     tsx->mod_data[mod_stateful_util.id] = tsx_data;
 
-    /* Prevent the transaction from being deleted before we have a chance
-     * to terminate it if sending fails.
-     */
-    pj_grp_lock_add_ref(tsx->grp_lock);
-
     status = pjsip_tsx_send_msg(tsx, NULL);
-    if (status != PJ_SUCCESS) {
+    if (status != PJ_SUCCESS)
         pjsip_tx_data_dec_ref(tdata);
-        pjsip_tsx_terminate(tsx, tsx->status_code? tsx->status_code:
-                            PJSIP_SC_SERVICE_UNAVAILABLE);
-    }
-
-    pj_grp_lock_dec_ref(tsx->grp_lock);
 
     return status;
 }
@@ -185,11 +174,6 @@ PJ_DEF(pj_status_t) pjsip_endpt_respond(  pjsip_endpoint *endpt,
         return status;
     }
 
-    /* Prevent the transaction from being deleted before we have a chance
-     * to terminate it if sending fails.
-     */
-    pj_grp_lock_add_ref(tsx->grp_lock);
-
     /* Feed the request to the transaction. */
     pjsip_tsx_recv_msg(tsx, rdata);
 
@@ -197,13 +181,9 @@ PJ_DEF(pj_status_t) pjsip_endpt_respond(  pjsip_endpoint *endpt,
     status = pjsip_tsx_send_msg(tsx, tdata);
     if (status != PJ_SUCCESS) {
         pjsip_tx_data_dec_ref(tdata);
-        pjsip_tsx_terminate(tsx, tsx->status_code? tsx->status_code:
-                            PJSIP_SC_INTERNAL_SERVER_ERROR);
     } else if (p_tsx) {
         *p_tsx = tsx;
     }
-
-    pj_grp_lock_dec_ref(tsx->grp_lock);
 
     return status;
 }

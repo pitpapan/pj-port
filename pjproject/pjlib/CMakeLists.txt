@@ -78,12 +78,6 @@ add_library(pjlib
   src/pj/unittest.c
 )
 
-# Ensure generated headers are found before source headers
-target_include_directories(pjlib
-  PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
-)
-
 # headers
 target_sources(pjlib
   PUBLIC
@@ -280,9 +274,9 @@ endif()
 # ssl
 add_library(pjlib-ssl INTERFACE) # a target to expose SSL deps
 if(PJLIB_WITH_SSL STREQUAL "openssl")
-  find_package(OpenSSL COMPONENTS Crypto SSL MODULE)
+  find_package(OpenSSL COMPONENTS Crypto SSL CONFIG)
   if(NOT OPENSSL_FOUND)
-    find_package(OpenSSL COMPONENTS Crypto SSL CONFIG)
+    find_package(OpenSSL COMPONENTS Crypto SSL)
   endif()
   if(OPENSSL_FOUND)
     target_link_libraries(pjlib-ssl INTERFACE OpenSSL::Crypto OpenSSL::SSL)
@@ -402,12 +396,6 @@ block(SCOPE_FOR VARIABLES)
   set(PJ_HAS_MALLOC 1)
   set(PJ_NATIVE_STRING_IS_UNICODE 0)
   set(PJ_ATOMIC_VALUE_TYPE "long")
-
-  if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-    set(PJ_POOL_ALIGNMENT 8)
-  else()
-    set(PJ_POOL_ALIGNMENT 4)
-  endif()
 
   #
   # headers
@@ -668,7 +656,7 @@ block(SCOPE_FOR VARIABLES)
     string(TOUPPER "PJ_SSL_SOCK_IMP_${PJLIB_WITH_SSL}" PJ_SSL_SOCK_IMP)
   else()
     set(PJ_HAS_SSL_SOCK 0)
-    set(PJ_SSL_SOCK_IMP "PJ_SSL_SOCK_IMP_NONE")
+    set(PJ_HAS_SSL_SOCK_IMP "PJ_SSL_SOCK_IMP_NONE")
   endif()
 
   # write configured header
@@ -689,8 +677,8 @@ target_sources(pjlib
   PUBLIC
     FILE_SET config_headers TYPE HEADERS
       BASE_DIRS
-        "${CMAKE_CURRENT_BINARY_DIR}/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${CMAKE_CURRENT_BINARY_DIR}/include"
       FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/include/pj/config_site.h"
         "${CMAKE_CURRENT_BINARY_DIR}/include/pj/compat/m_auto.h"
@@ -729,7 +717,6 @@ if(BUILD_TESTING)
     src/pjlib-test/sock.c
     src/pjlib-test/sock_perf.c
     src/pjlib-test/ssl_sock.c
-    src/pjlib-test/ssl_sock_stress.c
     src/pjlib-test/string.c
     src/pjlib-test/test.c
     src/pjlib-test/thread.c
@@ -742,7 +729,7 @@ if(BUILD_TESTING)
     src/pjlib-test/${PJ_TEST_MAIN}
   )
 
-  target_link_libraries(pjlib-test PRIVATE pjlib pjlib-ssl)
+  target_link_libraries(pjlib-test PRIVATE pjlib)
 
   add_test(NAME pjlib-test COMMAND pjlib-test)
 endif()

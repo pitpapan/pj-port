@@ -9,10 +9,6 @@
 #ifndef	PRIVATE_H
 #define	PRIVATE_H
 
-#ifdef __cplusplus
- 	extern "C" {
-#endif
-
 typedef short			word;		/* 16 bit signed int	*/
 typedef long			longword;	/* 32 bit signed int	*/
 
@@ -59,13 +55,6 @@ struct gsm_state {
 #define	SASR(x, by)	((x) >= 0 ? (x) >> (by) : (~(-((x) + 1) >> (by))))
 #endif	/* SASR */
 
-#ifdef  SASL	 /* flag: it's safe to left-shift negative signed values */
-#undef  SASL
-#define SASL(x, by)	((x) << (by))
-#else
-#define SASL(x, by)	((x) * (1 << (by)))
-#endif
-
 #include "proto.h"
 
 /*
@@ -94,10 +83,10 @@ extern longword gsm_L_asr  	P((longword a, int n));
 extern word	gsm_asr  	P((word a, int n));
 
 /*
- *  Inlined functions from add.h
+ *  Inlined functions from add.h 
  */
 
-/*
+/* 
  * #define GSM_MULT_R(a, b) (* word a, word b, !(a == b == MIN_WORD) *)	\
  *	(0x0FFFF & SASR(((longword)(a) * (longword)(b) + 16384), 15))
  */
@@ -108,7 +97,7 @@ extern word	gsm_asr  	P((word a, int n));
 	(SASR( ((longword)(a) * (longword)(b)), 15 ))
 
 # define GSM_L_MULT(a, b) /* word a, word b */	\
-	(SASL(((longword)(a) * (longword)(b)), 1))
+	(((longword)(a) * (longword)(b)) << 1)
 
 # define GSM_L_ADD(a, b)	\
 	( (a) <  0 ? ( (b) >= 0 ? (a) + (b)	\
@@ -276,9 +265,5 @@ extern word gsm_FAC[8];
 #endif /* !NDEBUG */
 
 #include "unproto.h"
-
-#ifdef __cplusplus
-	}  // extern "C"
-#endif
 
 #endif	/* PRIVATE_H */

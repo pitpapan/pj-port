@@ -132,12 +132,7 @@ struct darwin_stream
     
     pjmedia_vid_dev_conv    conv;
     pjmedia_rect_size       vid_size;
-    /* Device-specific portrait rotation angle derived from coordinator +
-     * physical device orientation. -1 means not yet calibrated.
-     * Constant for the lifetime of the stream (determined by camera hardware).
-     */
-    int                     cam_portrait_angle;
-
+    
     AVCaptureSession            *cap_session;
     AVCaptureDeviceInput        *dev_input;
     pj_bool_t                    has_image;
@@ -155,6 +150,7 @@ struct darwin_stream
     AVCaptureVideoPreviewLayer  *prev_layer;
     UIView                      *prev_view;
 #endif
+
     pj_timestamp         frame_ts;
     unsigned             ts_inc;
 };
@@ -812,10 +808,6 @@ static pj_status_t darwin_factory_create_stream(
     strm = PJ_POOL_ZALLOC_T(pool, struct darwin_stream);
     pj_memcpy(&strm->param, param, sizeof(*param));
     strm->pool = pool;
-    strm->cam_portrait_angle = -1;
-#if TARGET_OS_IPHONE
-    [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
-#endif
     pj_memcpy(&strm->vid_cb, cb, sizeof(*cb));
     strm->user_data = user_data;
     strm->factory = qf;
@@ -848,6 +840,7 @@ static pj_status_t darwin_factory_create_stream(
                 break;
             }
         }
+        
         strm->cap_session.sessionPreset = darwin_sizes[i].preset_str;
         
         /* If the requested size is portrait (or landscape), we make
@@ -970,12 +963,8 @@ static pj_status_t darwin_factory_create_stream(
         if ((param->flags & PJMEDIA_VID_DEV_CAP_ORIENTATION) ||
             (vfd->size.h > vfd->size.w))
         {
-            if (param->orient == PJMEDIA_ORIENT_UNKNOWN) {
-                if (vfd->size.h > vfd->size.w)
-                    param->orient = PJMEDIA_ORIENT_ROTATE_90DEG;
-                else
-                    param->orient = PJMEDIA_ORIENT_NATURAL;
-            }
+            if (param->orient == PJMEDIA_ORIENT_UNKNOWN)
+                param->orient = PJMEDIA_ORIENT_NATURAL;
             darwin_stream_set_cap(&strm->base, PJMEDIA_VID_DEV_CAP_ORIENTATION,
                                &param->orient);
         }
@@ -1187,35 +1176,18 @@ static pj_status_t darwin_stream_set_cap(pjmedia_vid_dev_stream *s,
                      deviceInputWithDevice:di[p->target_id].dev
                      error:&error];
 
-            if (!new_dev_input) {
-                PJ_LOG(3, (THIS_FILE,
-                           "Failed to create capture device input: %s",
-                           error? [error.localizedDescription
-                                   UTF8String] : "unknown"));
-                return PJ_EUNKNOWN;
-            }
-
             [strm->cap_session beginConfiguration];
             [strm->cap_session removeInput:cur_dev_input];
-            if (![strm->cap_session canAddInput:new_dev_input]) {
-                /* Restore previous input on failure */
-                [strm->cap_session addInput:cur_dev_input];
-                [strm->cap_session commitConfiguration];
-                PJ_LOG(3, (THIS_FILE, "Session cannot accept "
-                           "new capture device input"));
-                return PJ_EUNKNOWN;
-            }
             [strm->cap_session addInput:new_dev_input];
             [strm->cap_session commitConfiguration];
-
+            
             strm->dev_input = new_dev_input;
             strm->param.cap_id = p->target_id;
-            strm->cam_portrait_angle = -1;
-
+            
             /* Set the orientation as well */
             darwin_stream_set_cap(s, PJMEDIA_VID_DEV_CAP_ORIENTATION,
                                &strm->param.orient);
-
+            
             return PJ_SUCCESS;
         }
         
@@ -1315,7 +1287,7 @@ static pj_status_t darwin_stream_set_cap(pjmedia_vid_dev_stream *s,
 
             pj_memcpy(&strm->param.orient, pval,
                       sizeof(strm->param.orient));
-
+        
             if (strm->param.dir == PJMEDIA_DIR_RENDER) {
 #if TARGET_OS_IPHONE
                 dispatch_sync_on_main_queue(^{
@@ -1336,97 +1308,16 @@ static pj_status_t darwin_stream_set_cap(pjmedia_vid_dev_stream *s,
 #if (TARGET_OS_IPHONE && defined(__IPHONE_17_0)) || \
     (TARGET_OS_OSX && defined(__MAC_14_0))
             if (@available(macOS 14.0, iOS 17.0, *)) {
-                AVCaptureConnection *vidcon;
+
                 const CGFloat cap_ori[4] = { 0, 90, 180, 270};
-                int idx;
-                int rotation;
-                int effective_portrait_angle;
-
-                if (strm->param.orient < PJMEDIA_ORIENT_NATURAL ||
-                    strm->param.orient > PJMEDIA_ORIENT_ROTATE_270DEG)
-                {
-                    return PJ_EINVAL;
-                }
-                idx = strm->param.orient - 1;
-
-#if TARGET_OS_IPHONE
-                /* Derive the device-specific portrait angle by combining the
-                 * coordinator's gravity-aligned angle with the physical device
-                 * tilt. This handles sensors whose native orientation differs
-                 * from the conventional landscape-native assumption (e.g. the
-                 * portrait-native sensor on iPhone 17), and works correctly
-                 * regardless of physical device orientation when set_cap is
-                 * called.
-                 *
-                 * cam_portrait_angle = (coord_angle + device_tilt_CW) % 360
-                 *   device_tilt_CW: 0=portrait, 90=LandscapeRight,
-                 *                   180=upsidedown, 270=LandscapeLeft
-                 * rotation = (cam_portrait_angle - 90 + cap_ori[idx]) % 360
-                 */
-                effective_portrait_angle = -1;
-                if (strm->cam_portrait_angle < 0) {
-                    AVCaptureDeviceRotationCoordinator *coord =
-                        [[AVCaptureDeviceRotationCoordinator alloc]
-                         initWithDevice:strm->dev_input.device
-                         previewLayer:nil];
-                    if (coord) {
-                        int coord_angle =
-                            (int)coord.videoRotationAngleForHorizonLevelCapture;
-                        int device_tilt;
-                        [coord release];
-
-                        switch ([UIDevice currentDevice].orientation) {
-                        case UIDeviceOrientationPortrait:
-                            device_tilt = 0; break;
-                        case UIDeviceOrientationLandscapeRight:
-                            device_tilt = 90; break;
-                        case UIDeviceOrientationPortraitUpsideDown:
-                            device_tilt = 180; break;
-                        case UIDeviceOrientationLandscapeLeft:
-                            device_tilt = 270; break;
-                        default:
-                            device_tilt = -1; break;
-                        }
-
-                        PJ_LOG(3, (THIS_FILE,
-                                   "Detected orientation, "
-                                   "UIDeviceOrientation=%d, coord_angle=%d, "
-                                   "device_tilt=%d",
-                                   (int)[UIDevice currentDevice].orientation,
-                                   coord_angle, device_tilt));
-
-                        if (device_tilt >= 0) {
-                            strm->cam_portrait_angle =
-                                (coord_angle + device_tilt) % 360;
-                        } else {
-                            /* Orientation unknown (face-up/down); use
-                             * coordinator's angle as best-effort — it
-                             * reflects the last known non-face orientation.
-                             * Do not cache: cam_portrait_angle stays -1 so
-                             * it is recomputed when orientation is known. */
-                            effective_portrait_angle = coord_angle;
-                        }
-                    }
-                }
-                if (strm->cam_portrait_angle >= 0)
-                    effective_portrait_angle = strm->cam_portrait_angle;
-
-                if (effective_portrait_angle >= 0) {
-                    rotation = (effective_portrait_angle - 90 +
-                                (int)cap_ori[idx] + 360) % 360;
-                } else {
-                    /* Coordinator unavailable; fall back to conventional. */
-                    rotation = (int)cap_ori[idx];
-                }
-#else
-                rotation = (int)cap_ori[idx];
-#endif
+                AVCaptureConnection *vidcon;
 
                 vidcon = [strm->video_output
                           connectionWithMediaType:AVMediaTypeVideo];
-                if ([vidcon isVideoRotationAngleSupported:rotation])
+                if ([vidcon isVideoRotationAngleSupported:
+                            cap_ori[strm->param.orient-1]])
                 {
-                    vidcon.videoRotationAngle = rotation;
+                    vidcon.videoRotationAngle = cap_ori[strm->param.orient-1];
                     support_ori = PJ_TRUE;
                 }
 
@@ -1448,7 +1339,7 @@ static pj_status_t darwin_stream_set_cap(pjmedia_vid_dev_stream *s,
                                strm->size.w);
 
                 if (!support_ori) {
-                    PJ_LOG(4, (THIS_FILE, "Native video capture orientation "
+                    PJ_LOG(4, (THIS_FILE, "Native video capture orientation " 
                                           "unsupported, will use converter's "
                                           "rotation."));
                 }
@@ -1457,16 +1348,15 @@ static pj_status_t darwin_stream_set_cap(pjmedia_vid_dev_stream *s,
                                                  &strm->conv, strm->pool,
                                                  &strm->param.fmt,
                                                  orig_size, strm->size,
-                                                 support_ori? PJ_FALSE :
-                                                 PJ_TRUE,
+                                                 (support_ori?PJ_FALSE:PJ_TRUE),
                                                  MAINTAIN_ASPECT_RATIO);
-
+                
                 if (status != PJ_SUCCESS)
                     return status;
             }
-
+            
             pjmedia_vid_dev_conv_set_rotation(&strm->conv, strm->param.orient);
-
+            
             PJ_LOG(5, (THIS_FILE, "Video capture orientation set to %d",
                                   strm->param.orient));
 
@@ -1626,9 +1516,7 @@ static pj_status_t darwin_stream_destroy(pjmedia_vid_dev_stream *strm)
     if (stream->render_data_provider) {
         CGDataProviderRelease(stream->render_data_provider);
         stream->render_data_provider = nil;
-    }
-
-    [[UIDevice currentDevice] endGeneratingDeviceOrientationNotifications];
+    }    
 #endif /* TARGET_OS_IPHONE */
 
     if (stream->queue) {

@@ -287,12 +287,6 @@ typedef struct pjsip_inv_callback
      * This callback is optional. If this callback is not implemented,
      * the default behavior is to NOT follow the redirection response.
      *
-     * Note: when \a e is NULL (e.g. called from
-     * #pjsip_inv_uac_try_next_target() after an async auth failure),
-     * the application should carry any needed context through its own
-     * state, such as the \a user_data field in
-     * #pjsip_auth_clt_async_setting.
-     *
      * @param inv       The invite session.
      * @param target    The current target to be tried.
      * @param e         The event that caused this callback to be called.
@@ -300,7 +294,7 @@ typedef struct pjsip_inv_callback
      *                  4xx/5xx response received for the INVITE sent to
      *                  subsequent targets, or NULL if this callback is
      *                  called from within #pjsip_inv_process_redirect()
-     *                  or #pjsip_inv_uac_try_next_target() context.
+     *                  context.
      *
      * @return          Action to be performed for the target. Set this
      *                  parameter to one of the value below:
@@ -324,61 +318,9 @@ typedef struct pjsip_inv_callback
      *                    to either accept or reject the redirection upon
      *                    getting user decision.
      */
-    pjsip_redirect_op (*on_redirected)(pjsip_inv_session *inv,
+    pjsip_redirect_op (*on_redirected)(pjsip_inv_session *inv, 
                                        const pjsip_uri *target,
                                        const pjsip_event *e);
-
-    /**
-     * This callback is called when an in-dialog UAC transaction within the
-     * invite session is about to cause the session to be terminated due to
-     * an RFC 3261 #12.2.1.2 failure -- a 408 Request Timeout, transaction
-     * timeout, or 481 Call/Transaction Does Not Exist response. The
-     * library would otherwise send BYE (or end the session) automatically.
-     *
-     * Implementing this callback allows the application to override that
-     * behavior selectively, e.g. to keep the session alive when an INFO
-     * or MESSAGE request fails (RFC 5057 #5.2 noted that the RFC 3261
-     * rule should have been scoped to the invite usage), or for non-RFC
-     * profiles such as ETSI EN 16072 (eCall) which require that only the
-     * operator may tear down the call.
-     *
-     * Returning PJ_TRUE suppresses the BYE/end-session step and prevents
-     * inv->cause from being set to the failed status. The library still
-     * performs cleanup that is necessary to keep the session usable for
-     * later requests -- in particular, a pending SDP offer carried by a
-     * failed re-INVITE or UPDATE is cancelled and inv->invite_tsx is
-     * cleared. Anything else (timers the application armed, application
-     * state) remains the responsibility of the application.
-     *
-     * Interaction with pjsip_cfg()->endpt.keep_inv_after_tsx_timeout:
-     * when that global flag is set, the 408/timeout branch is short-
-     * circuited before the callback is reached, so the callback is not
-     * invoked for 408 -- the session is already kept by the global flag.
-     * The callback is still invoked for 481, since the global flag does
-     * not cover it. Applications that want this callback to be the sole
-     * authority for both 408 and 481 should leave the global flag at its
-     * default (PJ_FALSE).
-     *
-     * Threading: this callback is invoked synchronously while the dialog
-     * group lock is held. The application MUST NOT call any pjsua_* or
-     * pjsip_dlg_* / pjsip_inv_* API that would acquire a higher-order
-     * lock (PJSUA_LOCK > dialog grp_lock > tsx grp_lock) from inside the
-     * callback -- doing so risks AB-BA deadlock. Defer any such work to
-     * a timer or worker thread.
-     *
-     * This callback is optional.
-     *
-     * @param inv       The invite session.
-     * @param tsx       The failed UAC transaction.
-     * @param e         The event that caused the failure.
-     *
-     * @return          PJ_TRUE if the application has handled the failure
-     *                  and the session should NOT be terminated.
-     *                  PJ_FALSE (default) to keep current behavior.
-     */
-    pj_bool_t (*on_uac_tsx_terminate_session)(pjsip_inv_session *inv,
-                                              pjsip_transaction *tsx,
-                                              pjsip_event *e);
 
 } pjsip_inv_callback;
 
@@ -826,34 +768,6 @@ PJ_DECL(pj_status_t) pjsip_inv_terminate( pjsip_inv_session *inv,
  */
 PJ_DECL(pj_status_t) pjsip_inv_uac_restart(pjsip_inv_session *inv,
                                            pj_bool_t new_offer);
-
-
-/**
- * Attempt to recurse to the next target in the dialog's target set
- * after an authentication failure in which the application could not
- * supply credentials.  This is intended to be called from an
- * asynchronous authentication challenge callback (see
- * #pjsip_auth_clt_async_setting) when the application decides it
- * cannot authenticate the current attempt and wants the session to
- * fall back to the same redirect-target walk that the synchronous
- * code path would have performed.
- *
- * The function invokes #pjsip_inv_callback::on_redirected for each
- * candidate target, passing NULL for the event parameter (see the
- * note in that callback's documentation for how to handle this).
- *
- * If no suitable next target exists the function returns PJ_FALSE
- * and the caller is responsible for ending the session, typically
- * via #pjsip_inv_end_session().
- *
- * @param inv       The UAC invite session.
- *
- * @return          PJ_TRUE if a next target was found and
- *                  #pjsip_inv_callback::on_redirected was invoked,
- *                  PJ_FALSE if no more targets are available.
- */
-PJ_DECL(pj_bool_t) pjsip_inv_uac_try_next_target(
-                                           pjsip_inv_session *inv);
 
 
 /**

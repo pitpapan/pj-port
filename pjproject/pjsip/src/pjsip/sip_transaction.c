@@ -806,25 +806,23 @@ static pj_status_t mod_tsx_layer_stop(void)
 
     PJ_LOG(4,(THIS_FILE, "Stopping transaction layer module"));
 
+    pj_mutex_lock(mod_tsx_layer.mutex);
+
     /* Destroy all transactions. */
-    do {
-        pjsip_transaction *tsx = NULL;
-
-        pj_mutex_lock(mod_tsx_layer.mutex);
-
-        it = pj_hash_first(mod_tsx_layer.htable, &it_buf);
-        if (it) {
-            tsx = (pjsip_transaction *)pj_hash_this(mod_tsx_layer.htable, it);
-            if (tsx) mod_tsx_layer_unregister_tsx(tsx);
-        }
-
-        pj_mutex_unlock(mod_tsx_layer.mutex);
-
+    it = pj_hash_first(mod_tsx_layer.htable, &it_buf);
+    while (it) {
+        pjsip_transaction *tsx = (pjsip_transaction*) 
+                                 pj_hash_this(mod_tsx_layer.htable, it);
+        pj_hash_iterator_t *next = pj_hash_next(mod_tsx_layer.htable, it);
         if (tsx) {
             pjsip_tsx_terminate(tsx, PJSIP_SC_SERVICE_UNAVAILABLE);
+            mod_tsx_layer_unregister_tsx(tsx);
             tsx_shutdown(tsx);
         }
-    } while (it);
+        it = next;
+    }
+
+    pj_mutex_unlock(mod_tsx_layer.mutex);
 
     PJ_LOG(4,(THIS_FILE, "Stopped transaction layer module"));
 
@@ -975,27 +973,6 @@ static pj_bool_t mod_tsx_layer_on_rx_request(pjsip_rx_data *rdata)
     {
         pj_mutex_unlock( mod_tsx_layer.mutex);
         return PJ_FALSE;
-    }
-
-    /* Handle retransmission (same branch) but different CSeq */
-    if (rdata->msg_info.msg->line.req.method.id == tsx->method.id &&
-        rdata->msg_info.cseq->cseq != tsx->cseq)
-    {
-        pjsip_endpoint* endpt = mod_tsx_layer.endpt;
-        pj_mutex_unlock( mod_tsx_layer.mutex);
-        if (endpt) {
-            pj_str_t hdr_name = pj_str("Warning");
-            pj_str_t warn_text = pj_str("Retransmission with different CSeq");
-            pjsip_hdr hdr;
-            pjsip_generic_string_hdr warn_hdr;
-
-            pjsip_generic_string_hdr_init2(&warn_hdr, &hdr_name, &warn_text);
-            pj_list_init(&hdr);
-            pj_list_push_back(&hdr, &warn_hdr);
-            pjsip_endpt_respond_stateless(endpt, rdata, PJSIP_SC_BAD_REQUEST,
-                                          NULL, &hdr, NULL);
-        }
-        return PJ_TRUE;
     }
 
     /* Prevent the transaction to get deleted before we have chance to lock it
@@ -1199,7 +1176,6 @@ static pj_status_t tsx_create( pjsip_module *tsx_user,
     tsx->timeout_timer.id = TIMER_INACTIVE;
     tsx->timeout_timer.user_data = tsx;
     tsx->timeout_timer.cb = &tsx_timer_callback;
-    tsx->chained_lock = NULL;
     
     if (grp_lock) {
         tsx->grp_lock = grp_lock;
@@ -1227,30 +1203,12 @@ static pj_status_t tsx_create( pjsip_module *tsx_user,
     return PJ_SUCCESS;
 }
 
-/* Really destroy transaction, when grp_lock reference is zero.
- * This is called from grp_lock_destroy() after all chained locks
- * have been released but before own_lock and pool are freed.
- */
+/* Really destroy transaction, when grp_lock reference is zero */
 static void tsx_on_destroy( void *arg )
 {
     pjsip_transaction *tsx = (pjsip_transaction*)arg;
 
     PJ_LOG(5,(tsx->obj_name, "Transaction destroyed!"));
-
-    /* Dec ref the chained lock (e.g., dialog lock) if it was set.
-     * The dialog lock is intentionally left chained — grp_lock_destroy()
-     * has already released it (along with all other chained locks) before
-     * calling this callback. We only need to drop the reference that was
-     * added when the lock was chained.
-     *
-     * Not unchaining avoids the race where pj_grp_lock_unchain_lock()
-     * erases a node from the lock_list while another thread is blocked
-     * mid-traversal inside grp_lock_acquire/release.
-     */
-    if (tsx->chained_lock) {
-        pj_grp_lock_dec_ref(tsx->chained_lock);
-        tsx->chained_lock = NULL;
-    }
 
     pj_mutex_destroy(tsx->mutex_b);
     pjsip_endpt_release_pool(tsx->endpt, tsx->pool);
@@ -1266,20 +1224,6 @@ static pj_status_t tsx_shutdown( pjsip_transaction *tsx )
      * we haven't been called before */
     if (!tsx->terminating) {
         pjsip_tpselector_dec_ref(&tsx->tp_sel);
-
-        /* Note: the chained lock (e.g., dialog lock) is intentionally
-         * left chained. It will be released by grp_lock_destroy() when
-         * the tsx's ref count reaches zero, then tsx_on_destroy() will
-         * dec_ref it. Not unchaining avoids the race where
-         * pj_grp_lock_unchain_lock() erases a lock_list node while
-         * another thread is blocked mid-traversal inside
-         * grp_lock_acquire/release.
-         *
-         * The only side effect is that between tsx_shutdown and
-         * grp_lock_destroy, any straggler acquiring tsx->grp_lock
-         * (e.g., a pending transport callback) will also briefly
-         * acquire the dialog lock. This is harmless.
-         */
     }
 
     /* Free last transmitted message. */
@@ -1959,37 +1903,13 @@ PJ_DEF(pj_status_t) pjsip_tsx_terminate( pjsip_transaction *tsx, int code )
 PJ_DEF(pj_status_t) pjsip_tsx_terminate_async(pjsip_transaction *tsx,
                                               int code )
 {
-    return pjsip_tsx_terminate_async2(tsx, code, NULL, 100);
-}
-
-
-/*
- * Force terminate transaction asynchronously, using the transaction
- * internal timer.
- */
-PJ_DEF(pj_status_t) pjsip_tsx_terminate_async2(pjsip_transaction *tsx,
-                                               int code,
-                                               const pj_str_t *reason,
-                                               unsigned millisec)
-{
-    pj_time_val delay = {0, 0};
+    pj_time_val delay = {0, 100};
 
     PJ_ASSERT_RETURN(tsx != NULL, PJ_EINVAL);
 
-    PJ_LOG(5,(tsx->obj_name, "Request to terminate transaction async in %u ms",
-              millisec));
+    PJ_LOG(5,(tsx->obj_name, "Request to terminate transaction async"));
 
     PJ_ASSERT_RETURN(code >= 200, PJ_EINVAL);
-
-    /* Set termination status code, if not yet */
-    pj_grp_lock_acquire(tsx->grp_lock);
-    if (tsx->status_code < 200)
-        tsx_set_status_code(tsx, code, reason);
-    pj_grp_lock_release(tsx->grp_lock);
-
-    /* Schedule the termination */
-    delay.msec = millisec;
-    pj_time_val_normalize(&delay);
 
     lock_timer(tsx);
     tsx_cancel_timer(tsx, &tsx->timeout_timer);
@@ -2001,16 +1921,15 @@ PJ_DEF(pj_status_t) pjsip_tsx_terminate_async2(pjsip_transaction *tsx,
 
 
 /*
- * Cease internal, timer-based retransmission on the INVITE transaction.
- * The transaction is still considered running and will complete according
- * to the normal state machine (e.g., when a final response/ACK is
- * processed or when the transaction times out), but no further periodic
- * retransmissions will be driven by the transaction retransmit timer.
+ * Cease retransmission on the UAC transaction. The UAC transaction is
+ * still considered running, and it will complete when either final
+ * response is received or the transaction times out.
  */
 PJ_DEF(pj_status_t) pjsip_tsx_stop_retransmit(pjsip_transaction *tsx)
 {
     PJ_ASSERT_RETURN(tsx != NULL, PJ_EINVAL);
-    PJ_ASSERT_RETURN(tsx->method.id == PJSIP_INVITE_METHOD,
+    PJ_ASSERT_RETURN(tsx->role == PJSIP_ROLE_UAC &&
+                     tsx->method.id == PJSIP_INVITE_METHOD,
                      PJ_EINVALIDOP);
 
     PJ_LOG(5,(tsx->obj_name, "Request to stop retransmission"));
@@ -3717,28 +3636,15 @@ static pj_status_t tsx_on_state_completed_uas( pjsip_transaction *tsx,
             lock_timer(tsx);
             tsx_cancel_timer( tsx, &tsx->timeout_timer );
 
-            /* Schedule tsx termination */
-#if PJSIP_INV_ABSORB_RETRANS_AFTER_ACK
-            if (tsx->status_code/100 == 2) {
-                /* Normally 2xx response is handled by TU (not considered
-                 * part of the INVITE tsx), anyway if it comes here, let's
-                 * delay the tsx termination to absorb INVITE retransmission
-                 * for about 64*T1 (~32 seconds). See also #4765.
-                 */
-                timeout = td_timer_val;
-            } else
-#endif
-            {
-                /* Timer I is T4 timer for unreliable transports, and
-                 * zero seconds for reliable transports.
-                 */
-                if (tsx->is_reliable) {
-                    timeout.sec = 0;
-                    timeout.msec = 0;
-                } else {
-                    timeout.sec = t4_timer_val.sec;
-                    timeout.msec = t4_timer_val.msec;
-                }
+            /* Timer I is T4 timer for unreliable transports, and
+             * zero seconds for reliable transports.
+             */
+            if (tsx->is_reliable) {
+                timeout.sec = 0; 
+                timeout.msec = 0;
+            } else {
+                timeout.sec = t4_timer_val.sec;
+                timeout.msec = t4_timer_val.msec;
             }
             tsx_schedule_timer( tsx, &tsx->timeout_timer,
                                 &timeout, TIMEOUT_TIMER);

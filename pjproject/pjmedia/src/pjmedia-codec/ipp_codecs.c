@@ -420,13 +420,6 @@ static pj_status_t parse_g723(ipp_private_t *codec_data, void *pkt,
             return PJMEDIA_CODEC_EINMODE;
         }
 
-        /* Stop if the frame doesn't fit in the remaining packet. pkt_size
-         * is unsigned, so an oversized frame would wrap it around and let
-         * the loop read frame headers past the end of the payload.
-         */
-        if ((pj_size_t)framesize > pkt_size)
-            break;
-
         frames[count].type = PJMEDIA_FRAME_TYPE_AUDIO;
         frames[count].buf = f;
         frames[count].size = framesize;
@@ -776,16 +769,12 @@ PJ_DEF(pj_status_t) pjmedia_codec_ipp_deinit(void)
         return PJ_EINVALIDOP;
     }
 
-    /* Release the factory mutex before calling unregister to avoid lock
-     * order inversion with codec manager mutex.
-     */
-    pj_mutex_unlock(ipp_factory.mutex);
-
     /* Unregister IPP codecs factory. */
     status = pjmedia_codec_mgr_unregister_factory(codec_mgr,
                                                   &ipp_factory.base);
     
     /* Destroy mutex. */
+    pj_mutex_unlock(ipp_factory.mutex);
     pj_mutex_destroy(ipp_factory.mutex);
     ipp_factory.mutex = NULL;
 

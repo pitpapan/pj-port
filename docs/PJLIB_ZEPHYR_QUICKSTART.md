@@ -225,6 +225,11 @@ west build -p always \
   -- -DEXTRA_CONF_FILE=stage9.conf
 ```
 
+west build -p always \
+  -b mps2/an385 \
+  applications/pjlib_minimal \
+  -d build-stage5 \
+  -- -DEXTRA_CONF_FILE=stage5_probe.conf
 Run it under QEMU:
 
 ```bash

@@ -66,8 +66,6 @@ void flush_events(unsigned duration)
         if (PJ_TIME_VAL_GTE(now, stop_time))
             break;
     }
-
-    pjsip_endpt_stop_handle_events(endpt);
 }
 
 /* Wait until there is no loop transport instance */
@@ -312,10 +310,6 @@ int test_main(int argc, char *argv[])
     UT_ADD_TEST(&test_app.ut_app, txdata_test, 0);
 #endif
 
-#if INCLUDE_DLG_CORE_TEST
-    UT_ADD_TEST(&test_app.ut_app, dlg_core_test, 0);
-#endif
-
 #if INCLUDE_TSX_BENCH
     UT_ADD_TEST(&test_app.ut_app, tsx_bench, 0);
 #endif
@@ -369,7 +363,6 @@ int test_main(int argc, char *argv[])
 
 #if INCLUDE_TCP_TEST
     UT_ADD_TEST(&test_app.ut_app, transport_tcp_test, 0);
-    UT_ADD_TEST(&test_app.ut_app, transport_tcp_keep_alive_test, 0);
 #endif
 
     /* Note: put exclusive tests last */
@@ -379,26 +372,6 @@ int test_main(int argc, char *argv[])
      */
 #if INCLUDE_REGC_TEST
     UT_ADD_TEST(&test_app.ut_app, regc_test, PJ_TEST_EXCLUSIVE | PJ_TEST_KEEP_LAST);
-#endif
-
-#if INCLUDE_AUTH_ASYNC_TEST
-    UT_ADD_TEST(&test_app.ut_app, auth_async_test,
-                PJ_TEST_EXCLUSIVE | PJ_TEST_KEEP_LAST);
-#endif
-
-#if INCLUDE_PJSUA_AUTH_TEST
-    UT_ADD_TEST(&test_app.ut_app, pjsua_auth_test,
-                PJ_TEST_EXCLUSIVE | PJ_TEST_KEEP_LAST);
-#endif
-
-#if INCLUDE_PJSUA_CALL_TEST
-    UT_ADD_TEST(&test_app.ut_app, pjsua_call_test,
-                PJ_TEST_EXCLUSIVE | PJ_TEST_KEEP_LAST);
-#endif
-
-#if INCLUDE_PJSUA_ACC_TEST
-    UT_ADD_TEST(&test_app.ut_app, pjsua_acc_test,
-                PJ_TEST_EXCLUSIVE | PJ_TEST_KEEP_LAST);
 #endif
 
     /* This needs to be exclusive, because there must NOT be any other

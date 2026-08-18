@@ -435,7 +435,6 @@ void OnCallRxTextParam::fromPj(const pjsua_txt_stream_data &prm)
     seq = prm.seq;
     ts = prm.ts;
     text = pj2Str(prm.text);
-    medIdx = prm.med_idx;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -500,7 +499,7 @@ call_param::call_param(const SipTxOption &tx_option, const CallSetting &setting,
     p_reason = (reason.slen == 0? NULL: &reason);
 
     sdp = NULL;
-    if (pool != NULL && sdp_str != "") {
+    if (sdp_str != "") {
         pj_str_t dup_pj_sdp;
         pj_str_t pj_sdp_str = {(char*)sdp_str.c_str(),
                                (pj_ssize_t)sdp_str.size()};
@@ -517,7 +516,7 @@ call_param::call_param(const SipTxOption &tx_option, const CallSetting &setting,
 }
 
 Call::Call(Account& account, int call_id)
-: acc(&account), id(call_id), userData(NULL), child(NULL)
+: acc(account), id(call_id), userData(NULL), sdp_pool(NULL), child(NULL)
 {
     if (call_id != PJSUA_INVALID_ID)
         pjsua_call_set_user_data(call_id, this);
@@ -754,25 +753,15 @@ void Call::makeCall(const string &dst_uri, const CallOpParam &prm)
     pj_str_t pj_dst_uri = str2Pj(dst_uri);
     call_param param(prm.txOption, prm.opt, prm.reason);
     
-    PJSUA2_CHECK_EXPR( pjsua_call_make_call(acc->getId(), &pj_dst_uri,
+    PJSUA2_CHECK_EXPR( pjsua_call_make_call(acc.getId(), &pj_dst_uri,
                                             param.p_opt, this,
                                             param.p_msg_data, &id) );
 }
 
 void Call::answer(const CallOpParam &prm) PJSUA2_THROW(Error)
 {
-    pj_pool_t *tmp_pool = NULL;
-    
-    /* Create temporary pool for SDP operations if SDP is provided */
-    if (!prm.sdp.wholeSdp.empty()) {
-        tmp_pool = pjsua_pool_create("tmp-answer", 2048, 512);
-        if (!tmp_pool) {
-            PJSUA2_RAISE_ERROR2(PJ_ENOMEM, "Call::answer()");
-        }
-    }
-    
     call_param param(prm.txOption, prm.opt, prm.reason,
-                     tmp_pool, prm.sdp.wholeSdp);
+                     sdp_pool, prm.sdp.wholeSdp);
     
     if (param.sdp) {
         PJSUA2_CHECK_EXPR( pjsua_call_answer_with_sdp(id, param.sdp,
@@ -784,11 +773,6 @@ void Call::answer(const CallOpParam &prm) PJSUA2_THROW(Error)
         PJSUA2_CHECK_EXPR( pjsua_call_answer2(id, param.p_opt, prm.statusCode,
                                               param.p_reason,
                                               param.p_msg_data) );
-    }
-    
-    /* Release temporary pool */
-    if (tmp_pool) {
-        pj_pool_release(tmp_pool);
     }
 }
 
@@ -867,7 +851,6 @@ void Call::sendText(const CallSendTextParam &param) PJSUA2_THROW(Error)
     pjsua_call_send_text_param pj_param;
 
     pjsua_call_send_text_param_default(&pj_param);
-    pj_param.med_idx = param.medIdx;
     pj_param.text = str2Pj(param.text);
 
     PJSUA2_CHECK_EXPR(pjsua_call_send_text(id, &pj_param));

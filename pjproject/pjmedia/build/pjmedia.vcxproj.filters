@@ -11,12 +11,6 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\src\pjmedia\ai_port.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="..\src\pjmedia\ai_port_openai.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\src\pjmedia\alaw_ulaw.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -215,9 +209,6 @@
     <ClCompile Include="..\src\pjmedia\wav_writer.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\src\pjmedia\tone_detector.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\src\pjmedia\wave.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -256,9 +247,6 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\include\pjmedia\ai_port.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="..\include\pjmedia\alaw_ulaw.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -422,9 +410,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\include\pjmedia\vid_tee.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\include\pjmedia\tone_detector.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\include\pjmedia\wav_playlist.h">

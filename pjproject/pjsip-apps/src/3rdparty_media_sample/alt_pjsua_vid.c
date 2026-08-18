@@ -1,4 +1,4 @@
-/*
+/* 
  * Copyright (C) 2011-2011 Teluu Inc. (http://www.teluu.com)
  *
  * This program is free software; you can redistribute it and/or modify
@@ -13,7 +13,7 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA 
  */
 #include <pjsua-lib/pjsua.h>
 #include <pjsua-lib/pjsua_internal.h>
@@ -28,18 +28,7 @@
 #define UNIMPLEMENTED(func)     PJ_LOG(2,(THIS_FILE, "*** Call to unimplemented function %s ***", #func));
 
 /*****************************************************************************
- * Our video codec descriptors.
- * Since we won't use any PJMEDIA codecs we have two options:
- *
- * - Declare our own codecs and register them to PJMEDIA's codec manager
- *   in pjsua_vid_subsys_init().
- *   Then they will be used for validating during SDP negotiation,
- *   but the actual encoding and decoding will be done in our 3rd party media stream.
- *
- * - Do not register any codecs, and handle the failure in codec lookup during
- *   SDP negotiation as non-fatal, so that the negotiation can proceed and the
- *   3rd-party media stream can be used without registering any codecs.
-
+ * Our video codec descriptors
  */
 struct alt_codec_desc
 {
@@ -209,9 +198,7 @@ pj_status_t pjsua_vid_subsys_init(void)
         return status;
     }
 
-    /* Create video codec manager singleton (required even when no codecs are
-     * registered, as the singleton pointer is used throughout PJMEDIA).
-     */
+    /* Create video codec manager singleton */
     status = pjmedia_vid_codec_mgr_create(pjsua_var.pool, &mgr);
     if (status != PJ_SUCCESS) {
         PJ_PERROR(1,(THIS_FILE, status,
@@ -219,14 +206,13 @@ pj_status_t pjsua_vid_subsys_init(void)
         return status;
     }
 
-    /* Codec registration is intentionally omitted: pjsua now handles an
-     * empty video codec registry gracefully, so 3rd-party media stacks do
-     * not need to register dummy codecs.  The alt_vid_codec_factory above
-     * is kept as reference documentation for implementors who want to
-     * register codecs.
-     */
-    (void)alt_vid_codec_factory;
-    (void)alt_vid_codec_factory_op;
+    /* Register our codecs */
+    alt_vid_codec_factory.base.op = &alt_vid_codec_factory_op;
+    alt_vid_codec_factory.base.factory_data = NULL;
+
+    status = pjmedia_vid_codec_mgr_register_factory(mgr, &alt_vid_codec_factory.base);
+    if (status != PJ_SUCCESS)
+        return status;
 
     /*
      * TODO: put your 3rd party library initialization routine here
@@ -345,7 +331,7 @@ pj_status_t pjsua_vid_channel_update(pjsua_call_media *call_med,
                                      const pjmedia_sdp_session *remote_sdp)
 {
     pj_status_t status;
-
+    
     PJ_LOG(4,(THIS_FILE, "Video channel update.."));
     pj_log_push_indent();
 
@@ -716,120 +702,6 @@ PJ_DEF(pj_status_t) pjsua_vid_conf_remove_port(pjsua_conf_port_id id)
 PJ_DEF(pj_status_t) pjsua_vid_conf_update_port(pjsua_conf_port_id id)
 {
     UNIMPLEMENTED(pjsua_vid_conf_update_port)
-    return PJ_ENOTSUP;
-}
-
-/* Get video conference port id of a call stream. */
-PJ_DEF(pjsua_conf_port_id) pjsua_call_get_vid_conf_port(
-                                                    pjsua_call_id call_id,
-                                                    pjmedia_dir dir)
-{
-    PJ_UNUSED_ARG(call_id);
-    PJ_UNUSED_ARG(dir);
-    UNIMPLEMENTED(pjsua_call_get_vid_conf_port)
-    return PJSUA_INVALID_ID;
-}
-
-/* Reset AVI player data (internal, called from pjsua_core). */
-void pjsua_reset_avi_player_data(pjsua_avi_player_id id)
-{
-    PJ_UNUSED_ARG(id);
-}
-
-/* Reset AVI recorder data (internal, called from pjsua_core). */
-void pjsua_reset_avi_recorder_data(pjsua_avi_rec_id id)
-{
-    PJ_UNUSED_ARG(id);
-}
-
-/* Create AVI player. */
-PJ_DEF(pj_status_t) pjsua_avi_player_create(const pj_str_t *filename,
-                                             pjsua_avi_player_id *id)
-{
-    PJ_UNUSED_ARG(filename);
-    PJ_UNUSED_ARG(id);
-    UNIMPLEMENTED(pjsua_avi_player_create)
-    return PJ_ENOTSUP;
-}
-
-/* Destroy AVI player. */
-PJ_DEF(pj_status_t) pjsua_avi_player_destroy(pjsua_avi_player_id id)
-{
-    PJ_UNUSED_ARG(id);
-    UNIMPLEMENTED(pjsua_avi_player_destroy)
-    return PJ_ENOTSUP;
-}
-
-/* Get audio conference port of AVI player. */
-PJ_DEF(pjsua_conf_port_id) pjsua_avi_player_get_conf_port(
-                                                        pjsua_avi_player_id id,
-                                                        pjmedia_type strm_type,
-                                                        unsigned strm_idx)
-{
-    PJ_UNUSED_ARG(id);
-    PJ_UNUSED_ARG(strm_type);
-    PJ_UNUSED_ARG(strm_idx);
-    UNIMPLEMENTED(pjsua_avi_player_get_conf_port)
-    return PJSUA_INVALID_ID;
-}
-
-/* Get video device index of AVI player. */
-PJ_DEF(pjmedia_vid_dev_index) pjsua_avi_player_get_vid_dev(
-                                                        pjsua_avi_player_id id)
-{
-    PJ_UNUSED_ARG(id);
-    UNIMPLEMENTED(pjsua_avi_player_get_vid_dev)
-    return PJMEDIA_VID_INVALID_DEV;
-}
-
-/* Create AVI recorder. */
-PJ_DEF(pj_status_t) pjsua_avi_recorder_create(const pj_str_t *filename,
-                                               pj_ssize_t max_size,
-                                               const pjmedia_format *vid_fmt,
-                                               const pjmedia_format *aud_fmt,
-                                               unsigned options,
-                                               pjsua_avi_rec_id *id)
-{
-    PJ_UNUSED_ARG(filename);
-    PJ_UNUSED_ARG(max_size);
-    PJ_UNUSED_ARG(vid_fmt);
-    PJ_UNUSED_ARG(aud_fmt);
-    PJ_UNUSED_ARG(options);
-    PJ_UNUSED_ARG(id);
-    UNIMPLEMENTED(pjsua_avi_recorder_create)
-    return PJ_ENOTSUP;
-}
-
-/* Destroy AVI recorder. */
-PJ_DEF(pj_status_t) pjsua_avi_recorder_destroy(pjsua_avi_rec_id id)
-{
-    PJ_UNUSED_ARG(id);
-    UNIMPLEMENTED(pjsua_avi_recorder_destroy)
-    return PJ_ENOTSUP;
-}
-
-/* Get audio conference port of AVI recorder. */
-PJ_DEF(pjsua_conf_port_id) pjsua_avi_recorder_get_conf_port(
-                                                        pjsua_avi_rec_id id,
-                                                        unsigned strm_idx)
-{
-    PJ_UNUSED_ARG(id);
-    PJ_UNUSED_ARG(strm_idx);
-    UNIMPLEMENTED(pjsua_avi_recorder_get_conf_port)
-    return PJSUA_INVALID_ID;
-}
-
-/* Set AVI recorder callback. */
-PJ_DEF(pj_status_t) pjsua_avi_recorder_set_cb(
-                                    pjsua_avi_rec_id id,
-                                    void *user_data,
-                                    void(*cb)(pjsua_avi_rec_id rec_id,
-                                              void *usr_data))
-{
-    PJ_UNUSED_ARG(id);
-    PJ_UNUSED_ARG(user_data);
-    PJ_UNUSED_ARG(cb);
-    UNIMPLEMENTED(pjsua_avi_recorder_set_cb)
     return PJ_ENOTSUP;
 }
 

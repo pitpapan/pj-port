@@ -23,7 +23,6 @@
 #include <pj/os.h>
 #include <pj/pool.h>
 #include <pjmedia/errno.h>
-#include <pjmedia/event.h>
 #include <pjmedia-audiodev/alsa.h>
 
 #if defined(PJMEDIA_AUDIO_DEV_HAS_ALSA) && PJMEDIA_AUDIO_DEV_HAS_ALSA
@@ -129,7 +128,6 @@ struct alsa_stream
     unsigned             pb_buf_size;
     char                *pb_buf;
     pj_thread_t         *pb_thread;
-    pj_timestamp         pb_timestamp;  /* Playback timestamp           */
 
     /* Capture */
     snd_pcm_t           *ca_pcm;
@@ -138,7 +136,6 @@ struct alsa_stream
     unsigned             ca_buf_size;
     char                *ca_buf;
     pj_thread_t         *ca_thread;
-    pj_timestamp         ca_timestamp;  /* Capture timestamp            */
 };
 
 static pjmedia_aud_dev_factory_op alsa_factory_op =
@@ -533,7 +530,6 @@ static int pb_thread_func (void *arg)
     struct sched_param param;
     pthread_t* thid;    
     int result;
-    pj_status_t status = PJ_SUCCESS;
 
     thid = (pthread_t*) pj_thread_get_os_handle (pj_thread_this());
     param.sched_priority = sched_get_priority_max (SCHED_RR);
@@ -552,7 +548,6 @@ static int pb_thread_func (void *arg)
 
     pj_bzero (buf, size);
     tstamp.u64 = 0;
-    stream->pb_timestamp.u64 = 0;
 
     TRACE_((THIS_FILE, "pb_thread_func(%u): Started",
             (unsigned)syscall(SYS_gettid)));
@@ -569,10 +564,8 @@ static int pb_thread_func (void *arg)
         frame.bit_info = 0;
 
         result = stream->pb_cb (user_data, &frame);
-        if (result != PJ_SUCCESS || stream->quit) {
-            status = result;
+        if (result != PJ_SUCCESS || stream->quit)
             break;
-        }
 
         if (frame.type != PJMEDIA_FRAME_TYPE_AUDIO)
             pj_bzero (buf, size);
@@ -583,33 +576,13 @@ static int pb_thread_func (void *arg)
             snd_pcm_prepare (pcm);
         } else if (result < 0) {
             PJ_LOG (4,(THIS_FILE, "pb_thread_func: error writing data!"));
-            status = PJMEDIA_EAUD_SYSERR;
-            break;
         }
 
         tstamp.u64 += nframes;
-        stream->pb_timestamp.u64 = tstamp.u64;
     }
 
     snd_pcm_drop(pcm);
     TRACE_((THIS_FILE, "pb_thread_func: Stopped"));
-    
-    if (status != PJ_SUCCESS && !stream->quit) {
-        pjmedia_event e;
-        
-        PJ_PERROR(3, (THIS_FILE, status, "ALSA playback thread stopped due to error"));
-        
-        /* Broadcast ALSA playback error */
-        pjmedia_event_init(&e, PJMEDIA_EVENT_AUD_DEV_ERROR,
-                          &stream->pb_timestamp, &stream->base);
-        e.data.aud_dev_err.dir = PJMEDIA_DIR_PLAYBACK;
-        e.data.aud_dev_err.status = status;
-        e.data.aud_dev_err.id = stream->param.play_id;
-        
-        pjmedia_event_publish(NULL, &stream->base, &e,
-                             PJMEDIA_EVENT_PUBLISH_DEFAULT);
-    }
-    
     return PJ_SUCCESS;
 }
 
@@ -627,7 +600,6 @@ static int ca_thread_func (void *arg)
     int result;
     struct sched_param param;
     pthread_t* thid;
-    pj_status_t status = PJ_SUCCESS;
 
     thid = (pthread_t*) pj_thread_get_os_handle (pj_thread_this());
     param.sched_priority = sched_get_priority_max (SCHED_RR);
@@ -646,7 +618,6 @@ static int ca_thread_func (void *arg)
 
     pj_bzero (buf, size);
     tstamp.u64 = 0;
-    stream->ca_timestamp.u64 = 0;
 
     TRACE_((THIS_FILE, "ca_thread_func(%u): Started",
             (unsigned)syscall(SYS_gettid)));
@@ -664,8 +635,6 @@ static int ca_thread_func (void *arg)
             continue;
         } else if (result < 0) {
             PJ_LOG (4,(THIS_FILE, "ca_thread_func: error reading data!"));
-            status = PJMEDIA_EAUD_SYSERR;
-            break;
         }
         if (stream->quit)
             break;
@@ -677,32 +646,13 @@ static int ca_thread_func (void *arg)
         frame.bit_info = 0;
 
         result = stream->ca_cb (user_data, &frame);
-        if (result != PJ_SUCCESS || stream->quit) {
-            status = result;
+        if (result != PJ_SUCCESS || stream->quit)
             break;
-        }
 
         tstamp.u64 += nframes;
-        stream->ca_timestamp.u64 = tstamp.u64;
     }
     snd_pcm_drop(pcm);
     TRACE_((THIS_FILE, "ca_thread_func: Stopped"));
-
-    if (status != PJ_SUCCESS && !stream->quit) {
-        pjmedia_event e;
-        
-        PJ_PERROR(3, (THIS_FILE, status, "ALSA capture thread stopped due to error"));
-        
-        /* Broadcast ALSA capture error */
-        pjmedia_event_init(&e, PJMEDIA_EVENT_AUD_DEV_ERROR,
-                          &stream->ca_timestamp, &stream->base);
-        e.data.aud_dev_err.dir = PJMEDIA_DIR_CAPTURE;
-        e.data.aud_dev_err.status = status;
-        e.data.aud_dev_err.id = stream->param.rec_id;
-        
-        pjmedia_event_publish(NULL, &stream->base, &e,
-                             PJMEDIA_EVENT_PUBLISH_DEFAULT);
-    }
 
     return PJ_SUCCESS;
 }

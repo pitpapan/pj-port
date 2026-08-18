@@ -69,19 +69,6 @@
 #endif
 
 
-/**
- * Maximum number of entries allowed in each DNS header section (query,
- * answer, authority, additional). This caps allocations during packet
- * parsing to prevent memory exhaustion from malicious responses with
- * inflated section counts. Practical DNS responses rarely exceed this.
- *
- * Default: 256
- */
-#ifndef PJ_DNS_MAX_SECTION_COUNT
-#   define PJ_DNS_MAX_SECTION_COUNT                 256
-#endif
-
-
 /* **************************************************************************
  * RESOLVER CONFIGURATION
  */
@@ -386,21 +373,6 @@
  */
 #ifndef PJ_CLI_MAX_CMD_HISTORY
 #   define PJ_CLI_MAX_CMD_HISTORY  16
-#endif
-
-/**
- * Maximum XML nesting depth accepted by pj_xml_parse(), to bound the parser's
- * recursion and prevent stack exhaustion from deeply nested documents.
- * Parsing fails with a syntax error beyond this depth.
- *
- * Each level costs one parser stack frame, around 112 bytes on 64bit builds
- * and more in debug builds, so the default needs about 30KB of stack. Lower
- * this on platforms with small thread stacks.
- *
- * Default: 256
- */
-#ifndef PJ_XML_MAX_NESTING
-#   define PJ_XML_MAX_NESTING      256
 #endif
 
 /**

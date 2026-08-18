@@ -86,8 +86,6 @@ struct pjsip_transaction
     pjsip_endpoint             *endpt;          /**< Endpoint instance.     */
     pj_bool_t                   terminating;    /**< terminate() was called */
     pj_grp_lock_t              *grp_lock;       /**< Transaction grp lock.  */
-    pj_grp_lock_t              *chained_lock;   /**< Chained lock (e.g., dialog
-                                                     lock) for cleanup.     */
     pj_mutex_t                 *mutex_b;        /**< Second mutex to avoid
                                                      deadlock. It is used to
                                                      protect timer.         */
@@ -425,8 +423,7 @@ PJ_DECL(pj_status_t) pjsip_tsx_terminate( pjsip_transaction *tsx,
  * internal timer.
  *
  * @param tsx       The transaction.
- * @param code      The status code to report. This is applied only if
- *                  the current status code is not final (i.e. < 200).
+ * @param code      The status code to report.
  *
  * @return          PJ_SUCCESS or the appropriate error code.
  */
@@ -435,35 +432,13 @@ PJ_DECL(pj_status_t) pjsip_tsx_terminate_async(pjsip_transaction *tsx,
 
 
 /**
- * Force terminate transaction asynchronously, using the transaction
- * internal timer.
- *
- * @param tsx       The transaction.
- * @param code      The status code to report. This is applied only if
- *                  the current status code is not final (i.e. < 200).
- * @param reason    The reason phrase to report (optional). This is applied 
- *                  only if the current status code is not final (i.e. < 200).
- * @param millisec  Timeout value in milliseconds.
- *
- * @return          PJ_SUCCESS or the appropriate error code.
- */
-PJ_DECL(pj_status_t) pjsip_tsx_terminate_async2(pjsip_transaction *tsx,
-                                                int code,
-                                                const pj_str_t *reason,
-                                                unsigned millisec);
-
-
-/**
- * Cease internal, timer-based retransmission on the INVITE transaction.
- * The transaction is still considered running and will complete according
- * to the normal state machine (e.g., when a final response/ACK is
- * processed or when the transaction times out), but no further periodic
- * retransmissions will be driven by the transaction retransmit timer.
+ * Cease retransmission on the UAC transaction. The UAC transaction is
+ * still considered running, and it will complete when either final
+ * response is received or the transaction times out.
  *
  * This operation normally is used for INVITE transaction only, when
  * the transaction is cancelled before any provisional response has been
- * received or when the transaction is scheduled for termination after ACK
- * has been received.
+ * received.
  *
  * @param tsx       The transaction.
  *

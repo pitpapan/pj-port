@@ -44,6 +44,7 @@ struct test_app_t test_app = {
     PJ_LOG_HAS_NEWLINE | PJ_LOG_HAS_TIME |
         PJ_LOG_HAS_MICRO_SEC | PJ_LOG_HAS_INDENT,
                                         /* .param_log_decor */
+    PJ_FALSE,                           /* .param_ci_mode */
 };
 
 int null_func()
@@ -349,7 +350,6 @@ static int features_tests(int argc, char *argv[])
 
 #if INCLUDE_SSLSOCK_TEST
     UT_ADD_TEST(&test_app.ut_app, ssl_sock_test, 0);
-    UT_ADD_TEST(&test_app.ut_app, ssl_sock_stress_test, 0);
 #endif
 
 #if INCLUDE_IOCP_UNREG_TEST
@@ -402,7 +402,7 @@ int test_inner(int argc, char *argv[])
 
     pj_caching_pool_init( &caching_pool, NULL, 0 );
 
-    if (test_app.ut_app.prm_ci_mode)
+    if (test_app.param_ci_mode)
         PJ_LOG(3,(THIS_FILE, "Using ci-mode"));
 
     if (!test_app.param_skip_essentials) {

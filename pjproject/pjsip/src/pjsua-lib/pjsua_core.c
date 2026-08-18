@@ -124,12 +124,8 @@ PJ_DEF(void) pjsua_config_default(pjsua_config *cfg)
 
     cfg->use_timer = PJSUA_SIP_TIMER_OPTIONAL;
     cfg->use_siprec = PJSUA_SIP_SIPREC_INACTIVE;
-    cfg->siprec_require_label = PJ_FALSE;
-    cfg->siprec_require_metadata = PJ_FALSE;
     pjsip_timer_setting_default(&cfg->timer_setting);
     pjsua_srtp_opt_default(&cfg->srtp_opt);
-    cfg->no_refer_sub = PJ_TRUE;
-    cfg->acc_server_affinity_default = PJSUA_ACC_SERVER_AFFINITY_DEFAULT;
 }
 
 PJ_DEF(void) pjsua_config_dup(pj_pool_t *pool,
@@ -351,8 +347,6 @@ PJ_DEF(void) pjsua_acc_config_default(pjsua_acc_config *cfg)
     cfg->use_timer = pjsua_var.ua_cfg.use_timer;
     cfg->timer_setting = pjsua_var.ua_cfg.timer_setting;
     cfg->use_siprec = pjsua_var.ua_cfg.use_siprec;
-    cfg->siprec_require_label = pjsua_var.ua_cfg.siprec_require_label;
-    cfg->siprec_require_metadata = pjsua_var.ua_cfg.siprec_require_metadata;
     cfg->lock_codec = 1;
     cfg->ka_interval = 15;
     cfg->ka_data = pj_str("\r\n");
@@ -396,8 +390,6 @@ PJ_DEF(void) pjsua_acc_config_default(pjsua_acc_config *cfg)
                                        PJSUA_IPV6_DISABLED;
     cfg->ipv6_media_use = PJ_HAS_IPV6? PJSUA_IPV6_ENABLED_PREFER_IPV4 :
                                        PJSUA_IPV6_DISABLED;
-
-    cfg->server_affinity        = PJSUA_SERVER_AFFINITY_UNSPECIFIED;
 
     cfg->media_stun_use = PJSUA_STUN_RETRY_ON_FAILURE;
     cfg->ip_change_cfg.shutdown_tp = PJ_TRUE;
@@ -843,6 +835,24 @@ PJ_DEF(pj_status_t) pjsua_reconfigure_logging(const pjsua_logging_config *cfg)
  * PJSUA Base API.
  */
 
+/* Worker thread function. */
+static int worker_thread(void *arg)
+{
+    enum { TIMEOUT = 10 };
+
+    PJ_UNUSED_ARG(arg);
+
+    while (!pjsua_var.thread_quit_flag) {
+        int count;
+
+        count = pjsua_handle_events(TIMEOUT);
+        if (count < 0)
+            pj_thread_sleep(TIMEOUT);
+    }
+
+    return 0;
+}
+
 #if PJSUA_SEPARATE_WORKER_FOR_TIMER
 
 /* Timer heap worker thread function. */
@@ -882,26 +892,6 @@ static int worker_thread_ioqueue(void *arg)
         pj_time_val timeout = {0, 100};
         pj_ioqueue_poll(ioq, &timeout);
     }
-    return 0;
-}
-
-#else
-
-/* Worker thread function. */
-static int worker_thread(void *arg)
-{
-    enum { TIMEOUT = 10 };
-
-    PJ_UNUSED_ARG(arg);
-
-    while (!pjsua_var.thread_quit_flag) {
-        int count;
-
-        count = pjsua_handle_events(TIMEOUT);
-        if (count < 0)
-            pj_thread_sleep(TIMEOUT);
-    }
-
     return 0;
 }
 
@@ -1101,10 +1091,6 @@ PJ_DEF(pj_status_t) pjsua_init( const pjsua_config *ua_cfg,
         media_cfg = &default_media_cfg;
     }
 
-    PJ_ASSERT_ON_FAIL(ua_cfg->outbound_proxy_cnt <=
-                      PJ_ARRAY_SIZE(ua_cfg->outbound_proxy),
-                      { status = PJ_EINVAL; goto on_error; });
-
     /* Initialize logging first so that info/errors can be captured */
     if (log_cfg) {
         status = pjsua_reconfigure_logging(log_cfg);
@@ -1192,11 +1178,9 @@ PJ_DEF(pj_status_t) pjsua_init( const pjsua_config *ua_cfg,
     status = pjsip_timer_init_module(pjsua_var.endpt);
     PJ_ASSERT_RETURN(status == PJ_SUCCESS, status);
 
-#if PJSUA_HAS_SIPREC
     /* Initialize siprec support */
     status = pjsip_siprec_init_module(pjsua_var.endpt);
     PJ_ASSERT_RETURN(status == PJ_SUCCESS, status);
-#endif
 
     /* Initialize and register PJSUA application module. */
     {
@@ -1319,10 +1303,8 @@ PJ_DEF(pj_status_t) pjsua_init( const pjsua_config *ua_cfg,
     status = pjsip_pres_init_module( pjsua_var.endpt, pjsip_evsub_instance());
     PJ_ASSERT_RETURN(status == PJ_SUCCESS, status);
 
-#if PJSUA_HAS_DLG_EVENT_PKG
     status = pjsip_dlg_event_init_module( pjsua_var.endpt, pjsip_evsub_instance());
     PJ_ASSERT_RETURN(status == PJ_SUCCESS, status);
-#endif
 
     /* Initialize MWI support */
     status = pjsip_mwi_init_module(pjsua_var.endpt, pjsip_evsub_instance());
@@ -1366,7 +1348,7 @@ PJ_DEF(pj_status_t) pjsua_init( const pjsua_config *ua_cfg,
 #endif
 
         for (ii=0; ii<pjsua_var.ua_cfg.thread_cnt; ++ii) {
-            char tname[PJ_MAX_OBJ_NAME];
+            char tname[16];
             
             pj_ansi_snprintf(tname, sizeof(tname), "pjsua_%d", ii);
 
@@ -3393,12 +3375,6 @@ void pjsua_parse_media_type( pj_pool_t *pool,
 
 /*
  * Internal function to init transport selector based on account's config.
- *
- * Caller is expected to hold PJSUA_LOCK (same as ka_transport / via_tp
- * read sites). Server-affinity (#4964) reuses the cached transport ref
- * here, defensively skipping shutdown transports: pjsip_tpmgr_acquire_
- * transport2's PJSIP_TPSELECTOR_TRANSPORT short-circuit only checks
- * is_destroying, not is_shutdown.
  */
 void pjsua_init_tpselector(pjsua_acc_id acc_id,
                            pjsip_tpselector *sel)
@@ -3411,7 +3387,7 @@ void pjsua_init_tpselector(pjsua_acc_id acc_id,
         pjsua_transport_data *tpdata;
         unsigned flag;
 
-        PJ_ASSERT_RETURN(acc->cfg.transport_id >= 0 &&
+        PJ_ASSERT_RETURN(acc->cfg.transport_id >= 0 && 
                          acc->cfg.transport_id <
                          (int)PJ_ARRAY_SIZE(pjsua_var.tpdata), );
         tpdata = &pjsua_var.tpdata[acc->cfg.transport_id];
@@ -3425,14 +3401,6 @@ void pjsua_init_tpselector(pjsua_acc_id acc_id,
             sel->type = PJSIP_TPSELECTOR_LISTENER;
             sel->u.listener = tpdata->data.factory;
         }
-    } else if (acc->sa_enabled &&
-               acc->sa_next_hop_tp != NULL &&
-               !acc->sa_next_hop_tp->is_shutdown &&
-               !acc->sa_next_hop_tp->is_destroying)
-    {
-        /* Server affinity (#4964): reuse the pinned transport. */
-        sel->type = PJSIP_TPSELECTOR_TRANSPORT;
-        sel->u.transport = acc->sa_next_hop_tp;
     } else if (acc->cfg.ipv6_sip_use != PJSUA_IPV6_ENABLED_NO_PREFERENCE) {
         sel->type = PJSIP_TPSELECTOR_IP_VER;
         sel->u.ip_ver = (pjsip_tpselector_ip_ver)acc->cfg.ipv6_sip_use;
@@ -3592,28 +3560,11 @@ static void timer_cb( pj_timer_heap_t *th,
                       pj_timer_entry *entry)
 {
     pjsua_timer_list *tmr = (pjsua_timer_list *)entry->user_data;
-    void (*cb)(void *user_data);
-    void *user_data;
+    void (*cb)(void *user_data) = tmr->cb;
+    void *user_data = tmr->user_data;
 
     PJ_UNUSED_ARG(th);
 
-    /* The tmr fields are guarded by timer_mutex (they are assigned in
-     * pjsua_schedule_timer2() with the mutex held), so fetch them under
-     * the mutex.
-     */
-    pj_mutex_lock(pjsua_var.timer_mutex);
-    cb = tmr->cb;
-    user_data = tmr->user_data;
-    pj_mutex_unlock(pjsua_var.timer_mutex);
-
-    /* Invoke the callback without holding timer_mutex, since the callback
-     * may acquire it too (e.g. call_med_event_cb()) or acquire other locks,
-     * such as PJSUA_LOCK, which must not be nested under timer_mutex.
-     *
-     * Note that the entry deliberately stays in the active timer list until
-     * the callback returns: pjsua_vid.c scans that list to find out whether
-     * a pending media event callback has completed.
-     */
     if (cb)
         (*cb)(user_data);
 

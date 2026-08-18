@@ -69,12 +69,6 @@ static void dlg_on_destroy( void *arg )
     pjsip_endpt_release_pool(dlg->endpt, dlg->pool);
 }
 
-
-/* Declaration of async auth send implementation */
-static pj_status_t dlg_async_auth_send_impl(pjsip_auth_clt_sess *auth_sess,
-                                             void *user_data,
-                                             pjsip_tx_data *tdata);
-
 static pj_status_t create_dialog( pjsip_user_agent *ua,
                                   pj_grp_lock_t *grp_lock,
                                   pjsip_dialog **p_dlg)
@@ -134,18 +128,6 @@ on_error:
     pjsip_endpt_release_pool(endpt, pool);
     return status;
 }
-
-/* Sending implementation for asynchronous client authentication */
-static pj_status_t dlg_async_auth_send_impl(pjsip_auth_clt_sess *auth_sess,
-                                             void *user_data,
-                                             pjsip_tx_data *tdata)
-{
-    pjsip_dialog *dlg = (pjsip_dialog *)user_data;
-
-    PJ_UNUSED_ARG(auth_sess);
-    return pjsip_dlg_send_request(dlg, tdata, -1, NULL);
-}
-
 
 static void destroy_dialog( pjsip_dialog *dlg, pj_bool_t unlock_mutex )
 {
@@ -592,19 +574,12 @@ pj_status_t create_uas_dialog( pjsip_user_agent *ua,
         goto on_error;
 
     pj_grp_lock_add_ref(tsx_lock);
-    /* Add ref to dialog group lock before chaining the lock */
-    pj_grp_lock_add_ref(dlg->grp_lock_);
-    /* Chain locks so dlg lock is always acquired first before tsx. */
-    pj_grp_lock_chain_lock(tsx_lock, (pj_lock_t *)dlg->grp_lock_, 0);
     pj_grp_lock_acquire(tsx_lock);
 
     /* Create UAS transaction for this request. */
     status = pjsip_tsx_create_uas2(dlg->ua, rdata, tsx_lock, &tsx);
     if (status != PJ_SUCCESS)
         goto on_error;
-
-    /* Store the chained dialog lock in tsx for cleanup in tsx_on_destroy() */
-    tsx->chained_lock = dlg->grp_lock_;
 
     /* Associate this dialog to the transaction. */
     tsx->mod_data[dlg->ua->id] = dlg;
@@ -642,16 +617,6 @@ pj_status_t create_uas_dialog( pjsip_user_agent *ua,
 on_error:
     if (tsx_lock) {
         pj_grp_lock_release(tsx_lock);
-        if (!tsx) {
-            /* tsx_lock is non-NULL only if lock creation succeeded above.
-             * If tsx is NULL, the transaction was never created, so
-             * tsx_on_destroy() will never run. We must dec-ref the dialog
-             * lock ourselves. No need to unchain — grp_lock_destroy()
-             * (triggered by dec_ref below) handles chained locks, and
-             * no other thread references this tsx_lock.
-             */
-            pj_grp_lock_dec_ref(dlg->grp_lock_);
-        }
         pj_grp_lock_dec_ref(tsx_lock);
     }
 
@@ -922,14 +887,6 @@ PJ_DEF(pj_status_t) pjsip_dlg_terminate( pjsip_dialog *dlg )
     /* MUST not have pending transactions. */
     PJ_ASSERT_RETURN(dlg->tsx_count==0, PJ_EINVALIDOP);
 
-    /* Claim the teardown. If another path (e.g. pjsip_dlg_dec_lock() or a
-     * repeated terminate) has already started destroying this dialog, do
-     * not unregister/destroy it again. See #1886.
-     */
-    if (dlg->destroying)
-        return PJ_SUCCESS;
-    dlg->destroying = PJ_TRUE;
-
     return unregister_and_destroy_dialog(dlg, PJ_FALSE);
 }
 
@@ -1054,14 +1011,7 @@ PJ_DEF(void) pjsip_dlg_dec_lock(pjsip_dialog *dlg)
     pj_assert(dlg->sess_count > 0);
     --dlg->sess_count;
 
-    if (dlg->sess_count==0 && dlg->tsx_count==0 && !dlg->destroying) {
-        /* Claim the teardown before dropping the lock. Another thread
-         * holding a reference (e.g. a concurrent transaction's
-         * on_tsx_state) can acquire the group lock during the
-         * release/acquire window below and also observe zero counts;
-         * this flag makes sure only one thread destroys the dialog.
-         */
-        dlg->destroying = PJ_TRUE;
+    if (dlg->sess_count==0 && dlg->tsx_count==0) {
         pj_grp_lock_release(dlg->grp_lock_);
         pj_grp_lock_acquire(dlg->grp_lock_);
         /* We are holding the dialog group lock here, so before we destroy
@@ -1429,14 +1379,6 @@ PJ_DEF(pj_status_t) pjsip_dlg_send_request( pjsip_dialog *dlg,
         status = pjsip_tsx_create_uac(dlg->ua, tdata, &tsx);
         if (status != PJ_SUCCESS)
             goto on_error;
-
-        /* Add ref to dialog group lock before chaining the lock */
-        pj_grp_lock_add_ref(dlg->grp_lock_);
-        /* Chain locks so dlg lock is always acquired first before tsx. */
-        pj_grp_lock_chain_lock(tsx->grp_lock, (pj_lock_t *)dlg->grp_lock_, 0);
-        
-        /* Store the chained dialog lock in tsx for cleanup in tsx_on_destroy() */
-        tsx->chained_lock = dlg->grp_lock_;
 
         /* Set transport selector */
         status = pjsip_tsx_set_transport(tsx, &dlg->tp_sel);
@@ -1843,16 +1785,8 @@ void pjsip_dlg_on_rx_request( pjsip_dialog *dlg, pjsip_rx_data *rdata )
         status = pj_grp_lock_create(dlg->pool, NULL, &tsx_lock);
         if (status == PJ_SUCCESS) {
             pj_grp_lock_add_ref(tsx_lock);
-            /* Add ref to dialog group lock before chaining the lock */
-            pj_grp_lock_add_ref(dlg->grp_lock_);
-            /* Chain locks so dlg lock is always acquired first before tsx. */
-            pj_grp_lock_chain_lock(tsx_lock, (pj_lock_t *)dlg->grp_lock_, 0);
             pj_grp_lock_acquire(tsx_lock);
             status = pjsip_tsx_create_uas2(dlg->ua, rdata, tsx_lock, &tsx);
-            if (status == PJ_SUCCESS) {
-                /* Store the chained dialog lock in tsx for cleanup in tsx_on_destroy() */
-                tsx->chained_lock = dlg->grp_lock_;
-            }
         }
 
         if (status != PJ_SUCCESS) {
@@ -1968,20 +1902,6 @@ void pjsip_dlg_on_rx_request( pjsip_dialog *dlg, pjsip_rx_data *rdata )
 on_return:
     if (tsx_lock) {
         pj_grp_lock_release(tsx_lock);
-        if (!tsx) {
-            /* tsx_lock was created and locks were chained, but tsx creation
-             * failed (pjsip_tsx_create_uas2 returned error). Since there is
-             * no transaction, tsx_on_destroy() will never run, so we must
-             * dec-ref the dialog lock ourselves. No need to unchain —
-             * grp_lock_destroy() handles chained locks, and no other
-             * thread references this tsx_lock.
-             */
-            pj_grp_lock_dec_ref(dlg->grp_lock_);
-        }
-        /* If tsx was successfully created, tsx_on_destroy() will handle
-         * dec-ref of dlg->grp_lock_. Do NOT do it here to avoid
-         * double dec-ref.
-         */
         pj_grp_lock_dec_ref(tsx_lock);
     }
     /* Unlock dialog and dec session, may destroy dialog. */
@@ -2281,58 +2201,14 @@ void pjsip_dlg_on_rx_response( pjsip_dialog *dlg, pjsip_rx_data *rdata )
         {
             pjsip_transaction *tsx = pjsip_rdata_get_tsx(rdata);
             pjsip_tx_data *tdata;
-            pjsip_auth_clt_async_on_chal_param chal_param = { 0 };
 
-            /* Check if application handles the authentication.
-             * Allocate a per-challenge token from tsx->pool so that
-             * concurrent 401/407s on the same dialog each get their
-             * own token (the tsx grp_lock ref keeps the pool alive
-             * until the token is consumed).
-             *
-             * Release the dialog lock while invoking the callback to
-             * prevent deadlock if the application calls
-             * pjsip_auth_clt_async_send_req() synchronously from within
-             * the callback. sess_count remains elevated so the dialog
-             * stays alive while the lock is released.
-             */
-            {
-                pjsip_auth_clt_async_impl_token *auth_token;
-                auth_token = PJ_POOL_ZALLOC_T(
-                                    tsx->pool,
-                                    pjsip_auth_clt_async_impl_token);
-                auth_token->user_data    = dlg;
-                auth_token->send_impl    = &dlg_async_auth_send_impl;
-                /* abandon_impl is NULL: dialog-level send is stateless
-                 * (just forwards to pjsip_dlg_send_request), so no
-                 * cleanup is needed on abandon.  grp_lock dec_ref
-                 * handles the token memory.
-                 */
-                auth_token->grp_lock     = tsx->grp_lock;
-                pj_grp_lock_add_ref(tsx->grp_lock);
+            status = pjsip_auth_clt_reinit_req( &dlg->auth_sess,
+                                                rdata, tsx->last_tx,
+                                                &tdata);
 
-                chal_param.rdata = rdata;
-                chal_param.tdata = tsx->last_tx;
-                pj_grp_lock_release(dlg->grp_lock_);
-                status = pjsip_auth_clt_async_impl_on_challenge(
-                                                    &dlg->auth_sess,
-                                                    auth_token,
-                                                    &chal_param);
-                pj_grp_lock_acquire(dlg->grp_lock_);
-                if (status != PJ_SUCCESS)
-                    pj_grp_lock_dec_ref(tsx->grp_lock);
-            }
-
-            if (status != PJ_SUCCESS) {
-                /* Application does not handle the authentication,
-                 * fall back to synchronous reinit.
-                 */
-                status = pjsip_auth_clt_reinit_req(&dlg->auth_sess,
-                                                   rdata, tsx->last_tx,
-                                                   &tdata);
-                if (status == PJ_SUCCESS) {
-                    /* Re-send request. */
-                    status = pjsip_dlg_send_request(dlg, tdata, -1, NULL);
-                }
+            if (status == PJ_SUCCESS) {
+                /* Re-send request. */
+                status = pjsip_dlg_send_request(dlg, tdata, -1, NULL);
             }
         }
     }

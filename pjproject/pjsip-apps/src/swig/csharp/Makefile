@@ -120,9 +120,6 @@ clean distclean realclean:
 	rm -rf ./$(OUT_DIR)/*
 	rm -rf ./$(LIBPJSUA2_DIR)/*
 	rm -rf ./$(SUP_CLASS_DIR)/*.java
-	rm -rf ./$(MAUI_OUT_DIR)/*
-	rm -rf ./$(MAUI_LIBPJSUA2_DIR)/*
-	rm -rf ./$(MAUI_SUP_CLASS_DIR)/*.java
 
 install:
 

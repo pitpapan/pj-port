@@ -38,13 +38,8 @@ PJ_DEF(pj_ssize_t) pj_strspn(const pj_str_t *str, const pj_str_t *set_char)
             break;
 
         for (j = 0; j < set_char->slen; j++) {
-            if (str->ptr[i] == set_char->ptr[j]) {
-                /* Count this character only once, even if the set contains
-                 * duplicate characters.
-                 */
+            if (str->ptr[i] == set_char->ptr[j])
                 count++;
-                break;
-            }
         }
     }
     return count;
@@ -59,13 +54,8 @@ PJ_DEF(pj_ssize_t) pj_strspn2(const pj_str_t *str, const char *set_char)
             break;
 
         for (j = 0; set_char[j] != 0; j++) {
-            if (str->ptr[i] == set_char[j]) {
-                /* Count this character only once, even if the set contains
-                 * duplicate characters.
-                 */
+            if (str->ptr[i] == set_char[j])
                 count++;
-                break;
-            }
         }
     }
     return count;

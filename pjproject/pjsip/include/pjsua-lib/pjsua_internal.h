@@ -95,13 +95,6 @@ struct pjsua_call_media
     pjmedia_transport   *tp;        /**< Current media transport (can be 0) */
     pj_status_t          tp_ready;  /**< Media transport status.            */
     pj_status_t          tp_result; /**< Media transport creation result.   */
-    unsigned             tp_init_gen;/**< Media transport init generation,
-                                          bumped on each (re)init and when a
-                                          synchronous init wait is abandoned. */
-    unsigned             tp_result_gen;/**< Generation that tp_result belongs
-                                            to; a deferred completion whose
-                                            generation no longer matches
-                                            tp_init_gen is stale and ignored. */
     pjmedia_transport   *tp_orig;   /**< Original media transport           */
     pj_bool_t            tp_auto_del; /**< May delete media transport       */
     pjsua_med_tp_st      tp_st;     /**< Media transport state              */
@@ -129,30 +122,6 @@ struct pjsua_call_media
  * Maximum number of SDP "m=" lines to be supported.
  */
 #define PJSUA_MAX_CALL_MEDIA            PJMEDIA_MAX_SDP_MEDIA
-
-/* Pack/extract call id (lower 16 bits) and media index (upper 16 bits)
- * in media stream callback user data. Valid input is [0, 0x7FFF] and
- * asserted in debug builds. The fields are stored as signed 16-bit
- * values so that an invalid -1 escaping the assertion in release
- * builds still decodes as -1 rather than 65535.
- */
-PJ_INLINE(void*) pjsua_med_udata_pack(pjsua_call_id call_id, int med_idx)
-{
-    pj_assert(call_id >= 0 && call_id <= 0x7FFF &&
-              med_idx >= 0 && med_idx <= 0x7FFF);
-    return (void*)(((pj_size_t)(pj_uint16_t)med_idx << 16) |
-                   (pj_size_t)(pj_uint16_t)call_id);
-}
-
-PJ_INLINE(pjsua_call_id) pjsua_med_udata_call_id(const void *udata)
-{
-    return (pjsua_call_id)(pj_int16_t)((pj_size_t)udata & 0xFFFF);
-}
-
-PJ_INLINE(int) pjsua_med_udata_med_idx(const void *udata)
-{
-    return (int)(pj_int16_t)(((pj_size_t)udata >> 16) & 0xFFFF);
-}
 
  /**
   * Maximum number of streams from an avi player.
@@ -351,48 +320,6 @@ typedef struct pjsua_acc
     pj_sockaddr      ka_target;     /**< Destination address for K-A    */
     unsigned         ka_target_len; /**< Length of ka_target.           */
 
-    /* Account-scoped server affinity (issue #4964). Pins the resolved
-     * next-hop on REGISTER (or via pjsua_acc_set_affinity_addr) so that
-     * subsequent same-account requests bypass the SRV/DNS server-election
-     * randomness in pjlib-util/srv_resolver.c.
-     */
-    pj_bool_t        sa_enabled;    /**< Effective enabled flag.         */
-    pj_bool_t        sa_pin_explicit;  /**< Pin was set by API call (not
-                                            auto-captured). Survives
-                                            auto-rereg pin drop.        */
-    pj_sockaddr      sa_next_hop_addr; /**< Cached resolved address.     */
-    pjsip_transport *sa_next_hop_tp;   /**< Cached transport (ref'd).
-                                            NULL when pin is empty; set
-                                            on regc_cb auto-capture or
-                                            pjsua_acc_set_affinity_addr
-                                            success.                    */
-    pjsip_route_hdr *sa_route_hdr;     /**< Hidden Route injected at the
-                                            head of route_set when pin
-                                            is active. Constrains UDP
-                                            destination via loose-route.
-                                            Suppressed from wire by the
-                                            ;hide URI param. NULL when
-                                            pin is empty.               */
-    pj_sockaddr      sa_route_hdr_addr;/**< The address sa_route_hdr was
-                                            built for. Used to skip
-                                            pjsip_parse_hdr() rebuild
-                                            when the cached header is
-                                            still valid (e.g., on the
-                                            acc_modify detach/reattach
-                                            path).                      */
-    pjsip_route_hdr  sa_pushed_route;  /**< Mirror of what we last
-                                            pushed to regc. Diffed
-                                            against acc->route_set
-                                            before each push so we
-                                            skip the regc clone when
-                                            nothing actually changed.   */
-    pj_pool_t       *sa_mirror_pool;   /**< Sub-pool for sa_pushed_route
-                                            clones. Reset on each
-                                            mirror rebuild so memory
-                                            does not grow with each
-                                            sync (acc->pool has no
-                                            reset point).               */
-
     pjsip_route_hdr  route_set;     /**< Complete route set inc. outbnd.*/
     pj_uint32_t      global_route_crc; /** CRC of global route setting. */
     pj_uint32_t      local_route_crc;  /** CRC of account route setting.*/
@@ -404,12 +331,6 @@ typedef struct pjsua_acc
     pj_str_t         rfc5626_instprm;/**< SIP outbound instance param.  */
     pj_str_t         rfc5626_regprm;/**< SIP outbound reg param.        */
     unsigned         rfc5626_flowtmr;/**< SIP outbound flow timer.      */
-    pj_bool_t        outbound_rejected;/**< First hop answered 439 to
-                                            outbound. Unlike
-                                            rfc5626_status this survives
-                                            destroy_regc(), so the
-                                            re-REGISTER is rebuilt
-                                            without outbound.           */
 
     unsigned         cred_cnt;      /**< Number of credentials.         */
     pjsip_cred_info  cred[PJSUA_ACC_MAX_PROXIES]; /**< Complete creds.  */
@@ -427,8 +348,7 @@ typedef struct pjsua_acc
     pjsip_transport_type_e tp_type; /**< Transport type (for local acc or
                                          transport binding)             */
     pjsua_ip_change_op ip_change_op;/**< IP change process progress.    */
-    pjsip_auth_clt_sess shared_auth_sess; /**< Share one auth session over
-                                               all requests             */
+    pjsip_auth_clt_sess shared_auth_sess; /**< share one auth over all requests */
 } pjsua_acc;
 
 
@@ -574,9 +494,6 @@ typedef struct pjsua_vid_win
     pjsua_vid_win_type           type;          /**< Type.              */
     pj_pool_t                   *pool;          /**< Own pool.          */
     unsigned                     ref_cnt;       /**< Reference counter. */
-    pj_bool_t                    is_destroying; /**< Currently being torn
-                                                     down (free_vid_win()
-                                                     in progress).      */
     pjmedia_vid_port            *vp_cap;        /**< Capture vidport.   */
     pjmedia_vid_port            *vp_rend;       /**< Renderer vidport   */
     pjsua_conf_port_id           cap_slot;      /**< Capturer conf slot */
@@ -694,8 +611,6 @@ struct pjsua_data
     pjmedia_master_port *null_snd;  /**< Master port for null sound.    */
     pjmedia_port        *null_port; /**< Null port.                     */
     pj_bool_t            snd_is_on; /**< Media flow is currently active */
-    pj_bool_t            snd_avoid_clock_gap; /**< Keep clock continuity
-                                                    across null<->real dev */
     unsigned             snd_mode;  /**< Sound device mode.             */
 
     /* Video device */
@@ -881,35 +796,6 @@ pj_status_t pjsua_acc_get_uac_addr(pjsua_acc_id acc_id,
                                    pjsip_transport_type_e *p_tp_type,
                                    int *p_secure,
                                    const void **p_tp);
-
-/* Get local transport address suitable to be used for the Via address of
- * requests sent by a UAS dialog. Unlike pjsua_acc_get_uac_addr(), the next
- * hop is taken from the dialog route set (from the incoming Record-Route),
- * falling back to the remote target. Returns PJ_ENOTFOUND when the next hop
- * is a reliable transport (the Via is then resolved at send time), so the
- * caller should leave the Via untouched.
- */
-pj_status_t pjsua_acc_get_uas_addr(pjsua_acc_id acc_id,
-                                   pj_pool_t *pool,
-                                   pjsip_dialog *dlg,
-                                   pjsip_host_port *addr,
-                                   pjsip_transport_type_e *p_tp_type,
-                                   int *p_secure,
-                                   const void **p_tp);
-
-/* Get local transport address for the Via of requests sent by a UAC dialog.
- * Like pjsua_acc_get_uac_addr(), the next hop is the account outbound proxy
- * when configured, but otherwise the dialog's remote target (not the account
- * id URI). Returns PJ_ENOTFOUND when the next hop is a reliable transport (the
- * Via is resolved at send time), so the caller should leave the Via untouched.
- */
-pj_status_t pjsua_acc_get_uac_dlg_addr(pjsua_acc_id acc_id,
-                                       pj_pool_t *pool,
-                                       pjsip_dialog *dlg,
-                                       pjsip_host_port *addr,
-                                       pjsip_transport_type_e *p_tp_type,
-                                       int *p_secure,
-                                       const void **p_tp);
 
 /**
  * Handle incoming invite request.
@@ -1182,14 +1068,6 @@ pj_status_t pjsua_acc_handle_call_on_ip_change(pjsua_acc *acc);
  * End IP change process per account.
  */
 void pjsua_acc_end_ip_change(pjsua_acc *acc);
-
-/*
- * Bridge callback: maps low-level auth challenge to pjsua on_auth_challenge.
- */
-pj_bool_t pjsua_auth_on_challenge(
-                             pjsip_auth_clt_sess *sess,
-                             void *token,
-                             const pjsip_auth_clt_async_on_chal_param *param);
 
 PJ_END_DECL
 

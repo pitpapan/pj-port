@@ -409,17 +409,6 @@ typedef struct pj_stun_resolve_result pj_stun_resolve_result;
 
 
 /**
- * Default value for account-scoped server affinity. See
- * #pjsua_acc_config.server_affinity for details.
- *
- * Default: 0 (disabled)
- */
-#ifndef PJSUA_ACC_SERVER_AFFINITY_DEFAULT
-#   define PJSUA_ACC_SERVER_AFFINITY_DEFAULT    0
-#endif
-
-
-/**
  * Specify whether pjsua should disable automatically sending initial
  * answer 100/Trying for incoming calls. If disabled, application can
  * later send 100/Trying if it wishes using pjsua_call_answer().
@@ -437,23 +426,6 @@ typedef struct pj_stun_resolve_result pj_stun_resolve_result;
  */
 #ifndef PJSUA_ICE_TRANSPORT_OPTION
 #   define PJSUA_ICE_TRANSPORT_OPTION   0
-#endif
-
-/**
- * Maximum time (in milliseconds) to wait for synchronous ICE media transport
- * initialization to complete. When ICE is created synchronously (i.e. neither
- * asynchronous transport creation nor trickle ICE is active), pjsua will wait
- * for the ICE initialization callback before proceeding. Normally the ICE
- * stack reports back within its own STUN/TURN timeouts, but this setting acts
- * as a safety net so the calling thread cannot block indefinitely if the
- * callback never arrives (e.g. a candidate stuck pending forever).
- *
- * Set to zero to disable the timeout and wait indefinitely (legacy behavior).
- *
- * Default: 30000 ms (30 seconds)
- */
-#ifndef PJSUA_ICE_TRANSPORT_INIT_TIMEOUT
-#   define PJSUA_ICE_TRANSPORT_INIT_TIMEOUT     30000
 #endif
 
 /**
@@ -479,33 +451,6 @@ typedef struct pj_stun_resolve_result pj_stun_resolve_result;
 #ifndef PJSUA_DETECT_MERGED_REQUESTS
 #   define PJSUA_DETECT_MERGED_REQUESTS  1
 #endif
-
-
-/**
- * Is session record (siprec) enabled.
- *
- * This feature is not fully implemented yet. Currently it only signals and
- * verifies siprec capability in Supported & Required headers in INVITE.
- *
- * Default: 0 (disabled)
- */
-#ifndef PJSUA_HAS_SIPREC
-#   define PJSUA_HAS_SIPREC              0
-#endif
-
-
-/**
- * Enable support for RFC 4235 dialog event package. This was introduced in
- * PJSIP version 2.16 and provides client-side dialog event subscription
- * support. Set this to 0 to disable the dialog event package, which can be
- * useful if you have your own implementation of the dialog event server.
- *
- * Default: 1 (enabled)
- */
-#ifndef PJSUA_HAS_DLG_EVENT_PKG
-#   define PJSUA_HAS_DLG_EVENT_PKG       1
-#endif
-
 
 /**
  * This enumeration represents pjsua state.
@@ -728,20 +673,6 @@ typedef struct pjsua_on_stream_created_param
      * On input, it specifies the audio media port of the stream. Application
      * may modify this pointer to point to different media port to be
      * registered to the conference bridge.
-     *
-     * \warning
-     * If the substituted port retains a pointer to the original audio
-     * stream port (e.g. a DSP wrapper around it), the application must
-     * take a reference on the inner port's group lock at construction
-     * (pj_grp_lock_add_ref() on the original port->grp_lock) and release
-     * it from the wrapper's on_destroy(). Otherwise
-     * pjmedia_stream_destroy(), which PJSUA calls unconditionally at
-     * call teardown, may free the inner port while the conference bridge
-     * is still iterating over the wrapper. The substituted port also
-     * needs its own pool released from on_destroy(); set
-     * #pjsua_on_stream_created_param::destroy_port to PJ_TRUE so PJSUA
-     * fires the destroy chain. See "Customizing the Audio Stream Port"
-     * in the docs guide for the full contract.
      */
     pjmedia_port        *port;
 
@@ -1068,12 +999,6 @@ typedef struct pjsua_dtmf_info {
      */
     unsigned duration;
 
-    /**
-     * The media index of the audio stream that received the DTMF, or -1
-     * if the DTMF was not received via a media stream (e.g. SIP INFO).
-     */
-    int med_idx;
-
 } pjsua_dtmf_info;
 
 
@@ -1123,12 +1048,6 @@ typedef struct pjsua_dtmf_event {
      * an event with PJMEDIA_STREAM_DTMF_IS_END for every event.
      */
     unsigned flags;
-
-    /**
-     * The media index of the audio stream that received the DTMF, or -1
-     * if the DTMF was not received via a media stream (e.g. SIP INFO).
-     */
-    int med_idx;
 } pjsua_dtmf_event;
 
 
@@ -1151,11 +1070,6 @@ typedef struct pjsua_txt_stream_data {
      * Note that the text can be empty.
      */
     pj_str_t            text;
-
-    /**
-     * The index of the text media stream that received the text.
-     */
-    int                 med_idx;
 
 } pjsua_txt_stream_data;
 
@@ -1305,63 +1219,6 @@ typedef void (*pjsua_on_rejected_incoming_call_cb)(
 
 
 /**
- * This structure contains the parameters for \a on_auth_challenge callback.
- */
-typedef struct pjsua_on_auth_challenge_param
-{
-    /**
-     * The account ID associated with the challenged request.
-     * May be PJSUA_INVALID_ID if the account cannot be determined.
-     */
-    pjsua_acc_id                acc_id;
-
-    /**
-     * The call ID associated with the challenged request.
-     * Will be PJSUA_INVALID_ID for non-call requests (REGISTER, PUBLISH,
-     * out-of-dialog MESSAGE, etc.).
-     */
-    pjsua_call_id               call_id;
-
-    /**
-     * The account-level shared authentication session.
-     * Use this when calling pjsip_auth_clt_async_send_req() or
-     * pjsip_auth_clt_async_abandon().
-     */
-    pjsip_auth_clt_sess        *auth_sess;
-
-    /**
-     * The authentication token to be passed to
-     * pjsip_auth_clt_async_send_req() or pjsip_auth_clt_async_abandon().
-     */
-    void                       *token;
-
-    /**
-     * The 401/407 response containing the challenge.
-     * Only valid during the callback. Clone with pjsip_rx_data_clone()
-     * if needed beyond the callback.
-     */
-    const pjsip_rx_data        *rdata;
-
-    /**
-     * The original request that was challenged. Needed to build the
-     * authenticated retry. Only valid during the callback unless the
-     * application extends its lifetime using pjsip_tx_data_add_ref().
-     */
-    pjsip_tx_data              *tdata;
-
-    /**
-     * Output: set to PJ_TRUE if the application handles the challenge.
-     * The application MUST then eventually call
-     * pjsip_auth_clt_async_send_req() or pjsip_auth_clt_async_abandon().
-     * Default PJ_FALSE means the library handles authentication
-     * via the synchronous path.
-     */
-    pj_bool_t                   handled;
-
-} pjsua_on_auth_challenge_param;
-
-
-/**
  * This structure describes application callback to receive various event
  * notification from PJSUA-API. All of these callbacks are OPTIONAL,
  * although definitely application would want to implement some of
@@ -1404,53 +1261,6 @@ typedef struct pjsua_callback
     void (*on_call_tsx_state)(pjsua_call_id call_id,
                               pjsip_transaction *tsx,
                               pjsip_event *e);
-
-    /**
-     * Notification when an in-dialog UAC transaction within the call is
-     * about to cause the call to be terminated due to RFC 3261 #12.2.1.2
-     * failures: 408 Request Timeout, transaction timeout, or 481
-     * Call/Transaction Does Not Exist. The library would otherwise send
-     * BYE automatically.
-     *
-     * If implemented, the application can return PJ_TRUE to suppress the
-     * automatic termination and keep the call alive, e.g. when an INFO or
-     * MESSAGE request fails for application-level reasons (see RFC 5057
-     * #5.2; ETSI EN 16072 eCall, etc.). When suppressed, the library
-     * still cancels any pending SDP offer that the failed re-INVITE or
-     * UPDATE carried, so the call remains usable for subsequent
-     * renegotiation. inv->cause is not set to the failed status.
-     *
-     * Interaction with pjsip_cfg()->endpt.keep_inv_after_tsx_timeout:
-     * when that global flag is set, the 408/timeout branch is short-
-     * circuited before the callback is reached, so the callback is not
-     * invoked for 408 -- the session is already kept by the global flag.
-     * The callback is still invoked for 481. Applications that want this
-     * callback to be the sole authority for both should leave the global
-     * flag at its default (PJ_FALSE).
-     *
-     * Threading: invoked synchronously while the dialog group lock is
-     * held. The application MUST NOT call any pjsua, pjsip_dlg, or
-     * pjsip_inv API that would acquire a higher-order lock (PJSUA_LOCK
-     * > dialog grp_lock > tsx grp_lock) from inside this callback --
-     * doing so risks deadlock. Defer such work to a timer.
-     *
-     * Note: this callback must be set in pjsua_callback BEFORE
-     * pjsua_init(); installing it later has no effect because pjsua wires
-     * the underlying pjsip-ua hook only at init time.
-     *
-     * This callback is optional. When not set, the call is terminated as
-     * per the default behavior.
-     *
-     * @param call_id   The call identification.
-     * @param tsx       The failed UAC transaction.
-     * @param e         The event that caused the failure.
-     *
-     * @return          PJ_TRUE to suppress the automatic call termination.
-     *                  PJ_FALSE (default) to keep current behavior.
-     */
-    pj_bool_t (*on_call_tsx_terminate_session)(pjsua_call_id call_id,
-                                               pjsip_transaction *tsx,
-                                               pjsip_event *e);
 
     /**
      * Notify application when a transaction started by pjsua_acc_send_request()
@@ -1517,18 +1327,7 @@ typedef struct pjsua_callback
      * This media port then will be added to the conference bridge instead.
      *
      * Note: if implemented, on_stream_created2() callback will be called
-     * instead of this one.
-     *
-     * \warning
-     * Same lifetime contract as on_stream_created2(): if the substituted
-     * port wraps the original audio stream port, the wrapper must pin
-     * the inner port via pj_grp_lock_add_ref() on (*p_port)->grp_lock at
-     * construction and release it from on_destroy(). This callback has
-     * no #pjsua_on_stream_created_param::destroy_port equivalent, so the
-     * application must call pjmedia_port_destroy() on the substituted
-     * port itself (e.g. from on_stream_destroyed()) so the destroy
-     * chain fires. Prefer on_stream_created2() for new code. See
-     * "Customizing the Audio Stream Port" in the docs guide.
+     * instead of this one. 
      *
      * @param call_id       Call identification.
      * @param strm          Audio media stream.
@@ -1548,20 +1347,6 @@ typedef struct pjsua_callback
      * registered to the conference bridge. Application may return different
      * audio media port if it has added media processing port to the stream.
      * This media port then will be added to the conference bridge instead.
-     *
-     * \warning
-     * If the substituted port retains a pointer to the original audio
-     * stream port (e.g. a DSP wrapper around it), the application must
-     * take a reference on the inner port's group lock at construction
-     * (pj_grp_lock_add_ref() on the original param->port->grp_lock) and
-     * release it from the wrapper's on_destroy(). Otherwise
-     * pjmedia_stream_destroy(), which PJSUA calls unconditionally at
-     * call teardown, may free the inner port while the conference bridge
-     * is still iterating over the wrapper. The substituted port also
-     * needs its own pool released from on_destroy(); set
-     * #pjsua_on_stream_created_param::destroy_port to PJ_TRUE so PJSUA
-     * fires the destroy chain. See "Customizing the Audio Stream Port"
-     * in the docs guide for the full contract.
      *
      * @param call_id       Call identification.
      * @param param         The on stream created callback parameter.
@@ -1592,7 +1377,7 @@ typedef struct pjsua_callback
     void (*on_dtmf_digit)(pjsua_call_id call_id, int digit);
 
     /**
-     * Notify application upon incoming DTMF digits using the method specified
+     * Notify application upon incoming DTMF digits using the method specified 
      * in \a pjsua_dtmf_method. This callback will not be called if app
      * implements \a on_dtmf_event().
      *
@@ -1602,7 +1387,7 @@ typedef struct pjsua_callback
     void (*on_dtmf_digit2)(pjsua_call_id call_id, const pjsua_dtmf_info *info);
 
     /**
-     * Notify application upon incoming DTMF digits using the method specified
+     * Notify application upon incoming DTMF digits using the method specified 
      * in \a pjsua_dtmf_method. Includes additional information about events
      * received via RTP.
      *
@@ -2230,8 +2015,7 @@ typedef struct pjsua_callback
      * Callback when the sound device is about to be opened or closed.
      * This callback will be called even when null sound device or no
      * sound device is configured by the application (i.e. the
-     * #pjsua_set_null_snd_dev(), #pjsua_set_null_snd_dev2(), and
-     * #pjsua_set_no_snd_dev() APIs).
+     * #pjsua_set_null_snd_dev() and #pjsua_set_no_snd_dev() APIs).
      * Application can use the API #pjsua_get_snd_dev() to get the info
      * about which sound device is going to be opened/closed.
      *
@@ -2400,30 +2184,6 @@ typedef struct pjsua_callback
      * callback.
      */
     pjmedia_vid_conf_op_cb on_vid_conf_op_completed;
-
-    /**
-     * This callback is called when a 401/407 challenge is received.
-     * It may be triggered by any outgoing SIP request that receives a
-     * 401/407 response, including REGISTER, INVITE, PUBLISH, MESSAGE, etc.
-     *
-     * To handle the challenge, the application should set
-     * \a param->handled to PJ_TRUE and later call
-     * pjsip_auth_clt_async_send_req() to resend with authentication,
-     * or pjsip_auth_clt_async_abandon() to give up. Both may be called
-     * synchronously within this callback or deferred.
-     *
-     * If \a param->handled is left as PJ_FALSE (the default), the library
-     * falls back to synchronous authentication using configured credentials.
-     *
-     * If this callback is not set, the library will handle authentication
-     * automatically using the configured credentials (synchronous path).
-     *
-     * Note: this callback is invoked from the SIP worker thread.
-     * PJSUA_LOCK is NOT held during the callback.
-     *
-     * @param param     The callback parameters.
-     */
-    void (*on_auth_challenge)(pjsua_on_auth_challenge_param *param);
 
 } pjsua_callback;
 
@@ -2699,38 +2459,6 @@ typedef struct pjsua_config
     pjsua_sip_siprec_use use_siprec;
 
     /**
-     * Specify whether SIPREC label attributes ('a=label') are required
-     * in incoming INVITE requests.
-     *
-     * When set to PJ_TRUE, SIPREC INVITEs without the label attribute in
-     * all media streams will be rejected with 400 Bad Request. This enforces
-     * RFC 7866 compliance for proper metadata correlation.
-     *
-     * When set to PJ_FALSE (default), the SRS will accept SIPREC INVITEs
-     * even without labels for better interoperability. Missing labels will
-     * be logged as warnings for debugging purposes.
-     *
-     * Default: PJ_FALSE (allow for interoperability)
-     */
-    pj_bool_t       siprec_require_label;
-
-    /**
-     * Specify whether SIPREC rs-metadata documents are required
-     * in incoming INVITE requests.
-     *
-     * When set to PJ_TRUE, SIPREC INVITEs without rs-metadata documents
-     * will be rejected with 400 Bad Request. This enforces strict RFC 7866
-     * compliance for complete recording session metadata.
-     *
-     * When set to PJ_FALSE (default), the SRS will accept SIPREC INVITEs
-     * even without rs-metadata for better interoperability. Missing metadata
-     * will be logged as warnings for debugging purposes.
-     *
-     * Default: PJ_FALSE (allow for interoperability)
-     */
-    pj_bool_t       siprec_require_metadata;
-
-    /**
      * Handle unsolicited NOTIFY requests containing message waiting 
      * indication (MWI) info. Unsolicited MWI is incoming NOTIFY requests 
      * which are not requested by client with SUBSCRIBE request. 
@@ -2854,26 +2582,6 @@ typedef struct pjsua_config
      * Default: empty string
      */
     pj_str_t         upnp_if_name;
-
-    /**
-     * When non-zero, "norefersub" is advertised in the SIP Supported header
-     * per RFC 4488, indicating that this endpoint is capable of suppressing
-     * the implicit REFER event subscription.  The actual suppression is
-     * negotiated per-call via the Refer-Sub header; this flag only controls
-     * whether the capability is announced.
-     *
-     * Default: PJ_TRUE
-     */
-    pj_bool_t        no_refer_sub;
-
-    /**
-     * Default value for pjsua_acc_config.server_affinity. New accounts
-     * with server_affinity set to PJSUA_SERVER_AFFINITY_UNSPECIFIED will
-     * inherit this value.
-     *
-     * Default: PJSUA_ACC_SERVER_AFFINITY_DEFAULT
-     */
-    pj_bool_t        acc_server_affinity_default;
 
 } pjsua_config;
 
@@ -4320,31 +4028,6 @@ typedef enum pjsua_ipv6_use
 } pjsua_ipv6_use;
 
 /**
- * Specify how server affinity is configured per account. Tristate so that
- * pjsua_acc_modify() can leave the inherited setting intact by passing
- * PJSUA_SERVER_AFFINITY_UNSPECIFIED. UNSPECIFIED falls back to the global
- * pjsua_config.acc_server_affinity_default.
- */
-typedef enum pjsua_server_affinity_mode
-{
-    /**
-     * Inherit from pjsua_config.acc_server_affinity_default.
-     */
-    PJSUA_SERVER_AFFINITY_UNSPECIFIED = 0,
-
-    /**
-     * Server affinity disabled.
-     */
-    PJSUA_SERVER_AFFINITY_DISABLED,
-
-    /**
-     * Server affinity enabled.
-     */
-    PJSUA_SERVER_AFFINITY_ENABLED
-
-} pjsua_server_affinity_mode;
-
-/**
  * Specify NAT64 options to be used in account config.
  */
 typedef enum pjsua_nat64_opt
@@ -4547,41 +4230,7 @@ typedef struct pjsua_acc_config
     pjsua_sip_siprec_use use_siprec;
 
     /**
-     * Specify whether SIPREC label attributes ('a=label') are required
-     * in incoming INVITE requests.
-     *
-     * When set to PJ_TRUE, SIPREC INVITEs without the label attribute in
-     * all media streams will be rejected with 400 Bad Request. This enforces
-     * RFC 7866 compliance for proper metadata correlation.
-     *
-     * When set to PJ_FALSE (default), the SRS will accept SIPREC INVITEs
-     * even without labels for better interoperability. Missing labels will
-     * be logged as warnings for debugging purposes.
-     *
-     * Default: The default value is taken from siprec_require_label in
-     *          pjsua_config (PJ_FALSE).
-     */
-    pj_bool_t       siprec_require_label;
-
-    /**
-     * Specify whether SIPREC rs-metadata documents are required
-     * in incoming INVITE requests.
-     *
-     * When set to PJ_TRUE, SIPREC INVITEs without rs-metadata documents
-     * will be rejected with 400 Bad Request. This enforces strict RFC 7866
-     * compliance for complete recording session metadata.
-     *
-     * When set to PJ_FALSE (default), the SRS will accept SIPREC INVITEs
-     * even without rs-metadata for better interoperability. Missing metadata
-     * will be logged as warnings for debugging purposes.
-     *
-     * Default: The default value is taken from siprec_require_metadata in
-     *          pjsua_config (PJ_FALSE).
-     */
-    pj_bool_t       siprec_require_metadata;
-
-    /**
-     * Specify Session Timer settings, see #pjsip_timer_setting.
+     * Specify Session Timer settings, see #pjsip_timer_setting. 
      */
     pjsip_timer_setting timer_setting;
 
@@ -4915,35 +4564,6 @@ typedef struct pjsua_acc_config
     pjsua_ipv6_use              ipv6_media_use;
 
     /**
-     * Server affinity. When enabled, the account pins the resolved
-     * next-hop server (address + transport) and reuses it across
-     * subsequent same-account requests, instead of re-selecting on every
-     * DNS resolution. For TLS, this skips the per-request CVE-2020-15260
-     * hostname check on reuse: trust is asserted at handshake.
-     *
-     * TCP/TLS pinning is via the transport selector. UDP pinning is via
-     * a hidden Route header (suppressed from the wire) since the UDP
-     * listener is shared. Pin recovery on graceful migration is driven
-     * by the auto-rereg retry path: a retry-eligible REGISTER failure
-     * drops the auto-captured pin so the retry can pick a different
-     * address from the resolved set. Pins set explicitly via
-     * #pjsua_acc_set_affinity_addr are preserved across retries.
-     *
-     * Limitation: when #reg_use_proxy is set to 0 (REGISTER bypasses
-     * both outbound and account proxies) and UDP affinity is enabled,
-     * the configured proxies may still appear in REGISTER routing
-     * alongside the affinity pin, partially defeating the
-     * reg_use_proxy=0 intent. Use the default #PJSUA_REG_USE_ALL_PROXY
-     * with UDP affinity if this matters.
-     *
-     * See \issue{4964} for the design (motivation, trust model, lifecycle).
-     *
-     * Default: PJSUA_SERVER_AFFINITY_UNSPECIFIED (inherit from
-     * pjsua_config.acc_server_affinity_default).
-     */
-    pjsua_server_affinity_mode  server_affinity;
-
-    /**
      * Control the use of STUN for the SIP signaling.
      *
      * Default: PJSUA_STUN_USE_DEFAULT
@@ -5189,20 +4809,14 @@ typedef struct pjsua_acc_config
 
     /**
      * Use a shared authorization session within this account.
-     * This will use the account's credentials on outgoing requests,
-     * so that fewer 401/407 responses will be returned.
-     *
-     * When the \a on_auth_challenge callback is set, the shared session
-     * is also used as the auth session passed to the callback, regardless
-     * of this setting.
+     * This will use the accounts credentials on outgoing requests,
+     * so that less 401/407 Responses will be returned.
      *
      * Needs PJSIP_AUTH_AUTO_SEND_NEXT and PJSIP_AUTH_HEADER_CACHING
      * enabled to work properly, and also will grow usage of the used pool for
      * the cached headers.
      *
      * Default: PJ_FALSE
-     *
-     * @see pjsua_callback::on_auth_challenge
      */
     pj_bool_t        use_shared_auth;
 
@@ -5509,70 +5123,15 @@ PJ_DECL(void*) pjsua_acc_get_user_data(pjsua_acc_id acc_id);
 
 
 /**
- * Parameters for account deletion with pjsua_acc_del2(). Application should
- * use #pjsua_acc_del_param_default() to initialize this structure with its
- * default values.
- */
-typedef struct pjsua_acc_del_param
-{
-    /**
-     * If PJ_TRUE, the account will always be deleted even when there are
-     * active calls using it (a warning will be logged). If PJ_FALSE, the
-     * function will return PJ_EBUSY when active calls exist.
-     *
-     * Default: PJ_FALSE
-     */
-    pj_bool_t   force;
-
-} pjsua_acc_del_param;
-
-
-/**
- * Initialize account deletion parameters with default values.
- *
- * @param prm           The parameter to be initialized.
- */
-PJ_DECL(void) pjsua_acc_del_param_default(pjsua_acc_del_param *prm);
-
-
-/**
  * Delete an account. This will unregister the account from the SIP server,
  * if necessary, and terminate server side presence subscriptions associated
  * with this account.
- *
- * This function always deletes the account regardless of active calls
- * (equivalent to calling pjsua_acc_del2() with force=PJ_TRUE). For safer
- * behavior that checks for active calls, use pjsua_acc_del2() instead.
  *
  * @param acc_id        Id of the account to be deleted.
  *
  * @return              PJ_SUCCESS on success, or the appropriate error code.
  */
 PJ_DECL(pj_status_t) pjsua_acc_del(pjsua_acc_id acc_id);
-
-
-/**
- * Delete an account with additional options. This will unregister the account
- * from the SIP server, if necessary, and terminate server side presence
- * subscriptions associated with this account.
- *
- * By default (force=PJ_FALSE), if there are active calls using this account,
- * this function will return PJ_EBUSY. Application should hang up all calls
- * first using pjsua_call_hangup() and wait until the calls are fully
- * disconnected before deleting the account.
- *
- * When force=PJ_TRUE, the account will be deleted even if there are active
- * calls. A warning will be logged but deletion will proceed.
- *
- * @param acc_id        Id of the account to be deleted.
- * @param prm           Account deletion parameters.
- *
- * @return              PJ_SUCCESS on success, PJ_EBUSY if force is PJ_FALSE
- *                      and there are active calls using this account, or the
- *                      appropriate error code.
- */
-PJ_DECL(pj_status_t) pjsua_acc_del2(pjsua_acc_id acc_id,
-                                     const pjsua_acc_del_param *prm);
 
 
 /**
@@ -5859,49 +5418,6 @@ PJ_DECL(pj_status_t) pjsua_acc_create_uas_contact( pj_pool_t *pool,
  */
 PJ_DECL(pj_status_t) pjsua_acc_set_transport(pjsua_acc_id acc_id,
                                              pjsua_transport_id tp_id);
-
-
-/**
- * Discard the account's cached server-affinity state (address and
- * transport ref). The next REGISTER will perform fresh resolution.
- * Existing dialogs/calls hold their own transport refs and are
- * unaffected. No-op if server affinity is disabled for the account.
- *
- * See #pjsua_acc_config.server_affinity.
- *
- * @param acc_id        The account ID.
- * @return              PJ_SUCCESS on success.
- */
-PJ_DECL(pj_status_t) pjsua_acc_refresh_transport(pjsua_acc_id acc_id);
-
-
-/**
- * Pin the account's server affinity to a specific remote address.
- * Useful for accounts that don't register (auto-capture on REGISTER
- * doesn't apply) or to override the address REGISTER would otherwise
- * pick.
- *
- * The transport is materialized eagerly via
- * #pjsip_endpt_acquire_transport using the account's tp_type and the
- * next-hop URI hostname (proxy[0] preferred, else reg_uri) for SNI /
- * cert validation on TLS. On failure to materialize the transport,
- * the call is a no-op and the existing pin (if any) is preserved.
- *
- * Returns PJ_EINVALIDOP if server affinity is not enabled on the
- * account, or if pjsua_acc_config.transport_id is set (transport_id
- * already expresses pinning, and affinity is bypassed in that case).
- *
- * See #pjsua_acc_config.server_affinity.
- *
- * @param acc_id        The account ID.
- * @param addr          The remote address to pin to. Must not be NULL.
- * @return              PJ_SUCCESS when the pin is established;
- *                      PJ_EINVALIDOP if affinity is disabled or
- *                      transport_id is set; otherwise the underlying
- *                      transport-acquisition error.
- */
-PJ_DECL(pj_status_t) pjsua_acc_set_affinity_addr(pjsua_acc_id acc_id,
-                                                 const pj_sockaddr *addr);
 
 
 /**
@@ -8647,34 +8163,6 @@ PJ_DECL(void) pjsua_snd_dev_param_default(pjsua_snd_dev_param *prm);
 
 
 /**
- * This structure specifies the parameters to set null sound device.
- * Use pjsua_null_snd_dev_param_default() to initialize this structure with
- * default values. Application should only override relevant fields to keep
- * forward compatibility when new fields are added in the future.
- */
-typedef struct pjsua_null_snd_dev_param
-{
-    /**
-     * If PJ_TRUE, switch using a gapless handover (start null clock first,
-     * then stop old device). If PJ_FALSE, use legacy behavior (stop old
-     * device first, then start null clock).
-     *
-     * Default: PJ_FALSE
-     */
-    pj_bool_t           avoid_clock_gap;
-
-} pjsua_null_snd_dev_param;
-
-
-/**
- * Initialize pjsua_null_snd_dev_param with default values.
- *
- * @param prm           The parameter.
- */
-PJ_DECL(void) pjsua_null_snd_dev_param_default(pjsua_null_snd_dev_param *prm);
-
-
-/**
  * This structure specifies the parameters for conference ports connection.
  * Use pjsua_conf_connect_param_default() to initialize this structure with
  * default values.
@@ -9061,46 +8549,6 @@ PJ_DECL(pj_status_t) pjsua_recorder_create(const pj_str_t *filename,
                                            unsigned options,
                                            pjsua_recorder_id *p_id);
 
-/**
- * Create a tone detector and connect it to the conference bridge. The
- * detector reuses the recorder slot table, so its id can be passed to
- * #pjsua_recorder_get_conf_port() to wire a call's audio into it.
- *
- * @param cb         Callback invoked the first time the detector identifies
- *                   the configured tone sustained for
- *                   PJMEDIA_TONE_DETECT_DEBOUNCE_FRAMES consecutive frames
- *                   (≈60ms at the default 20ms ptime; scales with the
- *                   active audio frame size and clock rate). Delivered via
- *                   the pjmedia event mechanism, so it runs on the pjmedia
- *                   event thread (not the conf bridge worker). The event
- *                   pointer references internal storage and is valid only
- *                   for the duration of the callback; do not retain it.
- * @param usr_data   Opaque user data passed back to \a cb.
- * @param freqs      Array of frequencies (Hz) the detector must observe
- *                   simultaneously (AND).
- * @param n_freqs    Number of frequencies (1..PJMEDIA_TONE_DETECT_MAX_FREQS).
- * @param p_id       Receives the detector id (a recorder slot id).
- *
- * @return           PJ_SUCCESS on success.
- */
-PJ_DECL(pj_status_t) pjsua_tone_detector_create(
-				   void (*cb)(pjmedia_port *port,
-					      void *usr_data,
-					      const pjmedia_tone_detect_event *event),
-				   void *usr_data,
-				   const unsigned *freqs,
-				   unsigned n_freqs,
-				   pjsua_recorder_id *p_id);
-
-/**
- * Destroy a tone detector previously created with
- * #pjsua_tone_detector_create().
- *
- * @param id    The detector id.
- *
- * @return      PJ_SUCCESS on success.
- */
-PJ_DECL(pj_status_t) pjsua_tone_detector_destroy(pjsua_recorder_id id);
 
 /**
  * Get conference port associated with recorder.
@@ -9402,28 +8850,12 @@ PJ_DECL(pj_status_t) pjsua_set_snd_dev2(const pjsua_snd_dev_param *snd_param);
 
 /**
  * Set pjsua to use null sound device. The null sound device only provides
- * the timing needed by the conference bridge, and will not interact with
+ * the timing needed by the conference bridge, and will not interract with
  * any hardware.
- * For configurable behavior, use #pjsua_set_null_snd_dev2().
  *
  * @return              PJ_SUCCESS on success, or the appropriate error code.
  */
 PJ_DECL(pj_status_t) pjsua_set_null_snd_dev(void);
-
-
-/**
- * Set pjsua to use null sound device according to the specified param.
- * The null sound device only provides the timing needed by the conference
- * bridge, and will not interact with any hardware.
- * Use #pjsua_null_snd_dev_param_default() to initialize the param.
- *
- * @param snd_param          Null sound device parameter.
- *
- * @return                   PJ_SUCCESS on success, or the appropriate
- *                           error code.
- */
-PJ_DECL(pj_status_t) pjsua_set_null_snd_dev2(
-                                const pjsua_null_snd_dev_param *snd_param);
 
 
 /**
@@ -9565,8 +8997,8 @@ PJ_DECL(pj_status_t) pjsua_snd_get_setting(pjmedia_aud_dev_cap cap,
  * media clock is driven by sound device in master port, but unfortunately
  * some sound devices may produce jittery clock. To improve media clock,
  * application can install Null Sound Device (i.e: using
- * pjsua_set_null_snd_dev() or pjsua_set_null_snd_dev2()), which will act
- * as a master port, and instantiate the sound device as extra sound device.
+ * pjsua_set_null_snd_dev()), which will act as a master port, and instantiate
+ * the sound device as extra sound device.
  *
  * Note that extra sound device will not have auto-close upon idle feature.
  * Also note that currently extra sound device only supports mono channel.

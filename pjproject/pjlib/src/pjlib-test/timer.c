@@ -204,21 +204,7 @@ static int test_timer_heap(void)
  *   bug in the implementation (note that race message is ok).
  */
 #define RANDOMIZED_TEST 1
-
-#ifndef __has_feature
-    #define __has_feature(x) 0
-#endif
-#if defined(__SANITIZE_ADDRESS__) || \
-    (defined(__has_feature) && __has_feature(address_sanitizer))
-    #define ASAN_ENABLED 1
-#else
-    #define ASAN_ENABLED 0
-#endif
-
-/* We should only simulate timer crash when using duplicate and
- * not using ASan.
- */
-#define SIMULATE_CRASH  PJ_TIMER_USE_COPY && !ASAN_ENABLED
+#define SIMULATE_CRASH  PJ_TIMER_USE_COPY
 
 #if RANDOMIZED_TEST
     #define ST_STRESS_THREAD_COUNT          20

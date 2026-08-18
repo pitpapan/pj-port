@@ -253,7 +253,7 @@ pjmedia_avi_player_create_streams(pj_pool_t *pool_,
     if (fport[0]->fsize <= (pj_off_t)(sizeof(riff_hdr_t) + sizeof(avih_hdr_t) +
                                       sizeof(strl_hdr_t)))
     {
-        status = PJMEDIA_ENOTVALIDAVI;
+        status = PJMEDIA_EINVALIMEDIATYPE;
         goto on_error;
     }
 
@@ -276,7 +276,7 @@ pjmedia_avi_player_create_streams(pj_pool_t *pool_,
         !COMPARE_TAG(avi_hdr.avih_hdr.hdrl_tag, PJMEDIA_AVI_HDRL_TAG) ||
         !COMPARE_TAG(avi_hdr.avih_hdr.avih, PJMEDIA_AVI_AVIH_TAG))
     {
-        status = PJMEDIA_ENOTVALIDAVI;
+        status = PJMEDIA_EINVALIMEDIATYPE;
         goto on_error;
     }
 
@@ -502,16 +502,6 @@ pjmedia_avi_player_create_streams(pj_pool_t *pool_,
                 &avi_hdr.strf_hdr[fport[i]->stream_id].strf_video_hdr;
             const pjmedia_video_format_info *vfi;
 
-            /* Reject zero rate (fps numerator) or scale (fps denominator)
-             * from a malformed header. A zero scale would otherwise be passed
-             * as a zero frame-rate denominator to pjmedia_format_init_video(),
-             * which aborts (or later causes a division by zero).
-             */
-            if (strl_hdr->rate == 0 || strl_hdr->scale == 0) {
-                status = PJMEDIA_ENOTVALIDAVI;
-                goto on_error;
-            }
-
             vfi = pjmedia_get_video_format_info(
                 pjmedia_video_format_mgr_instance(),
                 strl_hdr->codec);
@@ -543,15 +533,6 @@ pjmedia_avi_player_create_streams(pj_pool_t *pool_,
         } else {
             strf_audio_hdr_t *strf_hdr =
                 &avi_hdr.strf_hdr[fport[i]->stream_id].strf_audio_hdr;
-
-            /* Reject zero sample rate / channel count (malformed header) to
-             * avoid a zero clock rate propagating into the audio port, which
-             * would later cause a division by zero / invalid port.
-             */
-            if (strf_hdr->sample_rate == 0 || strf_hdr->nchannels == 0) {
-                status = PJMEDIA_ENOTVALIDAVI;
-                goto on_error;
-            }
 
             fport[i]->bits_per_sample = strf_hdr->bits_per_sample;
             //fport[i]->usec_per_frame = avi_hdr.avih_hdr.usec_per_frame;
@@ -873,7 +854,7 @@ static pj_status_t skip_forward(pjmedia_port *this_port, pj_size_t frames)
                            (unsigned long)pos));
             }
 
-            return PJMEDIA_ENOTVALIDAVI;
+            return PJMEDIA_ENOTVALIDWAVE;
         }
 
         PJ_CHECK_OVERFLOW_UINT32_TO_LONG(ch.len, return PJ_EINVAL);
@@ -1166,7 +1147,7 @@ static pj_status_t avi_get_frame(pjmedia_port *this_port,
                                ch.id, ch.len,
                                (unsigned long)pos));
                 }
-                status = PJMEDIA_ENOTVALIDAVI;
+                status = PJMEDIA_ENOTVALIDWAVE;
                 goto on_error2;
             }
 
@@ -1218,40 +1199,12 @@ static pj_status_t avi_get_frame(pjmedia_port *this_port,
                 goto on_error2;
             fport->size_left -= size_to_read;
         } else {
-            pj_uint32_t read_len = ch.len;
-
-            /* Clamp the read to the frame buffer capacity. A crafted
-             * file may declare a chunk larger than the buffer, whose
-             * size is derived from the (also file-supplied) video
-             * dimensions; never write past frame->buf (frame->size
-             * bytes). Do not rely on pj_assert() here, as it is a no-op
-             * in release builds.
-             */
-            if (read_len > frame->size) {
-                PJ_LOG(3, (THIS_FILE,
-                           "AVI video chunk (%u) exceeds frame buffer "
-                           "(%u), truncating",
-                           (unsigned)ch.len, (unsigned)frame->size));
-                read_len = (pj_uint32_t)frame->size;
-            }
-
-            status = file_read3(fport->fd, frame->buf, read_len,
+            pj_assert(frame->size >= ch.len);
+            status = file_read3(fport->fd, frame->buf, ch.len,
                                 0, &size_read);
             if (status != PJ_SUCCESS)
                 goto on_error2;
-
-            /* Skip any remaining chunk bytes that did not fit, so the
-             * file position stays aligned to the next chunk.
-             */
-            if (ch.len > read_len) {
-                status = pj_file_setpos(fport->fd,
-                                        (pj_off_t)ch.len - read_len,
-                                        PJ_SEEK_CUR);
-                if (status != PJ_SUCCESS)
-                    goto on_error2;
-            }
-
-            frame->size = read_len;
+            frame->size = ch.len;
             fport->size_left = 0;
         }
 

@@ -179,17 +179,17 @@ PJ_DECL(pj_status_t) pjmedia_endpt_destroy2(pjmedia_endpt *endpt);
 /**
  * Destroy media endpoint instance and shutdown audio subsystem.
  *
- * @param med_endpt     Media endpoint instance.
+ * @param endpt         Media endpoint instance.
  *
  * @return              PJ_SUCCESS on success.
  */
-PJ_INLINE(pj_status_t) pjmedia_endpt_destroy(pjmedia_endpt *med_endpt)
+PJ_INLINE(pj_status_t) pjmedia_endpt_destroy(pjmedia_endpt *endpt)
 {
     /* This function is inlined to avoid build problem due to circular
      * dependency, i.e: this function prevents pjmedia's dependency on
      * pjmedia-audiodev.
      */
-     pj_status_t status = pjmedia_endpt_destroy2(med_endpt);
+     pj_status_t status = pjmedia_endpt_destroy2(endpt);
      pjmedia_aud_subsys_shutdown();
      return status;
 }

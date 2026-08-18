@@ -24,13 +24,15 @@ public class SoftApp
 
     }
 
-    public async Task init(ISoftObserver obs, String app_dir)
+    public void init(ISoftObserver obs, String app_dir)
     {
         observer = obs;
         appDir = app_dir;
+
+        /* Create endpoint */
         try
         {
-            await Dispatcher.GetForCurrentThread().DispatchAsync(ep.libCreate);
+            Dispatcher.GetForCurrentThread().Dispatch(ep.libCreate);
         }
         catch (Exception e)
         {
@@ -38,12 +40,12 @@ public class SoftApp
             return;
         }
 
-        await Dispatcher.GetForCurrentThread().DispatchAsync(() => myAccCfg = new SoftAccountConfig());
+        myAccCfg = new SoftAccountConfig();
         /* Load config */
         String configPath = appDir + "/" + configName;
         if (File.Exists(configPath))
         {
-            await Dispatcher.GetForCurrentThread().DispatchAsync(() => loadConfig(configPath));
+            Dispatcher.GetForCurrentThread().Dispatch(() => loadConfig(configPath));
         }
         else
         {
@@ -67,7 +69,7 @@ public class SoftApp
         /* Init endpoint */
         try
         {
-            await Dispatcher.GetForCurrentThread().DispatchAsync(() => ep.libInit(epConfig));
+            Dispatcher.GetForCurrentThread().Dispatch(() => ep.libInit(epConfig));
         }
         catch (Exception)
         {
@@ -77,9 +79,8 @@ public class SoftApp
         /* Create transports. */
         try
         {
-            await Dispatcher.GetForCurrentThread().DispatchAsync(() =>
-                ep.transportCreate(pjsip_transport_type_e.PJSIP_TRANSPORT_UDP, sipTpConfig)
-            );
+            Dispatcher.GetForCurrentThread().Dispatch(() => ep.transportCreate(pjsip_transport_type_e.PJSIP_TRANSPORT_UDP,
+                               sipTpConfig));
         }
         catch (Exception e)
         {
@@ -88,9 +89,8 @@ public class SoftApp
 
         try
         {
-            await Dispatcher.GetForCurrentThread().DispatchAsync(() =>
-                ep.transportCreate(pjsip_transport_type_e.PJSIP_TRANSPORT_TCP, sipTpConfig)
-            );
+            Dispatcher.GetForCurrentThread().Dispatch(() => ep.transportCreate(pjsip_transport_type_e.PJSIP_TRANSPORT_TCP,
+                               sipTpConfig));
         }
         catch (Exception e)
         {
@@ -100,9 +100,8 @@ public class SoftApp
         //try
         //{
         //    sipTpConfig.port = SIP_PORT + 1;
-        //    await Dispatcher.GetForCurrentThread().DispatchAsync(() =>
-        //        ep.transportCreate(pjsip_transport_type_e.PJSIP_TRANSPORT_TLS, sipTpConfig)
-        //    );
+        //    Dispatcher.GetForCurrentThread().Dispatch(() => ep.transportCreate(pjsip_transport_type_e.PJSIP_TRANSPORT_TLS,
+        //                       sipTpConfig));
         //}
         //catch (Exception e)
         //{
@@ -125,8 +124,7 @@ public class SoftApp
         account = new SoftAccount(accountConfig);
         try
         {
-            await Dispatcher.GetForCurrentThread().DispatchAsync(() =>
-            {
+            Dispatcher.GetForCurrentThread().Dispatch(() => {
                 account.create(accountConfig);
 
                 /* Add Buddies */
@@ -145,7 +143,7 @@ public class SoftApp
         /* Start. */
         try
         {
-            await Dispatcher.GetForCurrentThread().DispatchAsync(ep.libStart);
+            Dispatcher.GetForCurrentThread().Dispatch(ep.libStart);
         }
         catch (Exception e)
         {

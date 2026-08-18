@@ -25,7 +25,6 @@
 #include <pj/assert.h>
 #include <pj/errno.h>
 #include <pj/except.h>
-#include <pj/hash.h>
 #include <pj/unicode.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -231,11 +230,6 @@ PJ_DEF(pj_status_t) pj_init(void)
         }
     }
 #endif
-
-    /* Initialize the per-process hash table bucketing key while still
-     * single-threaded, so the hash create/lookup paths stay lock-free.
-     */
-    pj_hash_init_key();
 
     /* Flag PJLIB as initialized */
     ++initialized;
@@ -465,24 +459,15 @@ PJ_DEF(pj_status_t) pj_thread_register ( const char *cstr_thread_name,
     thread->stk_size = 0xFFFFFFFFUL;
     thread->stk_max_usage = 0;
 #else
-    PJ_UNUSED_ARG(stack_ptr);
+    stack_ptr = '\0';
 #endif
 
-    if (cstr_thread_name && pj_strlen(&thread_name) < sizeof(thread->obj_name)-1) {
-        const char *p = pj_ansi_strchr(cstr_thread_name, '%');
-        /* Only expand the "%p" object-id convention; never treat an
-         * arbitrary name as a printf format string.
-         */
-        if (p && *(p+1)=='p' && *(p+2)=='\0')
-            pj_ansi_snprintf(thread->obj_name, sizeof(thread->obj_name),
-                             cstr_thread_name, (void*)(pj_ssize_t)thread->idthread);
-        else
-            pj_ansi_strxcpy(thread->obj_name, cstr_thread_name,
-                            sizeof(thread->obj_name));
-    } else {
-        pj_ansi_snprintf(thread->obj_name, sizeof(thread->obj_name),
+    if (cstr_thread_name && pj_strlen(&thread_name) < sizeof(thread->obj_name)-1)
+        pj_ansi_snprintf(thread->obj_name, sizeof(thread->obj_name), 
+                         cstr_thread_name, thread->idthread);
+    else
+        pj_ansi_snprintf(thread->obj_name, sizeof(thread->obj_name), 
                          "thr%p", (void*)(pj_ssize_t)thread->idthread);
-    }
     
     rc = pj_thread_local_set(thread_tls_id, thread);
     if (rc != PJ_SUCCESS)
@@ -729,26 +714,13 @@ static pj_status_t create_thread(const char *thread_name,
     if (!thread_name)
         thread_name = "thr%p";
 
-    {
-        const char *p = strchr(thread_name, '%');
-        /* Only expand the "%p" object-id convention; never treat an
-         * arbitrary name as a printf format string.
-         */
-        if (p && *(p+1)=='p' && *(p+2)=='\0') {
-            pj_ansi_snprintf(rec->obj_name, PJ_MAX_OBJ_NAME, thread_name, rec);
-        } else {
-            pj_ansi_strxcpy(rec->obj_name, thread_name, PJ_MAX_OBJ_NAME);
-        }
+    if (strchr(thread_name, '%')) {
+        pj_ansi_snprintf(rec->obj_name, PJ_MAX_OBJ_NAME, thread_name, rec);
+    } else {
+        pj_ansi_strxcpy(rec->obj_name, thread_name, PJ_MAX_OBJ_NAME);
     }
 
     PJ_LOG(6, (rec->obj_name, "Thread created"));
-
-#if !defined(PJ_THREAD_SET_STACK_SIZE) || PJ_THREAD_SET_STACK_SIZE==0
-    /* Don't propagate caller's stack_size to the OS thread API;
-     * let the OS pick its default size.
-     */
-    stack_size = 0;
-#endif
 
 #if defined(PJ_OS_HAS_CHECK_STACK) && PJ_OS_HAS_CHECK_STACK!=0
     rec->stk_size = stack_size ? (pj_uint32_t)stack_size : 0xFFFFFFFFUL;
@@ -759,18 +731,19 @@ static pj_status_t create_thread(const char *thread_name,
     rec->proc = proc;
     rec->arg = arg;
 
-#if defined(PJ_WIN32_WINPHONE8) && PJ_WIN32_WINPHONE8
+#ifdef _MSC_VER
+    rec->idthread = 0;
+    rec->hthread = (HANDLE)_beginthreadex(NULL, (unsigned)stack_size,
+                                          thread_main, rec,
+                                          dwflags, (unsigned*)&rec->idthread);
+#elif defined(PJ_WIN32_WINPHONE8) && PJ_WIN32_WINPHONE8
     rec->hthread = CreateThreadRT(NULL, 0,
                                   thread_main, rec,
                                   dwflags, NULL);
 #else
-    {
-        unsigned tid = 0;
-        rec->hthread = (HANDLE)_beginthreadex(NULL, (unsigned)stack_size,
-                                              thread_main, rec,
-                                              dwflags, &tid);
-        rec->idthread = tid;
-    }
+    rec->hthread = CreateThread(NULL, stack_size,
+                                thread_main, rec,
+                                dwflags, &rec->idthread);
 #endif
 
     if (rec->hthread == NULL)
@@ -1234,16 +1207,10 @@ static pj_status_t init_mutex(pj_mutex_t *mutex, const char *name)
     if (!name) {
         name = "mtx%p";
     }
-    {
-        const char *p = strchr(name, '%');
-        /* Only expand the "%p" object-id convention; never treat an
-         * arbitrary name as a printf format string.
-         */
-        if (p && *(p+1)=='p' && *(p+2)=='\0') {
-            pj_ansi_snprintf(mutex->obj_name, PJ_MAX_OBJ_NAME, name, mutex);
-        } else {
-            pj_ansi_strxcpy(mutex->obj_name, name, PJ_MAX_OBJ_NAME);
-        }
+    if (strchr(name, '%')) {
+        pj_ansi_snprintf(mutex->obj_name, PJ_MAX_OBJ_NAME, name, mutex);
+    } else {
+        pj_ansi_strxcpy(mutex->obj_name, name, PJ_MAX_OBJ_NAME);
     }
 
     PJ_LOG(6, (mutex->obj_name, "Mutex created"));
@@ -1495,16 +1462,10 @@ PJ_DEF(pj_status_t) pj_sem_create( pj_pool_t *pool,
     if (!name) {
         name = "sem%p";
     }
-    {
-        const char *p = strchr(name, '%');
-        /* Only expand the "%p" object-id convention; never treat an
-         * arbitrary name as a printf format string.
-         */
-        if (p && *(p+1)=='p' && *(p+2)=='\0') {
-            pj_ansi_snprintf(sem->obj_name, PJ_MAX_OBJ_NAME, name, sem);
-        } else {
-            pj_ansi_strxcpy(sem->obj_name, name, PJ_MAX_OBJ_NAME);
-        }
+    if (strchr(name, '%')) {
+        pj_ansi_snprintf(sem->obj_name, PJ_MAX_OBJ_NAME, name, sem);
+    } else {
+        pj_ansi_strxcpy(sem->obj_name, name, PJ_MAX_OBJ_NAME);
     }
 
     LOG_MUTEX((sem->obj_name, "Semaphore created"));
@@ -1641,16 +1602,10 @@ PJ_DEF(pj_status_t) pj_event_create( pj_pool_t *pool,
     if (!name) {
         name = "evt%p";
     }
-    {
-        const char *p = strchr(name, '%');
-        /* Only expand the "%p" object-id convention; never treat an
-         * arbitrary name as a printf format string.
-         */
-        if (p && *(p+1)=='p' && *(p+2)=='\0') {
-            pj_ansi_snprintf(event->obj_name, PJ_MAX_OBJ_NAME, name, event);
-        } else {
-            pj_ansi_strxcpy(event->obj_name, name, PJ_MAX_OBJ_NAME);
-        }
+    if (strchr(name, '%')) {
+        pj_ansi_snprintf(event->obj_name, PJ_MAX_OBJ_NAME, name, event);
+    } else {
+        pj_ansi_strxcpy(event->obj_name, name, PJ_MAX_OBJ_NAME);
     }
 
     PJ_LOG(6, (event->obj_name, "Event created"));

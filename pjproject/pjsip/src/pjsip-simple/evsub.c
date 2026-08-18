@@ -84,16 +84,6 @@ PJ_DEF(const pjsip_method*) pjsip_get_notify_method()
  */
 static void        mod_evsub_on_tsx_state(pjsip_transaction*, pjsip_event*);
 static pj_status_t mod_evsub_unload(void);
-static pj_status_t evsub_async_auth_send_impl(
-                                pjsip_auth_clt_sess *auth_sess,
-                                void *user_data,
-                                pjsip_tx_data *tdata);
-static void evsub_async_auth_abandon_impl(
-                                pjsip_auth_clt_sess *auth_sess,
-                                void *user_data);
-static void set_state(pjsip_evsub *sub, pjsip_evsub_state state,
-                      const pj_str_t *state_str, pjsip_event *event,
-                      const pj_str_t *reason);
 
 
 /*
@@ -246,7 +236,6 @@ struct pjsip_evsub
     pj_timer_entry       *pending_sub_timer; /**< Stop pending sub timer.   */
     pjsip_tx_data        *pending_notify;/**< Pending NOTIFY to be sent.    */
     pj_bool_t             calling_on_rx_refresh;/**< Inside on_rx_refresh()?*/
-    pj_bool_t             deferred_state_notify;/**< Deferred TERMINATED notify */
     pj_grp_lock_t        *grp_lock;     /* Session group lock       */
 
     void                 *mod_data[PJSIP_MAX_MODULE];   /**< Module data.   */
@@ -586,22 +575,12 @@ static void evsub_destroy( pjsip_evsub *sub )
         sub->pending_sub_timer = NULL;
     }
 
-    /* Remove this session from dialog's list of subscription.
-     *
-     * Clear the back-pointer (dlgsub->sub) BEFORE erasing the node. The
-     * dlgsub node is allocated from the dialog pool and may still be
-     * reachable by an in-flight on_new_transaction() walk (e.g. a REFER
-     * retransmit-timer event firing while the dialog/subscription is being
-     * torn down). That walk dereferences dlgsub->sub; leaving it pointing
-     * at this now-destroyed subscription is a use-after-free. By NULLing it
-     * first, any such traversal sees a NULL sub and safely skips the node.
-     */
+    /* Remove this session from dialog's list of subscription */
     dlgsub_head = (struct dlgsub *) sub->dlg->mod_data[mod_evsub.mod.id];
     dlgsub = dlgsub_head->next;
     while (dlgsub != dlgsub_head) {
         
         if (dlgsub->sub == sub) {
-            dlgsub->sub = NULL;
             pj_list_erase(dlgsub);
             break;
         }
@@ -610,30 +589,6 @@ static void evsub_destroy( pjsip_evsub *sub )
     }
 
     pj_grp_lock_dec_ref(sub->grp_lock);
-}
-
-/* Async auth send callback: resend the authenticated request via dialog.
- * user_data points to pjsip_evsub*.  No lock is held by the caller.
- */
-static pj_status_t evsub_async_auth_send_impl(
-                                pjsip_auth_clt_sess *auth_sess,
-                                void *user_data,
-                                pjsip_tx_data *tdata)
-{
-    pjsip_evsub *sub = (pjsip_evsub *)user_data;
-    PJ_UNUSED_ARG(auth_sess);
-    return pjsip_dlg_send_request(sub->dlg, tdata, -1, NULL);
-}
-
-/* Async auth abandon callback: terminate the subscription.
- * user_data points to pjsip_evsub*.  No lock is held by the caller.
- */
-static void evsub_async_auth_abandon_impl(pjsip_auth_clt_sess *auth_sess,
-                                          void *user_data)
-{
-    pjsip_evsub *sub = (pjsip_evsub *)user_data;
-    PJ_UNUSED_ARG(auth_sess);
-    set_state(sub, PJSIP_EVSUB_STATE_TERMINATED, NULL, NULL, NULL);
 }
 
 /*
@@ -671,15 +626,8 @@ static void set_state( pjsip_evsub *sub, pjsip_evsub_state state,
         event = &dummy_event;
     }
 
-    if (sub->user.on_evsub_state && sub->call_cb) {
-        if (state == PJSIP_EVSUB_STATE_TERMINATED &&
-            sub->calling_on_rx_refresh)
-        {
-            sub->deferred_state_notify = PJ_TRUE;
-        } else {
-            (*sub->user.on_evsub_state)(sub, event);
-        }
-    }
+    if (sub->user.on_evsub_state && sub->call_cb)
+        (*sub->user.on_evsub_state)(sub, event);
 
     if (state == PJSIP_EVSUB_STATE_TERMINATED &&
         prev_state != PJSIP_EVSUB_STATE_TERMINATED) 
@@ -852,6 +800,7 @@ static pj_status_t evsub_create( pjsip_dialog *dlg,
     /* Set name. */
     pj_ansi_snprintf(sub->obj_name, PJ_ARRAY_SIZE(sub->obj_name),
                      "evsub%p", sub);
+
 
     /* Copy callback, if any: */
     if (user_cb)
@@ -1595,21 +1544,6 @@ static pjsip_evsub *on_new_transaction( pjsip_transaction *tsx,
 
     while (dlgsub != dlgsub_head) {
 
-        /* Guard against a dlgsub node whose subscription is being or has
-         * been destroyed. evsub_destroy() clears dlgsub->sub before
-         * erasing the node; a late transaction event (e.g. REFER
-         * retransmit timer firing during dialog teardown) can still reach
-         * such a node. Skipping it here avoids dereferencing freed
-         * subscription state.
-         */
-        if (dlgsub->sub == NULL) {
-            struct dlgsub *next = dlgsub->next;
-            if (next == dlgsub)
-                break;
-            dlgsub = next;
-            continue;
-        }
-
         if (pj_stricmp(&dlgsub->sub->event->event_type, 
                        &event_hdr->event_type)==0)
         {
@@ -1665,13 +1599,13 @@ static pjsip_evsub *on_new_transaction( pjsip_transaction *tsx,
      * Take note that it could be us that is trying to send a final message,
      * such as final NOTIFY upon unsubscription.
      */
-    if (dlgsub == dlgsub_head || dlgsub->sub == NULL ||
-        (tsx->role == PJSIP_ROLE_UAS &&
+    if (dlgsub == dlgsub_head ||
+        (dlgsub->sub &&
+            tsx->role == PJSIP_ROLE_UAS &&
             pjsip_evsub_get_state(dlgsub->sub)==PJSIP_EVSUB_STATE_TERMINATED))
     {
-        const char *reason_msg =
-            (dlgsub == dlgsub_head || dlgsub->sub == NULL ?
-             "Subscription Does Not Exist" :
+        const char *reason_msg = 
+            (dlgsub == dlgsub_head ? "Subscription Does Not Exist" :
              "Subscription already terminated");
 
         /* This could be incoming request to create new subscription */
@@ -1889,51 +1823,23 @@ static void on_tsx_state_uac( pjsip_evsub *sub, pjsip_transaction *tsx,
         if (tsx->status_code==401 || tsx->status_code==407) {
             pjsip_tx_data *tdata;
             pj_status_t status;
-            pjsip_auth_clt_async_on_chal_param chal_param = { 0 };
 
             if (tsx->state == PJSIP_TSX_STATE_TERMINATED) {
                 /* Previously failed transaction has terminated */
                 return;
             }
 
-            /* Dialog grp_lock is held by the caller
-             * (pjsip_dlg_on_tsx_state).  We do NOT release it here
-             * because grp_lock is recursive (sync send from callback
-             * works) and releasing a lock held by a parent caller
-             * risks state changes from another thread.
-             */
-            {
-                pjsip_auth_clt_async_impl_token *token;
-                token = PJ_POOL_ZALLOC_T(tsx->pool,
-                                         pjsip_auth_clt_async_impl_token);
-                token->user_data    = sub;
-                token->send_impl    = &evsub_async_auth_send_impl;
-                token->abandon_impl = &evsub_async_auth_abandon_impl;
-                token->grp_lock     = tsx->grp_lock;
-                pj_grp_lock_add_ref(tsx->grp_lock);
-
-                pj_bzero(&chal_param, sizeof(chal_param));
-                chal_param.rdata = event->body.tsx_state.src.rdata;
-                chal_param.tdata = tsx->last_tx;
-                status = pjsip_auth_clt_async_impl_on_challenge(
-                                                &sub->dlg->auth_sess,
-                                                token, &chal_param);
-                if (status != PJ_SUCCESS)
-                    pj_grp_lock_dec_ref(tsx->grp_lock);
-            }
+            status = pjsip_auth_clt_reinit_req(&sub->dlg->auth_sess,
+                                               event->body.tsx_state.src.rdata,
+                                               tsx->last_tx, &tdata);
+            if (status == PJ_SUCCESS) 
+                status = pjsip_dlg_send_request(sub->dlg, tdata, -1, NULL);
+            
             if (status != PJ_SUCCESS) {
-                status = pjsip_auth_clt_reinit_req(
-                                &sub->dlg->auth_sess,
-                                event->body.tsx_state.src.rdata,
-                                tsx->last_tx, &tdata);
-                if (status == PJ_SUCCESS)
-                    status = pjsip_dlg_send_request(sub->dlg, tdata, -1,
-                                                    NULL);
-                if (status != PJ_SUCCESS) {
-                    /* Authentication failed! */
-                    set_state(sub, PJSIP_EVSUB_STATE_TERMINATED,
-                              NULL, event, &tsx->status_text);
-                }
+                /* Authentication failed! */
+                set_state(sub, PJSIP_EVSUB_STATE_TERMINATED,
+                          NULL, event, &tsx->status_text);
+                return;
             }
 
             return;
@@ -2285,19 +2191,6 @@ static void on_tsx_state_uas( pjsip_evsub *sub, pjsip_transaction *tsx,
         }
         sub->calling_on_rx_refresh = PJ_FALSE;
 
-        if (sub->deferred_state_notify) {
-            sub->deferred_state_notify = PJ_FALSE;
-
-            if (sub->user.on_evsub_state && sub->call_cb)
-                (*sub->user.on_evsub_state)(sub, event);
-
-            if (sub->state == PJSIP_EVSUB_STATE_TERMINATED &&
-                sub->pending_tsx == 0)
-            {
-                evsub_destroy(sub);
-            }
-        }
-
         /* Application MUST specify final response! */
         PJ_ASSERT_ON_FAIL(st_code >= 200, {st_code=200; });
 
@@ -2357,46 +2250,20 @@ static void on_tsx_state_uas( pjsip_evsub *sub, pjsip_transaction *tsx,
             pjsip_tx_data *tdata;
             pj_status_t status;
             pjsip_rx_data *rdata = event->body.tsx_state.src.rdata;
-            pjsip_auth_clt_async_on_chal_param chal_param = { 0 };
 
             /* Handled by other module already (e.g: invite module) */
             if (tsx->last_tx->auth_retry)
                 return;
 
-            /* Dialog grp_lock held by caller; see SUBSCRIBE handler
-             * comment above for locking rationale.
-             */
-            {
-                pjsip_auth_clt_async_impl_token *token;
-                token = PJ_POOL_ZALLOC_T(tsx->pool,
-                                         pjsip_auth_clt_async_impl_token);
-                token->user_data    = sub;
-                token->send_impl    = &evsub_async_auth_send_impl;
-                token->abandon_impl = &evsub_async_auth_abandon_impl;
-                token->grp_lock     = tsx->grp_lock;
-                pj_grp_lock_add_ref(tsx->grp_lock);
+            status = pjsip_auth_clt_reinit_req(&sub->dlg->auth_sess, rdata,
+                                               tsx->last_tx, &tdata);
+            if (status == PJ_SUCCESS)
+                status = pjsip_dlg_send_request(sub->dlg, tdata, -1, NULL);
 
-                pj_bzero(&chal_param, sizeof(chal_param));
-                chal_param.rdata = rdata;
-                chal_param.tdata = tsx->last_tx;
-                status = pjsip_auth_clt_async_impl_on_challenge(
-                                                &sub->dlg->auth_sess,
-                                                token, &chal_param);
-                if (status != PJ_SUCCESS)
-                    pj_grp_lock_dec_ref(tsx->grp_lock);
-            }
             if (status != PJ_SUCCESS) {
-                status = pjsip_auth_clt_reinit_req(&sub->dlg->auth_sess,
-                                                   rdata, tsx->last_tx,
-                                                   &tdata);
-                if (status == PJ_SUCCESS)
-                    status = pjsip_dlg_send_request(sub->dlg, tdata, -1,
-                                                    NULL);
-                if (status != PJ_SUCCESS) {
-                    /* Can't authenticate. Terminate session (?) */
-                    set_state(sub, PJSIP_EVSUB_STATE_TERMINATED, NULL, NULL,
-                              &tsx->status_text);
-                }
+                /* Can't authenticate. Terminate session (?) */
+                set_state(sub, PJSIP_EVSUB_STATE_TERMINATED, NULL, NULL,
+                          &tsx->status_text);
             }
             return;
 
@@ -2493,4 +2360,5 @@ static void mod_evsub_on_tsx_state(pjsip_transaction *tsx, pjsip_event *event)
 
     }
 }
+
 

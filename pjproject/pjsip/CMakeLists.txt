@@ -81,9 +81,8 @@ target_sources(pjsip
 
 # dependencies
 target_link_libraries(pjsip
-  PUBLIC
-    pjlib
   PRIVATE
+    pjlib
     pjlib-ssl
     pjlib-util
 )
@@ -152,7 +151,7 @@ target_sources(pjsip-simple
 )
 
 # dependencies
-target_link_libraries(pjsip-simple PUBLIC pjlib PRIVATE pjlib-util pjsip)
+target_link_libraries(pjsip-simple PRIVATE pjlib pjlib-util pjsip)
 
 # ##############################################################################
 # pjsip-ua
@@ -186,10 +185,8 @@ target_sources(pjsip-ua
 
 # dependencies
 target_link_libraries(pjsip-ua
-  PUBLIC
-    pjlib
   PRIVATE
-    pjlib-util pjmedia pjsip pjsip-simple
+    pjlib pjlib-util pjmedia pjsip pjsip-simple
 )
 
 # ##############################################################################
@@ -222,9 +219,8 @@ target_sources(pjsua-lib
 
 # dependencies
 target_link_libraries(pjsua-lib
-  PUBLIC
-    pjlib
   PRIVATE
+    pjlib
     pjlib-util
     pjnath
     pjmedia
@@ -275,9 +271,8 @@ target_sources(pjsua2
 
 # dependencies
 target_link_libraries(pjsua2
-  PUBLIC
-    pjlib
   PRIVATE
+    pjlib
     pjlib-util
     pjnath
     pjmedia
@@ -315,10 +310,6 @@ if(BUILD_TESTING)
     src/test/txdata_test.c
     src/test/uri_test.c
     src/test/inv_offer_answer_test.c
-    src/test/auth_async_test.c
-    src/test/pjsua_auth_test.c
-    src/test/pjsua_call_test.c
-    src/test/pjsua_acc_test.c
     src/test/${PJ_TEST_MAIN}
   )
 
@@ -326,42 +317,16 @@ if(BUILD_TESTING)
     PRIVATE
       pjlib
       pjlib-util
-      pjnath
       pjmedia
       pjsip
       pjsip-simple
       pjsip-ua
-      pjsua-lib
   )
 
   add_test(NAME pjsip-test COMMAND pjsip-test)
 
-  # pjsua stress test application
-  add_executable(pjsua-stress
-    src/test/pjsua_stress.c
-  )
-
-  target_link_libraries(pjsua-stress
-    PRIVATE
-      pjlib
-      pjlib-util
-      pjnath
-      pjmedia
-      pjmedia-codec
-      pjmedia-audiodev
-      pjmedia-videodev
-      pjsip
-      pjsip-simple
-      pjsip-ua
-      pjsua-lib
-  )
-
   # pjsua test application
-  add_executable(pjsua2-test
-    src/pjsua2-test/main.cpp
-    src/pjsua2-test/instant_messaging.cpp
-    src/pjsua2-test/auth_challenge.cpp
-  )
+  add_executable(pjsua2-test src/pjsua2-test/main.cpp)
 
   target_link_libraries(pjsua2-test
     PRIVATE
@@ -372,9 +337,6 @@ if(BUILD_TESTING)
       pjmedia-audiodev
       pjmedia-videodev
       pjsip
-      pjsip-simple
-      pjsip-ua
-      pjsua-lib
       pjsua2
   )
 

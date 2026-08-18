@@ -46,19 +46,6 @@ struct multipart_data
     pj_str_t              raw_data;
 };
 
-/* Number of decimal digits needed to hold value n (up to 10 digits). */
-#define NUM_DIGITS(n) \
-    ((n) < 10UL ? 1 : (n) < 100UL ? 2 : (n) < 1000UL ? 3 : \
-     (n) < 10000UL ? 4 : (n) < 100000UL ? 5 : (n) < 1000000UL ? 6 : \
-     (n) < 10000000UL ? 7 : (n) < 100000000UL ? 8 : \
-     (n) < 1000000000UL ? 9 : 10)
-
-/* Digits reserved for the auto-generated Content-Length value. A part body
- * can never exceed the maximum SIP packet length, so bound the reserved
- * space by PJSIP_MAX_PKT_LEN's digit count.
- */
-#define CLEN_SPACE      NUM_DIGITS(PJSIP_MAX_PKT_LEN)
-
 
 static int multipart_print_body(struct pjsip_msg_body *msg_body,
                                 char *buf, pj_size_t size)
@@ -72,20 +59,11 @@ static int multipart_print_body(struct pjsip_msg_body *msg_body,
 
     m_data = (const struct multipart_data*)msg_body->data;
 
-    PJ_ASSERT_RETURN(m_data, -1);
-
-    /* Refuse to print a multipart body that has no parts. This is
-     * reachable from a received message whose multipart body contains
-     * only the closing delimiter. Return a negative value (printer
-     * error) rather than the positive PJ_EINVAL, so the caller in
-     * pjsip_msg_print() does not mistake it for an encoded length and
-     * over-advance the output buffer.
-     */
-    if (pj_list_empty(&m_data->part_head))
-        return -1;
+    PJ_ASSERT_RETURN(m_data && !pj_list_empty(&m_data->part_head), PJ_EINVAL);
 
     part = m_data->part_head.next;
     while (part != &m_data->part_head) {
+        enum { CLEN_SPACE = 5 };
         char *clen_pos;
         const pjsip_hdr *hdr;
         pj_bool_t ctype_printed = PJ_FALSE;
@@ -140,10 +118,8 @@ static int multipart_print_body(struct pjsip_msg_body *msg_body,
             *p++ = '\r';
             *p++ = '\n';
 
-            /* Add Content-Length header. Reserve space for both this line's
-             * CRLF and the empty CRLF written after the headers below.
-             */
-            if ((end-p) < clen_hdr.slen + CLEN_SPACE + 4) {
+            /* Add Content-Length header. */
+            if ((end-p) < clen_hdr.slen + 12 + 2) {
                 return -1;
             }
             pj_memcpy(p, clen_hdr.ptr, clen_hdr.slen);
@@ -179,8 +155,7 @@ static int multipart_print_body(struct pjsip_msg_body *msg_body,
                 int len;
 
                 len = pj_utoa(printed, tmp);
-                if (len > CLEN_SPACE)
-                    return -1;
+                if (len > CLEN_SPACE) len = CLEN_SPACE;
                 pj_memcpy(clen_pos+CLEN_SPACE-len, tmp, len);
             }
         }
@@ -574,14 +549,12 @@ static pj_str_t cid_uri_to_hdr_value(pj_pool_t *pool, pj_str_t *cid_uri)
     pj_size_t cid_len = pj_strlen(cid_uri);
     pj_size_t alloc_len = cid_len + 2 /* for the leading and trailing angle brackets */;
     pj_str_t uri_overlay;
-    pj_str_t cid_hdr = {0};
+    pj_str_t cid_hdr;
     pj_str_t hdr_overlay;
 
     pj_strassign(&uri_overlay, cid_uri);
     /* If the URI is already enclosed in angle brackets, remove them. */
     if (uri_overlay.ptr[0] == '<') {
-        if (uri_overlay.slen < 2)
-            return cid_hdr;
         uri_overlay.ptr++;
         uri_overlay.slen -= 2;
     }
@@ -860,7 +833,7 @@ PJ_DEF(pjsip_msg_body*) pjsip_multipart_parse(pj_pool_t *pool,
 
         /* Eat the boundary */
         curptr += delim.slen;
-        if (curptr+1 < endptr && *curptr=='-' && *(curptr+1)=='-') {
+        if (*curptr=='-' && curptr<endptr-1 && *(curptr+1)=='-') {
             /* Found the closing delimiter */
             curptr += 2;
             break;
@@ -868,12 +841,8 @@ PJ_DEF(pjsip_msg_body*) pjsip_multipart_parse(pj_pool_t *pool,
         /* Optional whitespace after delimiter */
         while (curptr!=endptr && IS_SPACE(*curptr)) ++curptr;
         /* Mandatory CRLF */
-        if (curptr == endptr) {
-            PJ_LOG(2, (THIS_FILE, "Unexpected end of buffer after boundary"));
-            return NULL;
-        }
         if (*curptr=='\r') ++curptr;
-        if (curptr == endptr || *curptr!='\n') {
+        if (*curptr!='\n') {
             /* Expecting a newline here */
             PJ_LOG(2, (THIS_FILE, "Failed to find newline"));
 

@@ -500,14 +500,6 @@ PJ_INLINE(pjsip_cfg_t*) pjsip_cfg(void)
  * larger than this value the request will be sent with TCP. This setting
  * is useful only when PJSIP_DONT_SWITCH_TO_TCP is set to 0.
  *
- * Note that the switch only takes effect when a TCP transport is available to
- * carry the request: the library upgrades the resolved destination to TCP, but
- * if no TCP transport has been created/registered, transport acquisition for it
- * fails; if the sender allows fallback to the next resolved address, the
- * request may then be sent oversized over UDP. Applications that rely on this
- * automatic switch should therefore create a TCP transport in addition to the
- * UDP one.
- *
  * Default is 1300 bytes.
  */
 #ifndef PJSIP_UDP_SIZE_THRESHOLD
@@ -566,7 +558,7 @@ PJ_INLINE(pjsip_cfg_t*) pjsip_cfg(void)
  * access module.
  */
 #ifndef PJSIP_SAFE_MODULE
-#   define PJSIP_SAFE_MODULE            0
+#   define PJSIP_SAFE_MODULE            1
 #endif
 
 
@@ -827,21 +819,6 @@ PJ_INLINE(pjsip_cfg_t*) pjsip_cfg(void)
 
 
 /**
- * Specify whether to respond to an incoming RFC 5626 (Section 4.4.1) CRLF
- * keep-alive "ping" (a double CRLF, i.e. "\r\n\r\n") received on a TCP
- * transport with a single CRLF ("\r\n") "pong". This is the receiving
- * (server) side of the CRLF keep-alive mechanism; the sending side is
- * controlled by \a PJSIP_TCP_KEEP_ALIVE_INTERVAL and is independent of
- * this setting.
- *
- * Default: 1 (enabled)
- */
-#ifndef PJSIP_TCP_KEEP_ALIVE_RESPONSE
-#   define PJSIP_TCP_KEEP_ALIVE_RESPONSE    1
-#endif
-
-
-/**
  * The initial timeout interval for incoming TCP transports
  * (i.e. server side) in the event that no valid SIP message is received
  * following a successful connection. The value is in seconds.
@@ -885,21 +862,6 @@ PJ_INLINE(pjsip_cfg_t*) pjsip_cfg(void)
  */
 #ifndef PJSIP_TLS_KEEP_ALIVE_DATA
 #   define PJSIP_TLS_KEEP_ALIVE_DATA        { "\r\n\r\n", 4 }
-#endif
-
-
-/**
- * Specify whether to respond to an incoming RFC 5626 (Section 4.4.1) CRLF
- * keep-alive "ping" (a double CRLF, i.e. "\r\n\r\n") received on a TLS
- * transport with a single CRLF ("\r\n") "pong". This is the receiving
- * (server) side of the CRLF keep-alive mechanism; the sending side is
- * controlled by \a PJSIP_TLS_KEEP_ALIVE_INTERVAL and is independent of
- * this setting.
- *
- * Default: 1 (enabled)
- */
-#ifndef PJSIP_TLS_KEEP_ALIVE_RESPONSE
-#   define PJSIP_TLS_KEEP_ALIVE_RESPONSE    1
 #endif
 
 
@@ -1598,7 +1560,7 @@ PJ_INLINE(pjsip_cfg_t*) pjsip_cfg(void)
 #   define PJSIP_INV_ACCEPT_UNKNOWN_BODY    PJ_FALSE
 #endif
 
-/**
+/** 
  * Specify whether to check if UPDATE sent in EARLY state has already
  * completed SDP negotiation using reliable provisional responses, as
  * specified in RFC3311 section 5.1.
@@ -1610,24 +1572,6 @@ PJ_INLINE(pjsip_cfg_t*) pjsip_cfg(void)
  */
 #ifndef PJSIP_INV_UPDATE_EARLY_CHECK_RELIABLE
 #   define PJSIP_INV_UPDATE_EARLY_CHECK_RELIABLE    0
-#endif
-
-/**
- * Specify whether to absorb INVITE request retransmissions arriving after
- * an ACK has been received for a 2xx response. When enabled (default), the
- * INVITE transaction termination is delayed for about ~32 seconds
- * (configurable via pjsip_cfg()->tsx.td) so retransmitted INVITEs are
- * matched to the existing transaction and answered by the cached 2xx
- * retransmission, rather than being treated as new requests.
- *
- * Set this to 0 to revert to the legacy behavior, where the INVITE
- * transaction is terminated immediately after ACK and any subsequent
- * retransmission is treated as a new request. See also \pr{4765}.
- *
- * Default: 1 (enabled)
- */
-#ifndef PJSIP_INV_ABSORB_RETRANS_AFTER_ACK
-#   define PJSIP_INV_ABSORB_RETRANS_AFTER_ACK   1
 #endif
 
 /**

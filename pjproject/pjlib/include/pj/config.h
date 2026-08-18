@@ -615,27 +615,6 @@
 #endif
 
 /**
- * If enabled, the hash TABLE (pj_hash_table_t) computes its bucket index with
- * a keyed hash (SipHash) using a per-process random key, instead of the plain
- * djb2 hash. This defends against hash-flooding denial-of-service, where an
- * attacker who controls keys inserted into a table (e.g. SIP transaction keys
- * derived from the Via branch, or dialog keys from Call-ID/tags) crafts many
- * keys that collide into one bucket, degrading lookups from O(1) to O(n).
- *
- * This only affects the internal table bucketing. The public pj_hash_calc()
- * remains the deterministic djb2 hash (it is used to derive stable values such
- * as the SIP +sip.instance id and ICE foundations, which must not be keyed).
- *
- * Requires 64-bit integer support (PJ_HAS_INT64); otherwise the table falls
- * back to djb2 regardless of this setting.
- *
- * Default: 1 (enabled)
- */
-#ifndef PJ_HASH_TABLE_USE_SIPHASH
-#  define PJ_HASH_TABLE_USE_SIPHASH   1
-#endif
-
-/**
  * Set this to 1 to enable debugging on the group lock. Default: 0
  */
 #ifndef PJ_GRP_LOCK_DEBUG
@@ -644,18 +623,12 @@
 
 
 /**
- * Numeric default stack size used by pjlib in legacy code paths and on
- * platforms that require an explicit per-thread stack size. Historically
- * intended as a small embedded-friendly default.
+ * Specify this as \a stack_size argument in #pj_thread_create() to specify
+ * that thread should use default stack size for the current platform.
  *
- * IMPORTANT: this is NOT a sentinel for "OS default" -- pass 0 (zero)
- * for that. To get the OS thread default stack size on every platform,
- * pass 0 as the stack_size argument to #pj_thread_create(); the OS
- * picks its default regardless of #PJ_THREAD_SET_STACK_SIZE.
- *
- * Default: 8192.
+ * Default: 8192
  */
-#ifndef PJ_THREAD_DEFAULT_STACK_SIZE
+#ifndef PJ_THREAD_DEFAULT_STACK_SIZE 
 #  define PJ_THREAD_DEFAULT_STACK_SIZE    8192
 #endif
 
@@ -848,88 +821,17 @@
 
 
 /**
- * This setting ensures that the read and write callbacks are invoked without
- * holding the key mutex, even when concurrency is disabled.
+ * This setting ensures that the read callback is invoked without holding
+ * the key mutex, even when concurrency is disabled.
  *
  * Note: This may introduce a race condition between key unregistration
- * and the read/write callbacks. Therefore, the application must be prepared
- * to handle these callbacks even after pj_ioqueue_unregister() has returned.
+ * and the read callback. Therefore, the application must be prepared
+ * to handle a read callback even after pj_ioqueue_unregister() has returned.
  *
- * Default: 1 (enabled).
+ * Default: 0 (disabled).
  */
 #ifndef PJ_IOQUEUE_CALLBACK_NO_LOCK
-#   define PJ_IOQUEUE_CALLBACK_NO_LOCK  1
-#endif
-
-/**
- * Enable the ioqueue "fast track" optimization. When enabled (default),
- * pj_ioqueue_send(), pj_ioqueue_sendto(), and pj_ioqueue_accept() attempt
- * the operation immediately before queuing it for async processing.
- *
- * This should not be disabled in production. Setting to 0 forces all
- * operations through the async path, intended only for debugging and
- * testing the ioqueue completion callback logic. See #4864, #4878.
- *
- * Default: 1 (enabled).
- */
-#ifndef PJ_IOQUEUE_FAST_TRACK
-#   define PJ_IOQUEUE_FAST_TRACK  1
-#endif
-
-
-/**
- * Maximum number of SSL send operations that can be queued (encrypted
- * and waiting for the network). When this limit is reached,
- * pj_ssl_sock_send() returns PJ_EBUSY and the application must retry
- * later.
- *
- * This prevents unbounded memory growth when the network stalls (e.g.,
- * TCP window full, slow receiver). Each queued operation holds a pool
- * with the encrypted TLS record (~4-16 KB depending on record size).
- * Embedded or memory-constrained deployments may set this to bound
- * memory usage per SSL socket.
- *
- * Default: 0 (disabled — consistent with ioqueue write_list which
- * is also unbounded). Set to a positive value to enable.
- */
-#ifndef PJ_SSL_SEND_OP_ACTIVE_MAX
-#   define PJ_SSL_SEND_OP_ACTIVE_MAX    0
-#endif
-
-
-/**
- * Maximum number of completed SSL send operations kept in a free list
- * for recycling. Each send operation has its own pool (~4-16 KB for
- * the encrypted TLS record). Recycling avoids repeated pool
- * allocation/release on busy connections.
- *
- * Higher values reduce allocation overhead at the cost of resident
- * memory per SSL socket. With asynchronous sends (PJ_IOQUEUE_FAST_TRACK
- * disabled), operations cycle rapidly through alloc-send-free, so a
- * larger free list reduces churn.
- *
- * Set to 0 to disable recycling (always release pools immediately).
- *
- * Default: 16
- */
-#ifndef PJ_SSL_SEND_OP_FREE_LIST_MAX
-#   define PJ_SSL_SEND_OP_FREE_LIST_MAX     16
-#endif
-
-
-/**
- * Minimum encrypted data buffer size for SSL send operations. When a
- * send is smaller than this value, the buffer is padded to this size
- * so that the operation can be reused from the free list for future
- * sends of varying sizes without reallocation.
- *
- * Should be at least as large as a typical TLS record overhead plus
- * a common application payload (e.g., a SIP response ~1-2 KB).
- *
- * Default: 4000
- */
-#ifndef PJ_SSL_SEND_OP_MIN_BUF_SIZE
-#   define PJ_SSL_SEND_OP_MIN_BUF_SIZE      4000
+#   define PJ_IOQUEUE_CALLBACK_NO_LOCK  0
 #endif
 
 
@@ -1301,18 +1203,6 @@
 #   define PJ_SSL_SOCK_OSSL_USE_THREAD_CB   1
 #else
 #   define PJ_SSL_SOCK_OSSL_USE_THREAD_CB   0
-#endif
-
-
-/**
- * Maximum number of TLS client sessions cached for resumption by the OpenSSL
- * backend when pj_ssl_sock_param.enable_session_reuse is set. Sessions are
- * cached per server name; the oldest entry is evicted when the cache is full.
- *
- * Default: 64
- */
-#ifndef PJ_SSL_SOCK_OSSL_SESS_CACHE_SIZE
-#   define PJ_SSL_SOCK_OSSL_SESS_CACHE_SIZE   64
 #endif
 
 
@@ -1719,7 +1609,7 @@ PJ_BEGIN_DECL
 #define PJ_VERSION_NUM_MAJOR    2
 
 /** PJLIB version minor number. */
-#define PJ_VERSION_NUM_MINOR    17
+#define PJ_VERSION_NUM_MINOR    16
 
 /** PJLIB version revision number. */
 #define PJ_VERSION_NUM_REV      0
@@ -1728,7 +1618,7 @@ PJ_BEGIN_DECL
  * Extra suffix for the version (e.g. "-trunk"), or empty for
  * web release version.
  */
-#define PJ_VERSION_NUM_EXTRA    "-dev"
+#define PJ_VERSION_NUM_EXTRA    ""
 
 /**
  * PJLIB version number consists of three bytes with the following format:
@@ -1760,3 +1650,4 @@ PJ_END_DECL
 
 
 #endif  /* __PJ_CONFIG_H__ */
+

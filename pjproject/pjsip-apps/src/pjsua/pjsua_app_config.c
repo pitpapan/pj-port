@@ -57,20 +57,13 @@ static void usage(void)
     puts  ("  --password=string   Set authentication password");
 
 #if PJSIP_HAS_DIGEST_AKA_AUTH
-    puts  ("  --aka-op=hex        Set OP value for Digest AKA authentication.");
-    puts  ("                      Specifying --aka-op or --aka-amf switches the");
-    puts  ("                      current credential to AKA mode (K is taken from");
-    puts  ("                      --password).");
-    puts  ("  --aka-amf=hex       Set AMF value for Digest AKA authentication");
+    puts  ("  --aka-op=hex        Set OP value to use in Digest AKA authentication");
+    puts  ("  --aka-amf=hex       Set AMF value to use in Digest AKA authentication");
 #endif
 
     puts  ("  --contact=url       Optionally override the Contact information");
     puts  ("  --contact-params=S  Append the specified parameters S in Contact header");
     puts  ("  --contact-uri-params=S  Append the specified parameters S in Contact URI");
-    puts  ("  --reg-contact-params=S  Append the specified parameters S in Contact");
-    puts  ("                      header of REGISTER requests only");
-    puts  ("  --reg-contact-uri-params=S  Append the specified parameters S in");
-    puts  ("                      Contact URI of REGISTER requests only");
     puts  ("  --proxy=url         Optional URL of proxy server to visit");
     puts  ("                      May be specified multiple times");
     printf("  --reg-timeout=SEC   Optional registration interval (default %d)\n",
@@ -79,8 +72,6 @@ static void usage(void)
             PJSUA_REG_RETRY_INTERVAL);
     puts  ("  --reg-use-proxy=N   Control the use of proxy settings in REGISTER.");
     puts  ("                      0=no proxy, 1=outbound only, 2=acc only, 3=all (default)");
-    puts  ("  --server-affinity[=on|off]  Pin same SIP server across requests");
-    puts  ("                      (TCP/TLS only in this version). See issue #4964.");
     puts  ("  --publish           Send presence PUBLISH for this account");
     puts  ("  --mwi               Subscribe to message summary/waiting indication");
     puts  ("  --use-ims           Enable 3GPP/IMS related settings on this account");
@@ -184,10 +175,6 @@ static void usage(void)
     puts  ("  --no-tones          Disable audible tones");
     puts  ("  --jb-max-size       Specify jitter buffer maximum size, in msec (default=-1)");
     puts  ("  --extra-audio       Add one more audio stream");
-#if !PJSUA_MEDIA_HAS_PJMEDIA
-    puts  ("  --custom-sdp=STR    Replace generated SDP with this string.");
-    puts  ("                      Use \\r\\n or \\n as line separators. The full SDP is replaced as-is.");
-#endif
 
 #if PJSUA_HAS_VIDEO
     puts  ("");
@@ -225,8 +212,6 @@ static void usage(void)
     puts  ("  --turn-user         TURN username");
     puts  ("  --turn-passwd       TURN password");
     puts  ("  --rtcp-mux          Enable RTP & RTCP multiplexing (default: no)");
-    puts  ("  --rtcp-xr           Enable RTCP XR, extended reports");
-    puts  ("                      (requires PJMEDIA_HAS_RTCP_XR build option)");
 #if defined(PJMEDIA_HAS_SRTP) && (PJMEDIA_HAS_SRTP != 0)
     puts  ("  --srtp-keying       SRTP keying method for outgoing SDP offer.");
     puts  ("                      0=SDES (default), 1=DTLS");
@@ -253,15 +238,11 @@ static void usage(void)
     puts  ("  --thread-cnt=N      Number of worker threads (default:1)");
     puts  ("  --duration=SEC      Set maximum call duration (default:no limit)");
     puts  ("  --norefersub        Suppress event subscription when transferring calls");
-    puts  ("  --no-supported-norefersub");
-    puts  ("                      Don't advertise \"norefersub\" in the Supported header");
     puts  ("  --use-compact-form  Minimize SIP message size");
     puts  ("  --no-force-lr       Allow strict-route to be used (i.e. do not force lr)");
     puts  ("  --accept-redirect=N Specify how to handle call redirect (3xx) response.");
     puts  ("                      0: reject, 1: follow automatically,");
     puts  ("                      2: follow + replace To header (default), 3: ask");
-    puts  ("  --keep-call-on-tsx-fail");
-    puts  ("                      Keep call on in-dialog UAC tsx 408/481");
 
     puts  ("");
     puts  ("CLI options:");
@@ -402,7 +383,6 @@ static pj_status_t parse_args(int argc, char *argv[],
            OPT_LOCAL_PORT, OPT_IP_ADDR, OPT_PROXY, OPT_OUTBOUND_PROXY,
            OPT_REGISTRAR, OPT_REG_TIMEOUT, OPT_PUBLISH, OPT_ID, OPT_CONTACT,
            OPT_BOUND_ADDR, OPT_CONTACT_PARAMS, OPT_CONTACT_URI_PARAMS,
-           OPT_REG_CONTACT_PARAMS, OPT_REG_CONTACT_URI_PARAMS,
            OPT_100REL, OPT_USE_IMS, OPT_REALM, OPT_USERNAME, OPT_PASSWORD, OPT_AKA_OP, OPT_AKA_AMF,
            OPT_REG_RETRY_INTERVAL, OPT_REG_USE_PROXY,
            OPT_MWI, OPT_NAMESERVER, OPT_STUN_SRV, OPT_UPNP, OPT_OUTB_RID,
@@ -416,15 +396,14 @@ static pj_status_t parse_args(int argc, char *argv[],
            OPT_TURN_TLS_CA_FILE, OPT_TURN_TLS_CERT_FILE, 
            OPT_TURN_TLS_NEG_TIMEOUT, OPT_TURN_TLS_CIPHER,
            OPT_TURN_TLS_PRIV_FILE, OPT_TURN_TLS_PASSWORD,
-           OPT_RTCP_MUX, OPT_RTCP_XR, OPT_SRTP_KEYING,
+           OPT_RTCP_MUX, OPT_SRTP_KEYING,
            OPT_PLAY_FILE, OPT_PLAY_TONE, OPT_RTP_PORT, OPT_ADD_CODEC,
            OPT_ILBC_MODE, OPT_REC_FILE, OPT_AUTO_REC,
            OPT_COMPLEXITY, OPT_QUALITY, OPT_PTIME, OPT_NO_VAD,
            OPT_RX_DROP_PCT, OPT_TX_DROP_PCT, OPT_EC_TAIL, OPT_EC_OPT,
            OPT_NEXT_ACCOUNT, OPT_NEXT_CRED, OPT_MAX_CALLS,
            OPT_DURATION, OPT_NO_TCP, OPT_NO_UDP, OPT_THREAD_CNT,
-           OPT_NOREFERSUB, OPT_NO_SUPPORTED_NOREFERSUB, OPT_ACCEPT_REDIRECT,
-           OPT_KEEP_CALL_ON_TSX_FAIL,
+           OPT_NOREFERSUB, OPT_ACCEPT_REDIRECT,
            OPT_USE_TLS, OPT_TLS_CA_FILE, OPT_TLS_CERT_FILE, OPT_TLS_PRIV_FILE,
            OPT_TLS_PASSWORD, OPT_TLS_VERIFY_SERVER, OPT_TLS_VERIFY_CLIENT,
            OPT_TLS_NEG_TIMEOUT, OPT_TLS_CIPHER,
@@ -440,11 +419,7 @@ static pj_status_t parse_args(int argc, char *argv[],
            OPT_VIDEO, OPT_TEXT, OPT_TEXT_RED, OPT_EXTRA_AUDIO,
            OPT_VCAPTURE_DEV, OPT_VRENDER_DEV, OPT_PLAY_AVI, OPT_AUTO_PLAY_AVI,
            OPT_REC_AVI, OPT_REC_AVI_SIZE, OPT_REC_AVI_AUDIO, OPT_AUTO_REC_AVI,
-           OPT_USE_CLI, OPT_CLI_TELNET_PORT, OPT_DISABLE_CLI_CONSOLE,
-           OPT_SERVER_AFFINITY
-#if !PJSUA_MEDIA_HAS_PJMEDIA
-           , OPT_CUSTOM_SDP
-#endif
+           OPT_USE_CLI, OPT_CLI_TELNET_PORT, OPT_DISABLE_CLI_CONSOLE
     };
     struct pj_getopt_option long_options[] = {
         { "config-file",1, 0, OPT_CONFIG_FILE},
@@ -468,8 +443,6 @@ static pj_status_t parse_args(int argc, char *argv[],
         { "no-tcp",     0, 0, OPT_NO_TCP},
         { "no-udp",     0, 0, OPT_NO_UDP},
         { "norefersub", 0, 0, OPT_NOREFERSUB},
-        { "no-supported-norefersub", 0, 0, OPT_NO_SUPPORTED_NOREFERSUB},
-        { "keep-call-on-tsx-fail", 0, 0, OPT_KEEP_CALL_ON_TSX_FAIL},
         { "proxy",      1, 0, OPT_PROXY},
         { "outbound",   1, 0, OPT_OUTBOUND_PROXY},
         { "registrar",  1, 0, OPT_REGISTRAR},
@@ -482,8 +455,6 @@ static pj_status_t parse_args(int argc, char *argv[],
         { "contact",    1, 0, OPT_CONTACT},
         { "contact-params",1,0, OPT_CONTACT_PARAMS},
         { "contact-uri-params",1,0, OPT_CONTACT_URI_PARAMS},
-        { "reg-contact-params",1,0, OPT_REG_CONTACT_PARAMS},
-        { "reg-contact-uri-params",1,0, OPT_REG_CONTACT_URI_PARAMS},
         { "auto-update-nat",    1, 0, OPT_AUTO_UPDATE_NAT},
         { "disable-stun",0,0, OPT_DISABLE_STUN},
         { "use-compact-form",   0, 0, OPT_USE_COMPACT_FORM},
@@ -535,7 +506,6 @@ static pj_status_t parse_args(int argc, char *argv[],
         { "turn-user",  1, 0, OPT_TURN_USER},
         { "turn-passwd",1, 0, OPT_TURN_PASSWD},
         { "rtcp-mux",   0, 0, OPT_RTCP_MUX},
-        { "rtcp-xr",    0, 0, OPT_RTCP_XR},
 
 #if defined(PJMEDIA_HAS_SRTP) && (PJMEDIA_HAS_SRTP != 0)
         { "use-srtp",   1, 0, OPT_USE_SRTP},
@@ -605,10 +575,6 @@ static pj_status_t parse_args(int argc, char *argv[],
         { "use-cli",    0, 0, OPT_USE_CLI},
         { "cli-telnet-port", 1, 0, OPT_CLI_TELNET_PORT},
         { "no-cli-console", 0, 0, OPT_DISABLE_CLI_CONSOLE},
-        { "server-affinity", 2, 0, OPT_SERVER_AFFINITY},
-#if !PJSUA_MEDIA_HAS_PJMEDIA
-        { "custom-sdp",     1, 0, OPT_CUSTOM_SDP},
-#endif
         { NULL, 0, 0, 0}
     };
     pj_status_t status;
@@ -717,12 +683,6 @@ static pj_status_t parse_args(int argc, char *argv[],
             if (pj_log_get_level() < 3)
                 pj_log_set_level(3);
             pj_dump_config();
-            /* pj_dump_config() lives in pjlib and cannot report pjmedia
-             * build flags. Emit the ones the test suite probes for here so
-             * detection works regardless of static vs. shared linking
-             * (inc_util.has_rtcp_xr). */
-            PJ_LOG(3, (THIS_FILE, "PJMEDIA_HAS_RTCP_XR : %d",
-                       PJMEDIA_HAS_RTCP_XR));
             return PJ_EINVAL;
 
         case OPT_NULL_AUDIO:
@@ -787,14 +747,6 @@ static pj_status_t parse_args(int argc, char *argv[],
             cfg->no_refersub = PJ_TRUE;
             break;
 
-        case OPT_NO_SUPPORTED_NOREFERSUB: /* no-supported-norefersub */
-            cfg->cfg.no_refer_sub = PJ_FALSE;
-            break;
-
-        case OPT_KEEP_CALL_ON_TSX_FAIL: /* keep-call-on-tsx-fail */
-            cfg->keep_call_on_tsx_fail = PJ_TRUE;
-            break;
-
         case OPT_NO_TCP: /* no-tcp */
             if (cfg->no_udp && !cfg->use_tls) {
               PJ_LOG(1,(THIS_FILE,"Error: cannot disable both TCP and UDP"));
@@ -811,10 +763,6 @@ static pj_status_t parse_args(int argc, char *argv[],
                           "in proxy argument", pj_optarg));
                 return PJ_EINVAL;
             }
-            if (cur_acc->proxy_cnt >= PJ_ARRAY_SIZE(cur_acc->proxy)) {
-                PJ_LOG(1,(THIS_FILE, "Error: too many proxies"));
-                return PJ_ETOOMANY;
-            }
             cur_acc->proxy[cur_acc->proxy_cnt++] = pj_str(pj_optarg);
             break;
 
@@ -825,14 +773,7 @@ static pj_status_t parse_args(int argc, char *argv[],
                           "in outbound proxy argument", pj_optarg));
                 return PJ_EINVAL;
             }
-            if (cfg->cfg.outbound_proxy_cnt >=
-                PJ_ARRAY_SIZE(cfg->cfg.outbound_proxy))
-            {
-                PJ_LOG(1,(THIS_FILE, "Error: too many outbound proxies"));
-                return PJ_ETOOMANY;
-            }
-            cfg->cfg.outbound_proxy[cfg->cfg.outbound_proxy_cnt++] =
-                pj_str(pj_optarg);
+            cfg->cfg.outbound_proxy[cfg->cfg.outbound_proxy_cnt++] = pj_str(pj_optarg);
             break;
 
         case OPT_REGISTRAR:   /* registrar */
@@ -937,14 +878,6 @@ static pj_status_t parse_args(int argc, char *argv[],
             cur_acc->contact_uri_params = pj_str(pj_optarg);
             break;
 
-        case OPT_REG_CONTACT_PARAMS:
-            cur_acc->reg_contact_params = pj_str(pj_optarg);
-            break;
-
-        case OPT_REG_CONTACT_URI_PARAMS:
-            cur_acc->reg_contact_uri_params = pj_str(pj_optarg);
-            break;
-
         case OPT_AUTO_UPDATE_NAT:   /* OPT_AUTO_UPDATE_NAT */
             cur_acc->allow_contact_rewrite  = (pj_bool_t)pj_strtoul(pj_cstr(&tmp, pj_optarg));
             break;
@@ -998,9 +931,12 @@ static pj_status_t parse_args(int argc, char *argv[],
         case OPT_PASSWORD:   /* authentication password */
             cur_acc->cred_info[cur_acc->cred_count].data_type = PJSIP_CRED_DATA_PLAIN_PASSWD;
             cur_acc->cred_info[cur_acc->cred_count].data = pj_str(pj_optarg);
+#if PJSIP_HAS_DIGEST_AKA_AUTH
+            cur_acc->cred_info[cur_acc->cred_count].data_type |= PJSIP_CRED_DATA_EXT_AKA;
+            cur_acc->cred_info[cur_acc->cred_count].ext.aka.k = pj_str(pj_optarg);
+            cur_acc->cred_info[cur_acc->cred_count].ext.aka.cb = &pjsip_auth_create_aka_response;
             break;
 
-#if PJSIP_HAS_DIGEST_AKA_AUTH
         case OPT_AKA_OP:    /* aka op */
             {
                 pj_str_t hex = pj_str(pj_optarg);
@@ -1037,8 +973,8 @@ static pj_status_t parse_args(int argc, char *argv[],
                     return PJ_EINVAL;
                 }
             }
-            break;
 #endif
+            break;
 
         case OPT_REG_RETRY_INTERVAL:
             cur_acc->reg_retry_interval = (unsigned)pj_strtoul(pj_cstr(&tmp, pj_optarg));
@@ -1285,12 +1221,6 @@ static pj_status_t parse_args(int argc, char *argv[],
 
         case OPT_RTCP_MUX:
             cur_acc->enable_rtcp_mux = PJ_TRUE;
-            cfg->enable_rtcp_mux = PJ_TRUE;
-            break;
-
-        case OPT_RTCP_XR:
-            cur_acc->enable_rtcp_xr = PJ_TRUE;
-            cfg->enable_rtcp_xr = PJ_TRUE;
             break;
 
 #if defined(PJMEDIA_HAS_SRTP) && (PJMEDIA_HAS_SRTP != 0)
@@ -1672,64 +1602,6 @@ static pj_status_t parse_args(int argc, char *argv[],
             cfg->cli_cfg.cli_fe &= (~CLI_FE_CONSOLE);
             break;
 
-        case OPT_SERVER_AFFINITY:
-            /* --server-affinity            : enable
-             * --server-affinity=on         : enable (same as no value)
-             * --server-affinity=off        : disable explicitly
-             *
-             * Sets both the current account's tristate AND the global
-             * default (pjsua_config.acc_server_affinity_default) so any
-             * account added later (at startup via --next-account or at
-             * runtime via the +a CLI command) inherits the same setting.
-             */
-            if (pj_optarg == NULL ||
-                pj_ansi_stricmp(pj_optarg, "on") == 0)
-            {
-                cur_acc->server_affinity = PJSUA_SERVER_AFFINITY_ENABLED;
-                cfg->cfg.acc_server_affinity_default = PJ_TRUE;
-            } else if (pj_ansi_stricmp(pj_optarg, "off") == 0) {
-                cur_acc->server_affinity = PJSUA_SERVER_AFFINITY_DISABLED;
-                cfg->cfg.acc_server_affinity_default = PJ_FALSE;
-            } else {
-                PJ_LOG(1, (THIS_FILE,
-                           "Error: invalid --server-affinity value '%s'; "
-                           "expected 'on' or 'off'", pj_optarg));
-                return PJ_EINVAL;
-            }
-            break;
-
-#if !PJSUA_MEDIA_HAS_PJMEDIA
-        case OPT_CUSTOM_SDP:
-        {
-            /* Unescape \r\n and \n in the option value so the user can
-             * pass the SDP as a single command-line argument.
-             */
-            const char *src = pj_optarg;
-            char *dst;
-            pj_size_t len = pj_ansi_strlen(pj_optarg);
-
-            cfg->custom_sdp.ptr = (char*)pj_pool_alloc(cfg->pool, len + 1);
-            dst = cfg->custom_sdp.ptr;
-            while (*src) {
-                if (src[0] == '\\' && src[1] == 'r' && src[2] == '\\' &&
-                    src[3] == 'n')
-                {
-                    *dst++ = '\r';
-                    *dst++ = '\n';
-                    src += 4;
-                } else if (src[0] == '\\' && src[1] == 'n') {
-                    *dst++ = '\n';
-                    src += 2;
-                } else {
-                    *dst++ = *src++;
-                }
-            }
-            *dst = '\0';
-            cfg->custom_sdp.slen = (pj_ssize_t)(dst - cfg->custom_sdp.ptr);
-            break;
-        }
-#endif /* !PJSUA_MEDIA_HAS_PJMEDIA */
-
         default:
             PJ_LOG(1,(THIS_FILE,
                       "Argument \"%s\" is not valid. Use --help to see help",
@@ -1779,32 +1651,6 @@ static pj_status_t parse_args(int argc, char *argv[],
         {
             acfg->cred_count++;
         }
-
-#if PJSIP_HAS_DIGEST_AKA_AUTH
-        /* Promote credentials to AKA if --aka-op or --aka-amf was supplied.
-         * Order-independent: --aka-op/--aka-amf may appear before or after
-         * --password on the command line. K is taken from the password, so
-         * --password is required for AKA — skip promotion if it's missing
-         * rather than silently running AKA with an all-zero K.
-         */
-        {
-            unsigned j;
-            for (j=0; j<acfg->cred_count; ++j) {
-                pjsip_cred_info *c = &acfg->cred_info[j];
-                if (c->ext.aka.op.slen || c->ext.aka.amf.slen) {
-                    if (c->data.slen == 0) {
-                        PJ_LOG(1,(THIS_FILE,
-                                  "Error: --aka-op/--aka-amf requires "
-                                  "--password (used as AKA K)"));
-                        return PJ_EINVAL;
-                    }
-                    c->data_type |= PJSIP_CRED_DATA_EXT_AKA;
-                    c->ext.aka.k = c->data;
-                    c->ext.aka.cb = &pjsip_auth_create_aka_response;
-                }
-            }
-        }
-#endif
 
         if (acfg->ice_cfg.enable_ice) {
             acfg->ice_cfg_use = PJSUA_ICE_CONFIG_USE_CUSTOM;
@@ -1864,28 +1710,12 @@ static void default_config()
     cfg->udp_cfg.port = 5060;
     pjsua_transport_config_default(&cfg->rtp_cfg);
     cfg->rtp_cfg.port = 4000;
-    cfg->enable_rtcp_mux = PJ_FALSE;
-    /* Match pjsua_acc_config_default()'s macro-derived default so that
-     * applying this app-level fallback to transport-created local accounts
-     * doesn't override RTCP XR on builds that enable it by default. The
-     * --rtcp-xr option force-enables it regardless. */
-    cfg->enable_rtcp_xr = (PJMEDIA_HAS_RTCP_XR && PJMEDIA_STREAM_ENABLE_XR);
     cfg->redir_op = PJSIP_REDIRECT_ACCEPT_REPLACE;
     cfg->duration = PJSUA_APP_NO_LIMIT_DURATION;
     cfg->wav_id = PJSUA_INVALID_ID;
     cfg->rec_id = PJSUA_INVALID_ID;
     cfg->wav_port = PJSUA_INVALID_ID;
     cfg->rec_port = PJSUA_INVALID_ID;
-    cfg->dyn_player_id = PJSUA_INVALID_ID;
-    cfg->dyn_player_port = PJSUA_INVALID_ID;
-    cfg->dyn_player_call = PJSUA_INVALID_ID;
-    cfg->dyn_player_active = PJ_FALSE;
-    cfg->dyn_play_filename[0] = '\0';
-    cfg->dyn_rec_id = PJSUA_INVALID_ID;
-    cfg->dyn_rec_port = PJSUA_INVALID_ID;
-    cfg->dyn_rec_call = PJSUA_INVALID_ID;
-    cfg->dyn_rec_active = PJ_FALSE;
-    cfg->dyn_rec_filename[0] = '\0';
     cfg->mic_level = cfg->speaker_level = 1.0;
     cfg->capture_dev = PJSUA_INVALID_ID;
     cfg->playback_dev = PJSUA_INVALID_ID;
@@ -2016,21 +1846,6 @@ static void write_account_settings(int acc_index, pj_str_t *result)
                         (int)acc_cfg->contact_uri_params.slen,
                         acc_cfg->contact_uri_params.ptr);
         pj_strcat2(result, line);
-    }
-
-    /* Appended directly: line[] is shorter than the config reader's buffer
-     * and would truncate a long value such as a push token.
-     */
-    if (acc_cfg->reg_contact_params.slen) {
-        pj_strcat2(result, "--reg-contact-params ");
-        pj_strcat(result, &acc_cfg->reg_contact_params);
-        pj_strcat2(result, "\n");
-    }
-
-    if (acc_cfg->reg_contact_uri_params.slen) {
-        pj_strcat2(result, "--reg-contact-uri-params ");
-        pj_strcat(result, &acc_cfg->reg_contact_uri_params);
-        pj_strcat2(result, "\n");
     }
 
     /*  */
@@ -2222,9 +2037,6 @@ static void write_account_settings(int acc_index, pj_str_t *result)
 
     if (acc_cfg->enable_rtcp_mux)
         pj_strcat2(result, "--rtcp-mux\n");
-
-    if (acc_cfg->enable_rtcp_xr)
-        pj_strcat2(result, "--rtcp-xr\n");
 }
 
 /*
@@ -2296,14 +2108,6 @@ int write_settings(pjsua_app_config *config, char *buf, pj_size_t max)
     }
     if (config->enable_qos) {
         pj_strcat2(&cfg, "--set-qos\n");
-    }
-    /* When there are no registered accounts, --rtcp-mux is not written by
-     * write_account_settings(), so emit it here from the global flag. */
-    if (config->acc_cnt == 0 && config->enable_rtcp_mux) {
-        pj_strcat2(&cfg, "--rtcp-mux\n");
-    }
-    if (config->acc_cnt == 0 && config->enable_rtcp_xr) {
-        pj_strcat2(&cfg, "--rtcp-xr\n");
     }
 
     /* Message Composition Indication */
@@ -2690,11 +2494,6 @@ int write_settings(pjsua_app_config *config, char *buf, pj_size_t max)
         pj_strcat2(&cfg, "--norefersub\n");
     }
 
-    /* no-supported-norefersub ? */
-    if (!config->cfg.no_refer_sub) {
-        pj_strcat2(&cfg, "--no-supported-norefersub\n");
-    }
-
     if (pjsip_cfg()->endpt.use_compact_form)
     {
         pj_strcat2(&cfg, "--use-compact-form\n");
@@ -2736,40 +2535,6 @@ int write_settings(pjsua_app_config *config, char *buf, pj_size_t max)
                               config->cfg.timer_setting.sess_expires);
         pj_strcat2(&cfg, line);
     }
-
-#if !PJSUA_MEDIA_HAS_PJMEDIA
-    if (config->custom_sdp.slen) {
-        /* Escape actual CRLF/LF back to \r\n/\n when saving */
-        const char *src = config->custom_sdp.ptr;
-        const char *end = src + config->custom_sdp.slen;
-        pj_str_t escaped;
-        char *ebuf;
-        char *ep;
-
-        /* Worst case: every byte becomes 4 chars (\r\n) */
-        ebuf = (char*)pj_pool_alloc(config->pool,
-                                    (pj_size_t)(config->custom_sdp.slen * 4 + 1));
-        ep = ebuf;
-        while (src < end) {
-            if (src[0] == '\r' && src + 1 < end && src[1] == '\n') {
-                *ep++ = '\\'; *ep++ = 'r'; *ep++ = '\\'; *ep++ = 'n';
-                src += 2;
-            } else if (src[0] == '\n') {
-                *ep++ = '\\'; *ep++ = 'n';
-                src++;
-            } else {
-                *ep++ = *src++;
-            }
-        }
-        *ep = '\0';
-        escaped.ptr = ebuf;
-        escaped.slen = (pj_ssize_t)(ep - ebuf);
-
-        pj_strcat2(&cfg, "--custom-sdp \"");
-        pj_strcat(&cfg, &escaped);
-        pj_strcat2(&cfg, "\"\n");
-    }
-#endif /* !PJSUA_MEDIA_HAS_PJMEDIA */
 
     *(cfg.ptr + cfg.slen) = '\0';
     return (int)cfg.slen;

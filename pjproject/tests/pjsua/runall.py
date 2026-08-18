@@ -18,16 +18,15 @@ tests = []
 excluded_tests = [
     "svn",
     "pyc",
-    "__pycache__",
     "scripts-call/150_srtp_2_1",                     # SRTP optional 'cannot' call SRTP mandatory
     "scripts-call/150_srtp_2_3.py",                  # disabled because #1267 wontfix
     "scripts-call/301_ice_public_a.py",              # Unreliable, proxy returns 408 sometimes
     "scripts-call/301_ice_public_b.py",              # Doesn't work because OpenSER modifies SDP
-    "scripts-call/310_ice_stun_no_host.py",          # Needs public STUN + NAT hairpinning (srflx-only)
     "scripts-pres/200_publish.py",                   # Ok from cmdline, error from runall.py
     "scripts-media-playrec/100_resample_lf_8_11.py", # related to clock-rate 11 kHz problem
     "scripts-media-playrec/100_resample_lf_8_22.py", # related to clock-rate 22 kHz problem
     "scripts-media-playrec/100_resample_lf_11",      # related to clock-rate 11 kHz problem
+    "pesq",                                          # temporarily disabling all pesq related test due to unreliability
     # TODO check all tests below for false negatives
     "call_305_ice_comp_1_2",
     "scripts-sendto/155_err_sdp_bad_syntax",
@@ -42,12 +41,7 @@ excluded_tests = [
     "uas-mwi",
     "uas-register-ip-change-port-only",
     "uas-register-ip-change",
-    "uas-timer-update",
-    # These require alt_pjsua (PJSUA_MEDIA_HAS_PJMEDIA=0); run explicitly with --exe alt_pjsua
-    "alt-pjsua-uac-custom-sdp",
-    "alt-pjsua-uas-custom-sdp",
-    "alt-pjsua-uas-amr-sdp",
-    "alt-pjsua-uas-static-pt-no-rtpmap",
+    "uas-timer-update"
 ]
 
 # Exclude scripts-sipp/uac-reinvite-bad-via-branch on MacOS due to unreliable result
@@ -62,10 +56,6 @@ for f in os.listdir("scripts-run"):
 # Add basic call tests
 for f in os.listdir("scripts-call"):
     tests.append("mod_call.py scripts-call/" + f)
-
-# Add call wav tests (playwav/recwav)
-for f in os.listdir("scripts-call-wav"):
-    tests.append("mod_call_playrec.py scripts-call-wav/" + f)
 
 # Add presence tests
 for f in os.listdir("scripts-pres"):
@@ -202,7 +192,6 @@ for pat in excluded_tests:
 
 # Now run the tests
 total_cnt = len(tests)
-print("Total tests : " + str(total_cnt))
 for t in tests:
     if resume_script!="" and t.find(resume_script)==-1:
         print("Skipping " + t +"..")

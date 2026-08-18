@@ -145,9 +145,6 @@ struct opus_data
     unsigned                     dec_ptime_denum;
     pjmedia_frame                dec_frame[2];
     int                          dec_frame_index;
-    pj_size_t                    dec_frame_buf_size;
-    unsigned char               *parse_buf;
-    pj_size_t                    parse_buf_size;
 };
 
 /* Codec factory instance */
@@ -521,14 +518,10 @@ static pj_status_t factory_default_attr( pjmedia_codec_factory *factory,
     attr->setting.complexity       = opus_cfg.complexity;
     attr->setting.cbr              = opus_cfg.cbr;
 
-    /* Set max RX frame size.  When codec_parse() splits a multi-frame
-     * packet via opus_repacketizer_out_range(), each single-frame output
-     * is a complete Opus packet (TOC + frame data + optional padding).
-     * Per the Opus API docs the worst-case size is 1277 bytes per frame.
-     * Use MAX_ENCODED_PACKET_SIZE (1280) for consistency with codec_parse()
-     * and a small safety margin.
+    /* Set max RX frame size to 1275 (max Opus frame size) to anticipate
+     * possible ptime change on the fly.
      */
-    attr->info.max_rx_frame_size   = MAX_ENCODED_PACKET_SIZE;
+    attr->info.max_rx_frame_size   = 1275;
 
     generate_fmtp(attr);
 
@@ -694,23 +687,10 @@ static pj_status_t  codec_open( pjmedia_codec *codec,
     idx = find_fmtp(&attr->setting.enc_fmtp, &STR_MAX_BIT_RATE, PJ_FALSE);
     if (idx >= 0) {
         unsigned rate;
+        auto_bit_rate = PJ_FALSE;
         rate = (unsigned)pj_strtoul(&attr->setting.enc_fmtp.param[idx].val);
-        /* Clamp to RFC 7587 range: 6000-510000 bps */
-        if (rate < 6000 || rate > 510000) {
-            PJ_LOG(3, (THIS_FILE, "Clamping maxaveragebitrate %u to "
-                       "valid range [6000, 510000]", rate));
-            if (rate < 6000) rate = 6000;
-            if (rate > 510000) rate = 510000;
-        }
-        if (rate < attr->info.max_bps) {
-            PJ_LOG(5, (THIS_FILE, "Setting encoder bitrate to remote's "
-                       "maxaveragebitrate %u", rate));
+        if (rate < attr->info.avg_bps)
             attr->info.avg_bps = rate;
-            auto_bit_rate = PJ_FALSE;
-        } else {
-            PJ_LOG(4, (THIS_FILE, "Ignoring remote's maxaveragebitrate "
-                       "%u (>= max_bps %u)", rate, attr->info.max_bps));
-        }
     }
 
     /* Check plc */
@@ -740,6 +720,15 @@ static pj_status_t  codec_open( pjmedia_codec *codec,
         opus_data->cfg.cbr = cbr > 0? PJ_TRUE: PJ_FALSE;
     }
     
+    /* Check max average bit rate */
+    idx = find_fmtp(&attr->setting.dec_fmtp, &STR_MAX_BIT_RATE, PJ_FALSE);
+    if (idx >= 0) {
+        unsigned rate;
+        rate = (unsigned) pj_strtoul(&attr->setting.dec_fmtp.param[idx].val);
+        if (rate < attr->info.avg_bps)
+            attr->info.avg_bps = rate;
+    }
+
     TRACE_((THIS_FILE, "%s:%d: sample_rate: %u",
             __FUNCTION__, __LINE__, opus_data->cfg.sample_rate));
 
@@ -807,39 +796,16 @@ static pj_status_t  codec_open( pjmedia_codec *codec,
         return PJMEDIA_CODEC_EFAILED;
     }
 
-    /* Initialize temporary decode frames used for FEC.
-     * These buffers hold encoded input data, so they must be at least
-     * MAX_ENCODED_PACKET_SIZE to accept any frame from codec_parse().
-     */
-    opus_data->dec_frame_buf_size = (opus_data->cfg.sample_rate / 1000)
-                * 60 * attr->info.channel_cnt * 2 /* bytes per sample */;
-    if (opus_data->dec_frame_buf_size < MAX_ENCODED_PACKET_SIZE)
-        opus_data->dec_frame_buf_size = MAX_ENCODED_PACKET_SIZE;
+    /* Initialize temporary decode frames used for FEC */
     opus_data->dec_frame[0].type = PJMEDIA_FRAME_TYPE_NONE;
-    opus_data->dec_frame[0].buf  = pj_pool_zalloc(opus_data->pool,
-                opus_data->dec_frame_buf_size);
+    opus_data->dec_frame[0].buf  = pj_pool_zalloc(opus_data->pool,                                   
+                (opus_data->cfg.sample_rate / 1000)
+                * 60 * attr->info.channel_cnt * 2 /* bytes per sample */);
     opus_data->dec_frame[1].type = PJMEDIA_FRAME_TYPE_NONE;
     opus_data->dec_frame[1].buf  = pj_pool_zalloc(opus_data->pool,
-                opus_data->dec_frame_buf_size);
+                (opus_data->cfg.sample_rate / 1000)
+                * 60 * attr->info.channel_cnt * 2 /* bytes per sample */);
     opus_data->dec_frame_index = -1;
-
-    /* Output buffer for codec_parse(). The repacketizer may expand a
-     * multi-frame packet (one shared TOC byte) into N separate single-frame
-     * packets (each with its own TOC), so the total can exceed the input
-     * size. Use a dedicated, persistent buffer sized generously enough to
-     * accommodate any expansion of a MAX_ENCODED_PACKET_SIZE input.
-     */
-    if (!opus_data->parse_buf) {
-        opus_data->parse_buf_size = MAX_ENCODED_PACKET_SIZE * 2;
-        opus_data->parse_buf = pj_pool_alloc(opus_data->pool,
-                                             opus_data->parse_buf_size);
-        if (!opus_data->parse_buf) {
-            opus_data->parse_buf_size = 0;
-            PJ_LOG(2, (THIS_FILE, "Unable to allocate parse buffer"));
-            pj_mutex_unlock(opus_data->mutex);
-            return PJ_ENOMEM;
-        }
-    }
 
     /* Initialize the repacketizers */
     opus_repacketizer_init(opus_data->enc_packer);
@@ -942,8 +908,6 @@ static pj_status_t  codec_parse( pjmedia_codec *codec,
     int bw;
 #endif
 
-    PJ_ASSERT_RETURN(codec && ts && frames && frame_cnt, PJ_EINVAL);
-
     pj_mutex_lock (opus_data->mutex);
 
     if (pkt_size > sizeof(tmp_buf)) {
@@ -965,30 +929,11 @@ static pj_status_t  codec_parse( pjmedia_codec *codec,
       return PJMEDIA_CODEC_EFAILED;
     }
 
-    if (num_frames > (int)*frame_cnt) {
-        PJ_LOG(4, (THIS_FILE, "Opus parse: clamping num_frames from %d to %u",
-                   num_frames, *frame_cnt));
-        num_frames = (int)*frame_cnt;
-    }
-
     out_pos = 0;
     for (i = 0; i < num_frames; ++i) {
-        /* Write extracted single-frame packets into parse_buf rather than
-         * back into pkt, which would overflow when the per-frame outputs
-         * (each with their own TOC byte) total more than pkt_size.
-         */
-        if ((pj_size_t)out_pos >= opus_data->parse_buf_size) {
-            PJ_LOG(5, (THIS_FILE, "Parse output buffer exhausted "
-                       "(pkt_size=%lu, frame=%d)",
-                       (unsigned long)pkt_size, i));
-            pj_mutex_unlock (opus_data->mutex);
-            return PJMEDIA_CODEC_EFAILED;
-        }
         size = opus_repacketizer_out_range(opus_data->dec_packer, i, i+1,
-                                           opus_data->parse_buf + out_pos,
-                                           (opus_int32)
-                                           (opus_data->parse_buf_size -
-                                            out_pos));
+                                           ((unsigned char*)pkt) + out_pos,
+                                           sizeof(tmp_buf));
         if (size < 0) {
             PJ_LOG(5, (THIS_FILE, "Parse failed! (pkt_size=%lu, err=%d)",
                        (unsigned long)pkt_size, size));
@@ -996,7 +941,7 @@ static pj_status_t  codec_parse( pjmedia_codec *codec,
             return PJMEDIA_CODEC_EFAILED;
         }
         frames[i].type = PJMEDIA_FRAME_TYPE_AUDIO;
-        frames[i].buf = opus_data->parse_buf + out_pos;
+        frames[i].buf = ((char*)pkt) + out_pos;
         frames[i].size = size;
         frames[i].bit_info = 0;
 
@@ -1144,19 +1089,6 @@ static pj_status_t  codec_decode( pjmedia_codec *codec,
 
     pj_mutex_lock (opus_data->mutex);
 
-    /* Validate input size against decode buffer capacity before any copy.
-     * This is a safety check to ensure the pj_memcpy() calls below
-     * cannot overflow dec_frame[].buf.
-     */
-    if (input->size > opus_data->dec_frame_buf_size) {
-        PJ_LOG(4, (THIS_FILE, "Opus decode: input size (%u) exceeds decode "
-                   "buffer (%u), dropping frame",
-                   (unsigned)input->size,
-                   (unsigned)opus_data->dec_frame_buf_size));
-        pj_mutex_unlock (opus_data->mutex);
-        return PJMEDIA_CODEC_EFRMTOOSHORT;
-    }
-
     if (opus_data->dec_frame_index == -1) {
         /* First packet, buffer it. */
         opus_data->dec_frame[0].type = input->type;
@@ -1164,13 +1096,13 @@ static pj_status_t  codec_decode( pjmedia_codec *codec,
         opus_data->dec_frame[0].timestamp = input->timestamp;
         pj_memcpy(opus_data->dec_frame[0].buf, input->buf, input->size);
         opus_data->dec_frame_index = 0;
+        pj_mutex_unlock (opus_data->mutex);
 
         /* Return zero decoded bytes */
         output->size = 0;
         output->type = PJMEDIA_FRAME_TYPE_NONE;
         output->timestamp = input->timestamp;
 
-        pj_mutex_unlock (opus_data->mutex);
         return PJ_SUCCESS;
     }
 
@@ -1317,7 +1249,11 @@ static pj_status_t  codec_recover( pjmedia_codec *codec,
 }
 
 #if defined(_MSC_VER)
-#   pragma comment(lib, PJMEDIA_CODEC_OPUS_LIB_NAME)
+#  if 1 /* Change to 0 if Opus lib name is "opus.lib" */
+#    pragma comment(lib, "libopus.a")
+#  else
+#    pragma comment(lib, "opus.lib")
+#  endif
 #endif
 
 #endif /* PJMEDIA_HAS_OPUS_CODEC */

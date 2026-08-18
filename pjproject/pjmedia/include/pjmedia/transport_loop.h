@@ -88,8 +88,7 @@ typedef struct pjmedia_loop_tp_setting
     pj_bool_t   disable_rx;
 
     /*
-     * Max number of attachments (streams) that may share this transport.
-     * Default is 4.
+     * Max number of attachments
      */
     unsigned max_attach_cnt;
 

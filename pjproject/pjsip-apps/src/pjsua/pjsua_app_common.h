@@ -82,11 +82,8 @@ typedef struct pjsua_app_config
     pj_bool_t               no_tcp;
     pj_bool_t               no_udp;
     pj_bool_t               use_tls;
-    pj_bool_t               keep_call_on_tsx_fail;
     pjsua_transport_config  udp_cfg;
     pjsua_transport_config  rtp_cfg;
-    pj_bool_t               enable_rtcp_mux;
-    pj_bool_t               enable_rtcp_xr;
     pjsip_redirect_op       redir_op;
     int                     srtp_keying;
 
@@ -122,21 +119,6 @@ typedef struct pjsua_app_config
     pj_bool_t               auto_rec;
     pjsua_recorder_id       rec_id;
     pjsua_conf_port_id      rec_port;
-
-    /* Dynamic playback control */
-    pjsua_player_id         dyn_player_id;
-    pjsua_conf_port_id      dyn_player_port;
-    pjsua_call_id           dyn_player_call;
-    pj_bool_t               dyn_player_active;
-    char                    dyn_play_filename[PJ_MAXPATH];
-
-    /* Dynamic recording control */
-    pjsua_recorder_id       dyn_rec_id;
-    pjsua_conf_port_id      dyn_rec_port;
-    pjsua_call_id           dyn_rec_call;
-    pj_bool_t               dyn_rec_active;
-    char                    dyn_rec_filename[PJ_MAXPATH];
-
     unsigned                auto_answer;
     unsigned                duration;
 
@@ -190,12 +172,6 @@ typedef struct pjsua_app_config
     /* CLI setting */
     pj_bool_t               use_cli;
     cli_cfg_t               cli_cfg;
-
-#if !PJSUA_MEDIA_HAS_PJMEDIA
-    /* Custom SDP to inject via on_call_sdp_created (replaces generated SDP).
-     * Only available when PJSUA_MEDIA_HAS_PJMEDIA=0 (alt media backend). */
-    pj_str_t                custom_sdp;
-#endif
 } pjsua_app_config;
 
 /** Extern variable declaration **/
