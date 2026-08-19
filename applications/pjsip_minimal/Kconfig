@@ -33,4 +33,11 @@ config PJSIP_PHASE6_TEST
 	  Run deterministic endpoint polling, timer, loop-datagram transport, and
 	  UAC/UAS transaction state-machine tests without socket transports.
 
+config PJSIP_PHASE7_TEST
+	bool "PJSIP Phase 7 IPv4 UDP transport validation"
+	depends on PJPROJECT && PJSIP && PJSIP_UDP_TRANSPORT
+	help
+	  Run deterministic IPv4 UDP-loopback transport, malformed datagram,
+	  ioqueue-capacity, and UAC/UAS transaction tests without Internet access.
+
 endmenu

@@ -21,3 +21,5 @@ build-pjsip-phase5
 build-pjsip-phase5-default
 build-pjsip-phase6
 build-pjsip-phase6-phase5
+build-pjsip-phase7
+build-pjsip-phase7-phase6
