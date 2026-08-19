@@ -12,3 +12,8 @@ build-stage7
 build-stage8
 build-stage9
 build-stage10
+build-pjsip-phase3
+build-pjsip-phase3-default
+build-pjsip-phase4
+build-pjsip-phase4-transports
+build-pjsip-phase4-default
