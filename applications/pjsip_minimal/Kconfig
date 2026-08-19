@@ -26,4 +26,11 @@ config PJSIP_PHASE5_TEST
 	  Run deterministic URI, message, multipart, authentication, transmit-data,
 	  module, and repeated endpoint lifecycle tests without socket transports.
 
+config PJSIP_PHASE6_TEST
+	bool "PJSIP Phase 6 event loop/loop transport/transaction validation"
+	depends on PJPROJECT && PJSIP
+	help
+	  Run deterministic endpoint polling, timer, loop-datagram transport, and
+	  UAC/UAS transaction state-machine tests without socket transports.
+
 endmenu

@@ -16,10 +16,16 @@ int phase4_core_run(void);
 int phase5_core_run(void);
 #endif
 
+#if defined(CONFIG_PJSIP_PHASE6_TEST)
+int phase6_loop_run(void);
+#endif
+
 int main(void)
 {
 	printk("PJSIP minimal Zephyr application\n");
-#if defined(CONFIG_PJSIP_PHASE5_TEST)
+#if defined(CONFIG_PJSIP_PHASE6_TEST)
+	return phase6_loop_run();
+#elif defined(CONFIG_PJSIP_PHASE5_TEST)
 	return phase5_core_run();
 #elif defined(CONFIG_PJSIP_PHASE4_TEST)
 	return phase4_core_run();
