@@ -372,8 +372,8 @@ Introduce the minimum required integration:
 
 pjproject/
 ├── Kconfig
-├── CMakeLists.txt
 └── zephyr/
+    ├── CMakeLists.txt
     └── module.yml
 
 Initial configuration should contain only what is needed for:
@@ -387,7 +387,10 @@ Requirements
 
 The application must not contain hard-coded machine-specific paths.
 
-PJPROJECT must be integrated through the Zephyr module mechanism rather thanbeing manually compiled by the application.
+PJPROJECT must be integrated through the Zephyr module mechanism rather than
+being manually compiled by the application. Zephyr-only build logic must stay
+in `pjproject/zephyr/CMakeLists.txt`; the upstream root `CMakeLists.txt` must
+remain usable by native builds for other operating systems.
 
 Kconfig should become the source of truth for Zephyr-facing port options.
 

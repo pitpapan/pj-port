@@ -25,7 +25,7 @@ The following versions produced the passing Stage 9 and Stage 10 results:
 | Zephyr SDK | 1.0.1 |
 | ARM compiler | Zephyr SDK GCC 14.3.0 |
 | QEMU | 10.0.2 |
-| PJPROJECT/PJLIB | 2.17-dev |
+| PJPROJECT/PJLIB | 2.16 |
 | Board target | `mps2/an385` |
 | Emulated CPU | ARM Cortex-M3 |
 | C library | Picolibc |
@@ -59,7 +59,8 @@ zephyrproject/
 ├── .west/                         West workspace metadata
 ├── zephyr/                        External Zephyr dependency
 ├── modules/                       Projects managed by west
-├── pjproject/                     PJPROJECT and Zephyr module integration
+├── pjproject/                     PJPROJECT source tree
+│   └── zephyr/                    Zephyr-only CMake module entry point
 ├── applications/pjlib_minimal/
 │   ├── prj.conf                   Common port configuration
 │   ├── stage8.conf                Core-runtime validation overlay

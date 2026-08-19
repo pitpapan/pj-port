@@ -2,6 +2,8 @@
 #ifndef __PJ_CONFIG_SITE_H__
 #define __PJ_CONFIG_SITE_H__
 
+#if (defined(PJ_ZEPHYR) && PJ_ZEPHYR != 0) || defined(__ZEPHYR__)
+
 /* Keep optional facilities outside the initial PJLIB-only scope disabled. */
 #define PJ_HAS_FLOATING_POINT               0
 #define PJ_HAS_SSL_SOCK                     0
@@ -23,5 +25,7 @@
 #else
 #  define PJ_HAS_IPV6                       0
 #endif
+
+#endif /* PJ_ZEPHYR || __ZEPHYR__ */
 
 #endif /* __PJ_CONFIG_SITE_H__ */
