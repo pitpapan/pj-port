@@ -17,3 +17,5 @@ build-pjsip-phase3-default
 build-pjsip-phase4
 build-pjsip-phase4-transports
 build-pjsip-phase4-default
+build-pjsip-phase5
+build-pjsip-phase5-default

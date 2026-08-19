@@ -1,0 +1,29 @@
+source "Kconfig.zephyr"
+
+menu "PJSIP minimal application validation"
+
+config PJSIP_PHASE3_TEST
+	bool "PJSIP Phase 3 PJLIB-UTIL validation"
+	depends on PJPROJECT && PJLIB_UTIL
+	depends on !PJSIP
+	help
+	  Build the focused initialization, scanner, string escaping, and MD5
+	  validation for the initial four-source PJLIB-UTIL subset. PJSIP remains
+	  disabled so this test cannot accidentally cross the Phase 4 boundary.
+
+config PJSIP_PHASE4_TEST
+	bool "PJSIP Phase 4 core compile/link validation"
+	depends on PJPROJECT && PJSIP
+	help
+	  Include the public PJSIP umbrella header and validate the explicit
+	  Zephyr core configuration. Endpoint creation and transport runtime tests
+	  remain outside this compile/link-only phase.
+
+config PJSIP_PHASE5_TEST
+	bool "PJSIP Phase 5 parser/message/endpoint validation"
+	depends on PJPROJECT && PJSIP
+	help
+	  Run deterministic URI, message, multipart, authentication, transmit-data,
+	  module, and repeated endpoint lifecycle tests without socket transports.
+
+endmenu

@@ -26,6 +26,46 @@
 #  define PJ_HAS_IPV6                       0
 #endif
 
+#if defined(CONFIG_PJSIP)
+
+/* Phase 4 PJSIP profile: core signaling only, without TLS, AKA, or DNS/SRV. */
+#define PJSIP_HAS_TLS_TRANSPORT             0
+#define PJSIP_HAS_DIGEST_AKA_AUTH           0
+#define PJSIP_HAS_RESOLVER                  0
+
+/* Kconfig owns the initial embedded resource limits. */
+#define PJSIP_MAX_TSX_COUNT                 CONFIG_PJSIP_MAX_TSX_COUNT
+#define PJSIP_MAX_DIALOG_COUNT              CONFIG_PJSIP_MAX_DIALOG_COUNT
+#define PJSIP_MAX_TRANSPORTS                CONFIG_PJSIP_MAX_TRANSPORTS
+#define PJSIP_TPMGR_HTABLE_SIZE             CONFIG_PJSIP_TPMGR_HTABLE_SIZE
+#define PJSIP_MAX_MODULE                    CONFIG_PJSIP_MAX_MODULE
+#define PJSIP_MAX_PKT_LEN                   CONFIG_PJSIP_MAX_PKT_LEN
+#define PJSIP_MAX_TIMER_COUNT               CONFIG_PJSIP_MAX_TIMER_COUNT
+#define PJSIP_MAX_NET_EVENTS                CONFIG_PJSIP_MAX_NET_EVENTS
+#define PJSIP_MAX_TIMED_OUT_ENTRIES         CONFIG_PJSIP_MAX_TIMED_OUT_ENTRIES
+
+#if PJSIP_MAX_TRANSPORTS > PJ_IOQUEUE_MAX_HANDLES
+#  error "PJSIP_MAX_TRANSPORTS exceeds the PJLIB Zephyr ioqueue limit"
+#endif
+
+/* Keep Phase 4 pool sizing explicit and reproducible. */
+#define PJSIP_POOL_LEN_ENDPT                16000
+#define PJSIP_POOL_INC_ENDPT                4000
+#define PJSIP_POOL_RDATA_LEN                4000
+#define PJSIP_POOL_RDATA_INC                4000
+#define PJSIP_POOL_LEN_TRANSPORT            512
+#define PJSIP_POOL_INC_TRANSPORT            512
+#define PJSIP_POOL_LEN_TDATA                4000
+#define PJSIP_POOL_INC_TDATA                4000
+#define PJSIP_POOL_LEN_UA                   512
+#define PJSIP_POOL_INC_UA                   512
+#define PJSIP_POOL_TSX_LAYER_LEN            512
+#define PJSIP_POOL_TSX_LAYER_INC            512
+#define PJSIP_POOL_TSX_LEN                  1536
+#define PJSIP_POOL_TSX_INC                  256
+
+#endif /* CONFIG_PJSIP */
+
 #endif /* PJ_ZEPHYR || __ZEPHYR__ */
 
 #endif /* __PJ_CONFIG_SITE_H__ */

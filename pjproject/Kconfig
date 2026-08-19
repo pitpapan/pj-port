@@ -10,4 +10,104 @@ config PJLIB
 	help
 	  Enable the PJLIB base library.
 
+config PJLIB_UTIL
+	bool "PJLIB-UTIL"
+	depends on PJLIB
+	help
+	  Enable the PJLIB-UTIL facilities selected for Zephyr. The source list is
+	  intentionally explicit and grows only when a consumer requires another
+	  facility.
+
+config PJSIP
+	bool "PJSIP core"
+	depends on PJLIB_UTIL
+	help
+	  Enable the PJSIP signaling core. PJLIB-UTIL and PJLIB must be enabled
+	  first. The socket-free loop transport is part of this base component.
+
+if PJSIP
+
+config PJSIP_MAX_TSX_COUNT
+	int "Maximum PJSIP transactions"
+	range 1 255
+	default 31
+	help
+	  Maximum entries in the transaction hash table. Values of the form
+	  2^n-1 avoid upward rounding of the table size.
+
+config PJSIP_MAX_DIALOG_COUNT
+	int "Maximum PJSIP dialogs"
+	range 1 127
+	default 15
+	help
+	  Maximum entries in the dialog hash table. Values of the form 2^n-1
+	  avoid upward rounding of the table size.
+
+config PJSIP_MAX_TRANSPORTS
+	int "Maximum PJSIP transports"
+	range 1 32
+	default 16
+	help
+	  Maximum transports tracked by PJSIP. The upper bound matches the
+	  PJLIB Zephyr ioqueue limit.
+
+config PJSIP_TPMGR_HTABLE_SIZE
+	int "PJSIP transport hash table size"
+	range 1 255
+	default 15
+	help
+	  Transport manager hash table size. Use a value of the form 2^n-1.
+
+config PJSIP_MAX_MODULE
+	int "Maximum PJSIP modules"
+	range 1 64
+	default 16
+	help
+	  Maximum modules that may attach per-module data to PJSIP objects.
+
+config PJSIP_MAX_PKT_LEN
+	int "Maximum SIP packet length"
+	range 512 65535
+	default 4000
+	help
+	  Maximum encoded or received SIP message size in bytes.
+
+config PJSIP_MAX_TIMER_COUNT
+	int "Initial PJSIP timer capacity"
+	range 16 4096
+	default 128
+	help
+	  Number of timer entries initially allocated by the endpoint timer heap.
+
+config PJSIP_MAX_NET_EVENTS
+	int "PJSIP events per ioqueue poll"
+	range 1 32
+	default 1
+	help
+	  Maximum ioqueue event batches handled by one endpoint poll. One is the
+	  recommended starting value for the select ioqueue backend.
+
+config PJSIP_MAX_TIMED_OUT_ENTRIES
+	int "PJSIP timers processed per poll"
+	range 1 128
+	default 10
+	help
+	  Maximum expired timer entries handled by one endpoint event poll.
+
+endif # PJSIP
+
+config PJSIP_UDP_TRANSPORT
+	bool "PJSIP UDP transport"
+	depends on PJSIP && NET_SOCKETS && NET_IPV4 && NET_UDP
+	help
+	  Compile the IPv4 UDP SIP transport. Runtime validation belongs to a
+	  later porting phase.
+
+config PJSIP_TCP_TRANSPORT
+	bool "PJSIP TCP transport"
+	depends on PJSIP && NET_SOCKETS && NET_IPV4 && NET_TCP
+	help
+	  Compile the IPv4 TCP SIP transport. Runtime validation belongs to a
+	  later porting phase.
+
 endif # PJPROJECT
