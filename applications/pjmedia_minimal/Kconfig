@@ -1,0 +1,13 @@
+source "Kconfig.zephyr"
+
+menu "PJMEDIA minimal application validation"
+
+config PJMEDIA_PHASE1_BOUNDARY_TEST
+	bool "PJMEDIA Phase 1 configuration/header boundary"
+	depends on PJPROJECT && PJMEDIA && PJMEDIA_G711
+	help
+	  Compile public configuration headers and assert the initial Zephyr media
+	  profile. This test links no PJMEDIA implementation and makes no runtime
+	  media claim.
+
+endmenu

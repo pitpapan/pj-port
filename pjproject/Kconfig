@@ -25,12 +25,98 @@ config PJLIB_UTIL_DNS_RESOLVER
 	  Compile the PJLIB-UTIL DNS packet, asynchronous resolver, and SRV
 	  resolver sources. IPv6 and DNS NAPTR remain outside this feature.
 
+menuconfig PJMEDIA
+	bool "PJMEDIA"
+	depends on PJLIB_UTIL
+	help
+	  Enable the PJMEDIA configuration and public-header boundary. Production
+	  source families remain independently selectable and are introduced only
+	  after their port phase validates their complete link closure.
+
+if PJMEDIA
+
+config PJMEDIA_SDP
+	bool "PJMEDIA SDP representation and parser"
+	depends on PJMEDIA
+	help
+	  Select the SDP representation, parser, printer, and comparison boundary.
+	  Its production source closure is introduced in PJMEDIA Phase 2.
+
+config PJMEDIA_SDP_NEG
+	bool "PJMEDIA SDP offer/answer negotiation"
+	depends on PJMEDIA_SDP
+	help
+	  Select SDP negotiation and its audited codec/stream helper closure.
+
+config PJMEDIA_ENDPOINT
+	bool "PJMEDIA endpoint and codec manager"
+	depends on PJMEDIA_SDP
+	help
+	  Select the PJMEDIA endpoint/runtime primitives. The initial runtime will
+	  share the existing PJSIP ioqueue and create no PJMEDIA worker threads.
+
+config PJMEDIA_G711
+	bool "PJMEDIA G.711 PCMU/PCMA codec"
+	depends on PJMEDIA_ENDPOINT
+	help
+	  Select only the built-in PCMU/PCMA codec family. Other codec families
+	  remain disabled by the Zephyr profile.
+
+config PJMEDIA_RTP_RTCP
+	bool "PJMEDIA RTP and RTCP"
+	depends on PJMEDIA_ENDPOINT
+	help
+	  Select the RTP/RTCP packet and session boundary without SRTP or ICE.
+
+config PJMEDIA_UDP_TRANSPORT
+	bool "PJMEDIA IPv4 UDP transport"
+	depends on PJMEDIA_RTP_RTCP && NET_SOCKETS && NET_IPV4 && NET_UDP
+	help
+	  Select plain IPv4 UDP RTP/RTCP transport. SRTP and ICE are separate,
+	  deferred features and are not selected by this option.
+
+config PJMEDIA_STREAM
+	bool "PJMEDIA G.711 audio stream"
+	depends on PJMEDIA_ENDPOINT && PJMEDIA_G711
+	depends on PJMEDIA_RTP_RTCP && PJMEDIA_UDP_TRANSPORT
+	help
+	  Select one G.711 audio stream over the validated RTP/RTCP UDP boundary.
+
+config PJMEDIA_AUDIODEV
+	bool "PJMEDIA audio-device core"
+	depends on PJMEDIA_ENDPOINT
+	help
+	  Select the audio-device abstraction without selecting any backend.
+
+config PJMEDIA_AUDIODEV_NULL
+	bool "PJMEDIA null audio device"
+	depends on PJMEDIA_AUDIODEV
+	help
+	  Select the null audio backend for lifecycle validation only. It does not
+	  generate capture/playback timing and cannot validate media flow.
+
+config PJMEDIA_AUDIODEV_ZEPHYR
+	bool "PJMEDIA Zephyr audio device"
+	depends on PJMEDIA_AUDIODEV && AUDIO
+	help
+	  Select the future Zephyr audio backend. Board, device-tree, codec, clock,
+	  and DMA choices remain application/product configuration.
+
+endif # PJMEDIA
+
 config PJSIP
 	bool "PJSIP core"
 	depends on PJLIB_UTIL
 	help
 	  Enable the PJSIP signaling core. PJLIB-UTIL and PJLIB must be enabled
 	  first. The socket-free loop transport is part of this base component.
+
+config PJSIP_INVITE
+	bool "PJSIP INVITE sessions"
+	depends on PJSIP && PJMEDIA_SDP_NEG
+	help
+	  Select INVITE sessions, 100rel, and session timers after SDP negotiation
+	  has a validated link closure. This remains disabled during PJMEDIA Phase 1.
 
 if PJSIP
 

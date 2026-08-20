@@ -100,6 +100,77 @@ if(CONFIG_PJPROJECT AND CONFIG_PJLIB_UTIL)
   target_link_libraries(pjlib-util PUBLIC pjlib)
 endif()
 
+if(CONFIG_PJPROJECT AND CONFIG_PJMEDIA)
+  message(STATUS "PJPROJECT Zephyr module: PJMEDIA configuration boundary enabled")
+
+  # Phase 1 freezes candidate source families but deliberately does not pass
+  # any of them to zephyr_library_sources(). Each later phase audits its full
+  # compile/link closure before activating the corresponding list. Overlap
+  # between candidate lists is resolved when the first consumer is enabled.
+  set(PJMEDIA_SDP_SOURCES
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/errno.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/sdp.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/sdp_cmp.c
+  )
+  set(PJMEDIA_SDP_NEG_SOURCES
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/sdp_neg.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/codec.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/stream_common.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/types.c
+  )
+  set(PJMEDIA_ENDPOINT_SOURCES
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/endpoint.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/codec.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/event.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/format.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/types.c
+  )
+  set(PJMEDIA_RTP_RTCP_SOURCES
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/rtp.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/rtcp.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/rtcp_fb.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/jbuf.c
+  )
+  set(PJMEDIA_UDP_TRANSPORT_SOURCES
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/transport_udp.c
+  )
+  set(PJMEDIA_STREAM_SOURCES
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/stream_common.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/stream_info.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/stream.c
+  )
+  set(PJMEDIA_G711_SOURCES
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/g711.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/alaw_ulaw.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/plc_common.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/wsola.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/silencedet.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/port.c
+  )
+  set(PJMEDIA_AUDIODEV_SOURCES
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia-audiodev/audiodev.c
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia-audiodev/errno.c
+  )
+  set(PJMEDIA_AUDIODEV_NULL_SOURCES
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia-audiodev/null_dev.c
+  )
+  set(PJMEDIA_AUDIODEV_ZEPHYR_SOURCES)
+
+  # These unsupported/deferred families intentionally have no Zephyr source
+  # selector in the initial profile.
+  set(PJMEDIA_VIDEO_SOURCES)
+  set(PJMEDIA_SRTP_SOURCES)
+  set(PJMEDIA_ICE_SOURCES)
+  set(PJMEDIA_RESAMPLE_SOURCES)
+  set(PJMEDIA_AEC_SOURCES)
+  set(PJMEDIA_LEGACY_SOUND_SOURCES)
+  set(PJMEDIA_OTHER_CODEC_SOURCES)
+
+  # Public PJMEDIA headers are visible only when the PJMEDIA boundary is on.
+  # The Phase 1 application compiles configuration/header assertions only.
+  zephyr_include_directories(${PJPROJECT_ROOT_DIR}/pjmedia/include)
+endif()
+
 if(CONFIG_PJPROJECT AND CONFIG_PJSIP)
   message(STATUS "PJPROJECT Zephyr module: PJSIP core enabled")
 

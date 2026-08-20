@@ -13,6 +13,76 @@
 #define PJ_FILE_IO                          PJ_FILE_IO_ANSI
 #define PJ_QOS_IMPLEMENTATION               PJ_QOS_BSD
 
+#if defined(CONFIG_PJMEDIA)
+
+/* Zephyr's initial PJMEDIA profile is audio-only and dependency-minimal. */
+#define PJMEDIA_HAS_VIDEO                    0
+#define PJMEDIA_HAS_SRTP                     0
+#define PJMEDIA_SRTP_HAS_SDES                0
+#define PJMEDIA_SRTP_HAS_DTLS                0
+#define PJMEDIA_HAS_RTCP_XR                  0
+#define PJMEDIA_STREAM_ENABLE_XR             0
+#define PJMEDIA_HAS_LEGACY_SOUND_API         0
+#define PJMEDIA_RESAMPLE_IMP                 PJMEDIA_RESAMPLE_NONE
+#define PJMEDIA_HAS_SPEEX_AEC                0
+#define PJMEDIA_HAS_WEBRTC_AEC               0
+#define PJMEDIA_HAS_WEBRTC_AEC3              0
+#define PJMEDIA_HAS_LIBYUV                   0
+#define PJMEDIA_HAS_FFMPEG                   0
+
+/* Keep the first SDP and negotiation bounds explicit and reproducible. */
+#define PJMEDIA_MAX_SDP_MEDIA                4
+#define PJMEDIA_MAX_SDP_FMT                  16
+#define PJMEDIA_SDP_NEG_MAX_CUSTOM_FMT_NEG_CB 4
+
+/* G.711 is the only codec in the initial embedded profile. */
+#if defined(CONFIG_PJMEDIA_G711)
+#  define PJMEDIA_HAS_G711_CODEC             1
+#else
+#  define PJMEDIA_HAS_G711_CODEC             0
+#endif
+#define PJMEDIA_HAS_ALAW_ULAW_TABLE          0
+#define PJMEDIA_HAS_L16_CODEC                0
+#define PJMEDIA_HAS_GSM_CODEC                0
+#define PJMEDIA_HAS_SPEEX_CODEC              0
+#define PJMEDIA_HAS_ILBC_CODEC               0
+#define PJMEDIA_HAS_G722_CODEC               0
+#define PJMEDIA_HAS_G7221_CODEC              0
+#define PJMEDIA_HAS_INTEL_IPP                0
+#define PJMEDIA_HAS_PASSTHROUGH_CODECS       0
+#define PJMEDIA_HAS_OPENCORE_AMRNB_CODEC     0
+#define PJMEDIA_HAS_OPENCORE_AMRWB_CODEC     0
+#define PJMEDIA_HAS_SILK_CODEC               0
+#define PJMEDIA_HAS_OPUS_CODEC               0
+#define PJMEDIA_HAS_BCG729                   0
+#define PJMEDIA_HAS_LYRA_CODEC               0
+#define PJMEDIA_HAS_FFMPEG_CODEC             0
+#define PJMEDIA_HAS_VPX_CODEC_VP8            0
+#define PJMEDIA_HAS_VPX_CODEC_VP9            0
+
+/* Host audio backends are never inherited by the Zephyr configuration. */
+#define PJMEDIA_AUDIO_DEV_HAS_PORTAUDIO      0
+#define PJMEDIA_AUDIO_DEV_HAS_OPENSL         0
+#define PJMEDIA_AUDIO_DEV_HAS_ANDROID_JNI    0
+#define PJMEDIA_AUDIO_DEV_HAS_OBOE           0
+#define PJMEDIA_AUDIO_DEV_HAS_BB10           0
+#define PJMEDIA_AUDIO_DEV_HAS_ALSA           0
+#if defined(CONFIG_PJMEDIA_AUDIODEV_NULL)
+#  define PJMEDIA_AUDIO_DEV_HAS_NULL_AUDIO   1
+#else
+#  define PJMEDIA_AUDIO_DEV_HAS_NULL_AUDIO   0
+#endif
+#define PJMEDIA_AUDIO_DEV_HAS_COREAUDIO      0
+#define PJMEDIA_AUDIO_DEV_HAS_WMME           0
+#define PJMEDIA_AUDIO_DEV_HAS_WASAPI         0
+#define PJMEDIA_AUDIO_DEV_HAS_BDIMAD         0
+#define PJMEDIA_AUDIO_DEV_HAS_SYMB_APS       0
+#define PJMEDIA_AUDIO_DEV_HAS_SYMB_VAS       0
+#define PJMEDIA_AUDIO_DEV_HAS_SYMB_MDA       0
+#define PJMEDIA_AUDIO_DEV_HAS_LEGACY_DEVICE  0
+
+#endif /* CONFIG_PJMEDIA */
+
 /* Zephyr Kconfig remains the source of truth for network protocol support. */
 #if defined(CONFIG_NET_TCP)
 #  define PJ_HAS_TCP                        1
