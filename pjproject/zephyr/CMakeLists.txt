@@ -167,8 +167,22 @@ if(CONFIG_PJPROJECT AND CONFIG_PJMEDIA)
   set(PJMEDIA_OTHER_CODEC_SOURCES)
 
   # Public PJMEDIA headers are visible only when the PJMEDIA boundary is on.
-  # The Phase 1 application compiles configuration/header assertions only.
   zephyr_include_directories(${PJPROJECT_ROOT_DIR}/pjmedia/include)
+
+  if(CONFIG_PJMEDIA_SDP)
+    message(STATUS "PJPROJECT Zephyr module: PJMEDIA SDP enabled")
+    zephyr_library_named(pjmedia)
+    zephyr_library_sources(${PJMEDIA_SDP_SOURCES})
+    zephyr_library_include_directories(
+      ${PJPROJECT_ROOT_DIR}/pjmedia/include
+      ${PJPROJECT_ROOT_DIR}/pjlib-util/include
+      ${PJPROJECT_ROOT_DIR}/pjlib/include
+    )
+    target_link_libraries(pjmedia PUBLIC pjlib-util pjlib)
+    zephyr_library_sources_ifdef(CONFIG_PJMEDIA_SDP_NEG
+      ${PJMEDIA_SDP_NEG_SOURCES}
+    )
+  endif()
 endif()
 
 if(CONFIG_PJPROJECT AND CONFIG_PJSIP)

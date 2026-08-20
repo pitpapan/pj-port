@@ -1290,11 +1290,20 @@ static void parse_media(pj_scanner *scanner, pjmedia_sdp_media *med,
         pj_scan_get(scanner, &cs_token, &fmt);
         if (med->desc.fmt_count < PJMEDIA_MAX_SDP_FMT)
             med->desc.fmt[med->desc.fmt_count++] = fmt;
-        else
+        else {
+#if defined(PJMEDIA_SDP_STRICT_LIMITS) && PJMEDIA_SDP_STRICT_LIMITS != 0
+            PJ_PERROR(2,(THIS_FILE, PJ_ETOOMANY,
+                         "SDP media format limit exceeded by %.*s",
+                         (int)fmt.slen, fmt.ptr));
+            ctx->last_error = PJ_ETOOMANY;
+            on_scanner_error(scanner);
+#else
             PJ_PERROR(2,(THIS_FILE, PJ_ETOOMANY, 
                          "Error adding SDP media format %.*s, "
                          "format is ignored",
                          (int)fmt.slen, fmt.ptr));
+#endif
+        }
     }
 
     /* We've got what we're looking for, skip anything until newline */
@@ -1431,6 +1440,28 @@ PJ_DEF(pj_status_t) pjmedia_sdp_parse( pj_pool_t *pool,
     volatile parse_context ctx;
     PJ_USE_EXCEPTION;
 
+#if defined(PJMEDIA_SDP_MAX_PARSE_LEN)
+    if (len > PJMEDIA_SDP_MAX_PARSE_LEN) {
+        *p_sdp = NULL;
+        return PJ_ETOOBIG;
+    }
+#endif
+
+#if defined(PJMEDIA_SDP_REQUIRE_CRLF) && PJMEDIA_SDP_REQUIRE_CRLF != 0
+    {
+        pj_size_t i;
+
+        for (i = 0; i < len; ++i) {
+            if ((buf[i] == '\n' && (i == 0 || buf[i-1] != '\r')) ||
+                (buf[i] == '\r' && (i + 1 >= len || buf[i+1] != '\n')))
+            {
+                *p_sdp = NULL;
+                return PJMEDIA_SDP_EINSDP;
+            }
+        }
+    }
+#endif
+
     ctx.last_error = PJ_SUCCESS;
 
     init_sdp_parser();
@@ -1454,16 +1485,34 @@ PJ_DEF(pj_status_t) pjmedia_sdp_parse( pj_pool_t *pool,
                             if (media->attr_count < PJMEDIA_MAX_SDP_ATTR)
                                 pjmedia_sdp_media_add_attr(media, attr);
                             else
+                            {
+#if defined(PJMEDIA_SDP_STRICT_LIMITS) && PJMEDIA_SDP_STRICT_LIMITS != 0
+                                PJ_PERROR(2, (THIS_FILE, PJ_ETOOMANY,
+                                              "SDP media attribute limit exceeded"));
+                                ctx.last_error = PJ_ETOOMANY;
+                                on_scanner_error(&scanner);
+#else
                                 PJ_PERROR(2, (THIS_FILE, PJ_ETOOMANY,
                                               "Error adding media attribute, "
                                               "attribute is ignored"));
+#endif
+                            }
                         } else {
                             if (session->attr_count < PJMEDIA_MAX_SDP_ATTR)
                                 pjmedia_sdp_session_add_attr(session, attr);
                             else
+                            {
+#if defined(PJMEDIA_SDP_STRICT_LIMITS) && PJMEDIA_SDP_STRICT_LIMITS != 0
+                                PJ_PERROR(2, (THIS_FILE, PJ_ETOOMANY,
+                                              "SDP session attribute limit exceeded"));
+                                ctx.last_error = PJ_ETOOMANY;
+                                on_scanner_error(&scanner);
+#else
                                 PJ_PERROR(2, (THIS_FILE, PJ_ETOOMANY,
                                               "Error adding session attribute"
                                               ", attribute is ignored"));
+#endif
+                            }
                         }
                     }
                     break;
@@ -1491,8 +1540,17 @@ PJ_DEF(pj_status_t) pjmedia_sdp_parse( pj_pool_t *pool,
                     if (session->media_count < PJMEDIA_MAX_SDP_MEDIA)
                         session->media[ session->media_count++ ] = media;
                     else
+                    {
+#if defined(PJMEDIA_SDP_STRICT_LIMITS) && PJMEDIA_SDP_STRICT_LIMITS != 0
+                        PJ_PERROR(2,(THIS_FILE, PJ_ETOOMANY,
+                                     "SDP media line limit exceeded"));
+                        ctx.last_error = PJ_ETOOMANY;
+                        on_scanner_error(&scanner);
+#else
                         PJ_PERROR(2,(THIS_FILE, PJ_ETOOMANY,
                                      "Error adding media, media is ignored"));
+#endif
+                    }
                     break;
                 case 'v':
                     parse_version(&scanner, &ctx);
@@ -1516,16 +1574,34 @@ PJ_DEF(pj_status_t) pjmedia_sdp_parse( pj_pool_t *pool,
                         if (media->bandw_count < PJMEDIA_MAX_SDP_BANDW)
                             media->bandw[media->bandw_count++] = bandw;
                         else
+                        {
+#if defined(PJMEDIA_SDP_STRICT_LIMITS) && PJMEDIA_SDP_STRICT_LIMITS != 0
+                            PJ_PERROR(2, (THIS_FILE, PJ_ETOOMANY,
+                                          "SDP media bandwidth limit exceeded"));
+                            ctx.last_error = PJ_ETOOMANY;
+                            on_scanner_error(&scanner);
+#else
                             PJ_PERROR(2, (THIS_FILE, PJ_ETOOMANY,
                                           "Error adding media bandwidth "
                                           "info, info is ignored"));
+#endif
+                        }
                     } else {
                         if (session->bandw_count < PJMEDIA_MAX_SDP_BANDW)
                             session->bandw[session->bandw_count++] = bandw;
                         else
+                        {
+#if defined(PJMEDIA_SDP_STRICT_LIMITS) && PJMEDIA_SDP_STRICT_LIMITS != 0
+                            PJ_PERROR(2, (THIS_FILE, PJ_ETOOMANY,
+                                          "SDP session bandwidth limit exceeded"));
+                            ctx.last_error = PJ_ETOOMANY;
+                            on_scanner_error(&scanner);
+#else
                             PJ_PERROR(2, (THIS_FILE, PJ_ETOOMANY,
                                           "Error adding session bandwidth "
                                           "info, info is ignored"));
+#endif
+                        }
                     }
                     break;
                 default:

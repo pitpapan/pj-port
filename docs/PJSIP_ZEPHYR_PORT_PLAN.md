@@ -77,7 +77,7 @@ Zephyr build must not add the complete upstream tree. In particular:
 - the upstream PJSIP target also names the SSL library, but TLS will be
   disabled and its transport source omitted initially;
 - full `pjsip-ua` depends on PJMEDIA because INVITE sessions use SDP and SDP
-  negotiation;
+  negotiation; 
 - PJSUA-LIB and PJSUA2 pull in PJNATH, PJMEDIA, codecs, and device libraries.
 
 ## 4. Porting Rules

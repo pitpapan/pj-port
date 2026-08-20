@@ -34,6 +34,9 @@
 #define PJMEDIA_MAX_SDP_MEDIA                4
 #define PJMEDIA_MAX_SDP_FMT                  16
 #define PJMEDIA_SDP_NEG_MAX_CUSTOM_FMT_NEG_CB 4
+#define PJMEDIA_SDP_MAX_PARSE_LEN            4096
+#define PJMEDIA_SDP_REQUIRE_CRLF              1
+#define PJMEDIA_SDP_STRICT_LIMITS             1
 
 /* G.711 is the only codec in the initial embedded profile. */
 #if defined(CONFIG_PJMEDIA_G711)

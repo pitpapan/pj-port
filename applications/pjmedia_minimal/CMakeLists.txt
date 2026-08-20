@@ -11,3 +11,12 @@ target_sources(app PRIVATE src/main.c)
 target_sources_ifdef(CONFIG_PJMEDIA_PHASE1_BOUNDARY_TEST app PRIVATE
   src/phase1_boundary.c
 )
+target_sources_ifdef(CONFIG_PJMEDIA_PHASE2_SDP_TEST app PRIVATE
+  src/phase2_sdp.c
+)
+target_sources_ifdef(CONFIG_PJMEDIA_PHASE3_SDP_NEG_TEST app PRIVATE
+  src/phase3_sdp_neg.c
+)
+target_sources_ifdef(CONFIG_PJMEDIA_PHASE3_LINK_PROBE app PRIVATE
+  src/phase3_link_probe.c
+)

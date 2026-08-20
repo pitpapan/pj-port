@@ -40,13 +40,16 @@ config PJMEDIA_SDP
 	depends on PJMEDIA
 	help
 	  Select the SDP representation, parser, printer, and comparison boundary.
-	  Its production source closure is introduced in PJMEDIA Phase 2.
+	  The Zephyr profile also rejects malformed line endings, oversized input,
+	  and data beyond its configured SDP array limits.
 
 config PJMEDIA_SDP_NEG
 	bool "PJMEDIA SDP offer/answer negotiation"
 	depends on PJMEDIA_SDP
 	help
-	  Select SDP negotiation and its audited codec/stream helper closure.
+	  Select SDP negotiation and its audited codec/stream helper closure. This
+	  does not select a media endpoint, codec implementation, RTP/RTCP,
+	  transport, stream runtime, or audio device.
 
 config PJMEDIA_ENDPOINT
 	bool "PJMEDIA endpoint and codec manager"

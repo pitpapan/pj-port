@@ -10,4 +10,32 @@ config PJMEDIA_PHASE1_BOUNDARY_TEST
 	  profile. This test links no PJMEDIA implementation and makes no runtime
 	  media claim.
 
+config PJMEDIA_PHASE2_SDP_TEST
+	bool "PJMEDIA Phase 2 SDP parser validation"
+	depends on PJPROJECT && PJLIB_UTIL && PJMEDIA_SDP
+	depends on !PJMEDIA_SDP_NEG && !PJMEDIA_ENDPOINT
+	help
+	  Run deterministic SDP representation, parse, print, clone, comparison,
+	  malformed-input, configured-limit, lifecycle, and resource tests. No
+	  negotiation, endpoint, codec, RTP, socket, or audio source is selected.
+
+config PJMEDIA_PHASE3_SDP_NEG_TEST
+	bool "PJMEDIA Phase 3 SDP offer/answer validation"
+	depends on PJPROJECT && PJLIB_UTIL && PJMEDIA_SDP_NEG
+	depends on !PJMEDIA_ENDPOINT && !PJMEDIA_G711 && !PJMEDIA_RTP_RTCP
+	depends on !PJMEDIA_UDP_TRANSPORT && !PJMEDIA_STREAM && !PJMEDIA_AUDIODEV
+	help
+	  Run deterministic offer/answer, rejection, state-transition, lifecycle,
+	  configured-boundary, stack, and pool tests without a media runtime.
+
+config PJMEDIA_PHASE3_LINK_PROBE
+	bool "PJMEDIA Phase 3 whole negotiator API link probe"
+	depends on PJPROJECT && PJLIB_UTIL && PJMEDIA_SDP_NEG
+	depends on !PJMEDIA_ENDPOINT && !PJMEDIA_G711 && !PJMEDIA_RTP_RTCP
+	depends on !PJMEDIA_UDP_TRANSPORT && !PJMEDIA_STREAM && !PJMEDIA_AUDIODEV
+	help
+	  Retain references to every public SDP-negotiator API in an independent
+	  image to expose closure dependencies that normal section garbage
+	  collection could otherwise discard.
+
 endmenu
