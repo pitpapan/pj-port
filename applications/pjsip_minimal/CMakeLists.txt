@@ -16,3 +16,8 @@ target_sources_ifdef(CONFIG_PJSIP_PHASE7_TEST app PRIVATE src/phase7_udp.c)
 target_sources_ifdef(CONFIG_PJSIP_PHASE8_TEST app PRIVATE src/phase8_tcp.c)
 target_sources_ifdef(CONFIG_PJSIP_PHASE9_TEST app PRIVATE src/phase9_resolver.c)
 target_sources_ifdef(CONFIG_PJSIP_PHASE10_TEST app PRIVATE src/phase10_signaling.c)
+target_sources_ifdef(CONFIG_PJSIP_PHASE11_TEST app PRIVATE
+  src/phase7_udp.c
+  src/phase10_signaling.c
+  src/phase11_robustness.c
+)

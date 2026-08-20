@@ -66,4 +66,14 @@ config PJSIP_PHASE10_TEST
 	  handling, refresh and unregister, validate invalid credentials and
 	  timeout recovery, exchange OPTIONS, and shut down cleanly.
 
+config PJSIP_PHASE11_TEST
+	bool "PJSIP Phase 11 robustness and resource validation"
+	depends on PJPROJECT && PJSIP && PJSIP_REGC
+	depends on PJSIP_UDP_TRANSPORT
+	help
+	  Re-run the UDP and usable-signaling gates, then validate concurrent
+	  transactions, a sustained event-loop soak, malformed and boundary-size
+	  datagrams, fixed-pool exhaustion, cancellation during transport
+	  shutdown, resource high-water marks, and leak-free teardown.
+
 endmenu
