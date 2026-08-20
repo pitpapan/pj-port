@@ -18,6 +18,13 @@ config PJLIB_UTIL
 	  intentionally explicit and grows only when a consumer requires another
 	  facility.
 
+config PJLIB_UTIL_DNS_RESOLVER
+	bool "PJLIB-UTIL asynchronous DNS and SRV resolver"
+	depends on PJLIB_UTIL && NET_SOCKETS && NET_IPV4 && NET_UDP
+	help
+	  Compile the PJLIB-UTIL DNS packet, asynchronous resolver, and SRV
+	  resolver sources. IPv6 and DNS NAPTR remain outside this feature.
+
 config PJSIP
 	bool "PJSIP core"
 	depends on PJLIB_UTIL

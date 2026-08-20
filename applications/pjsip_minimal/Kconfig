@@ -48,4 +48,13 @@ config PJSIP_PHASE8_TEST
 	  Run deterministic IPv4 TCP-loopback listener, framing, connection,
 	  reconnect, and UAC/UAS transaction tests alongside UDP transport.
 
+config PJSIP_PHASE9_TEST
+	bool "PJSIP Phase 9 deterministic SIP resolution validation"
+	depends on PJPROJECT && PJSIP && PJSIP_UDP_TRANSPORT
+	depends on PJLIB_UTIL_DNS_RESOLVER
+	help
+	  Run deterministic IPv4 A and SIP SRV resolution, failure, timeout,
+	  cancellation, resolver destruction, and resolved-transport tests against
+	  an application-local DNS responder without Internet access.
+
 endmenu

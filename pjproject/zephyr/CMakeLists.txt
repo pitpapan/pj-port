@@ -87,6 +87,11 @@ if(CONFIG_PJPROJECT AND CONFIG_PJLIB_UTIL)
 
   zephyr_library_named(pjlib-util)
   zephyr_library_sources(${PJLIB_UTIL_SOURCES})
+  zephyr_library_sources_ifdef(CONFIG_PJLIB_UTIL_DNS_RESOLVER
+    ${PJPROJECT_ROOT_DIR}/pjlib-util/src/pjlib-util/dns.c
+    ${PJPROJECT_ROOT_DIR}/pjlib-util/src/pjlib-util/resolver.c
+    ${PJPROJECT_ROOT_DIR}/pjlib-util/src/pjlib-util/srv_resolver.c
+  )
   zephyr_library_include_directories(
     ${PJPROJECT_ROOT_DIR}/pjlib-util/include
     ${PJPROJECT_ROOT_DIR}/pjlib/include

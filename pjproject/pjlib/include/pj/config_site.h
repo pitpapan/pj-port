@@ -28,10 +28,15 @@
 
 #if defined(CONFIG_PJSIP)
 
-/* Phase 4 PJSIP profile: core signaling only, without TLS, AKA, or DNS/SRV. */
+/* Embedded PJSIP profile: TLS and AKA remain disabled. */
 #define PJSIP_HAS_TLS_TRANSPORT             0
 #define PJSIP_HAS_DIGEST_AKA_AUTH           0
-#define PJSIP_HAS_RESOLVER                  0
+
+#if defined(CONFIG_PJLIB_UTIL_DNS_RESOLVER)
+#  define PJSIP_HAS_RESOLVER                1
+#else
+#  define PJSIP_HAS_RESOLVER                0
+#endif
 
 /* Kconfig owns the initial embedded resource limits. */
 #define PJSIP_MAX_TSX_COUNT                 CONFIG_PJSIP_MAX_TSX_COUNT
