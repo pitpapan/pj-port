@@ -44,6 +44,13 @@ fix is required.
 Read `docs/PJMEDIA_PORT_ANALYSIS.md` before beginning implementation. Its
 source boundaries and open gates are part of this plan.
 
+Execute every phase using `docs/PJMEDIA_ZEPHYR_PORT_PROCEDURE.md`. Record the
+actual commands and evidence using `docs/PJMEDIA_PHASE_VALIDATION_TEMPLATE.md`.
+The plan owns phase scope and completion criteria; the procedure owns the
+repeatable implementation, audit, regression, cleanup, and reporting method.
+For a shorter implementation sequence, use the per-phase guides under
+`docs/pjmedia_steps/`, beginning with its `README.md`.
+
 ## 3. Porting rules
 
 - Do not inspect or modify the Zephyr source tree.
@@ -735,6 +742,11 @@ part of the audio completion definition.
 
 ## 22. Validation command pattern
 
+The complete execution and evidence rules are defined in
+`docs/PJMEDIA_ZEPHYR_PORT_PROCEDURE.md`. The commands below are the abbreviated
+build/run pattern, not a replacement for its source, archive, ELF, link-probe,
+resource, regression, and cleanup gates.
+
 Each phase that changes buildable code uses a pristine build directory:
 
 ```sh
@@ -800,4 +812,3 @@ For every phase report:
 
 Only the third milestone permits the statement that the initial PJMEDIA audio
 port is complete for the product board.
-
