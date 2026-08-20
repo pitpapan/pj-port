@@ -40,4 +40,12 @@ config PJSIP_PHASE7_TEST
 	  Run deterministic IPv4 UDP-loopback transport, malformed datagram,
 	  ioqueue-capacity, and UAC/UAS transaction tests without Internet access.
 
+config PJSIP_PHASE8_TEST
+	bool "PJSIP Phase 8 IPv4 TCP transport validation"
+	depends on PJPROJECT && PJSIP && PJSIP_TCP_TRANSPORT
+	depends on PJSIP_UDP_TRANSPORT
+	help
+	  Run deterministic IPv4 TCP-loopback listener, framing, connection,
+	  reconnect, and UAC/UAS transaction tests alongside UDP transport.
+
 endmenu
