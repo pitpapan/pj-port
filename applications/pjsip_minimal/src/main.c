@@ -32,10 +32,16 @@ int phase8_tcp_run(void);
 int phase9_resolver_run(void);
 #endif
 
+#if defined(CONFIG_PJSIP_PHASE10_TEST)
+int phase10_signaling_run(void);
+#endif
+
 int main(void)
 {
 	printk("PJSIP minimal Zephyr application\n");
-#if defined(CONFIG_PJSIP_PHASE9_TEST)
+#if defined(CONFIG_PJSIP_PHASE10_TEST)
+	return phase10_signaling_run();
+#elif defined(CONFIG_PJSIP_PHASE9_TEST)
 	return phase9_resolver_run();
 #elif defined(CONFIG_PJSIP_PHASE8_TEST)
 	return phase8_tcp_run();

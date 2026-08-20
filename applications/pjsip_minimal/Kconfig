@@ -57,4 +57,13 @@ config PJSIP_PHASE9_TEST
 	  cancellation, resolver destruction, and resolved-transport tests against
 	  an application-local DNS responder without Internet access.
 
+config PJSIP_PHASE10_TEST
+	bool "PJSIP Phase 10 usable signaling and registration validation"
+	depends on PJPROJECT && PJSIP && PJSIP_REGC
+	depends on PJSIP_UDP_TRANSPORT
+	help
+	  Register with an application-local registrar, complete Digest challenge
+	  handling, refresh and unregister, validate invalid credentials and
+	  timeout recovery, exchange OPTIONS, and shut down cleanly.
+
 endmenu

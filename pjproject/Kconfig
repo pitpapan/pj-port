@@ -101,6 +101,14 @@ config PJSIP_MAX_TIMED_OUT_ENTRIES
 	help
 	  Maximum expired timer entries handled by one endpoint event poll.
 
+config PJSIP_REGC
+	bool "PJSIP registration client"
+	depends on PJSIP
+	help
+	  Compile the independently selectable SIP registration client. This adds
+	  pjsip-ua/sip_reg.c only; PJMEDIA, INVITE sessions, PJSUA-LIB, and the
+	  remaining PJSIP-UA sources stay disabled.
+
 endif # PJSIP
 
 config PJSIP_UDP_TRANSPORT

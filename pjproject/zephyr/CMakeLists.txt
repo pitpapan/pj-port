@@ -137,6 +137,9 @@ if(CONFIG_PJPROJECT AND CONFIG_PJSIP)
   zephyr_library_sources_ifdef(CONFIG_PJSIP_TCP_TRANSPORT
     ${PJPROJECT_ROOT_DIR}/pjsip/src/pjsip/sip_transport_tcp.c
   )
+  zephyr_library_sources_ifdef(CONFIG_PJSIP_REGC
+    ${PJPROJECT_ROOT_DIR}/pjsip/src/pjsip-ua/sip_reg.c
+  )
   zephyr_library_include_directories(
     ${PJPROJECT_ROOT_DIR}/pjsip/include
     ${PJPROJECT_ROOT_DIR}/pjlib-util/include
