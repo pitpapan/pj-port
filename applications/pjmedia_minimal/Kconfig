@@ -38,4 +38,13 @@ config PJMEDIA_PHASE3_LINK_PROBE
 	  image to expose closure dependencies that normal section garbage
 	  collection could otherwise discard.
 
+config PJMEDIA_PHASE4_INVITE_TEST
+	bool "PJMEDIA Phase 4 INVITE lifecycle validation"
+	depends on PJPROJECT && PJSIP && PJSIP_INVITE && PJMEDIA_SDP_NEG
+	depends on !PJMEDIA_ENDPOINT && !PJMEDIA_G711 && !PJMEDIA_RTP_RTCP
+	depends on !PJMEDIA_UDP_TRANSPORT && !PJMEDIA_STREAM && !PJMEDIA_AUDIODEV
+	help
+	  Validate PJSIP INVITE, 100rel, and session-timer module lifecycle and
+	  session creation without sockets, media runtime, codecs, or audio.
+
 endmenu

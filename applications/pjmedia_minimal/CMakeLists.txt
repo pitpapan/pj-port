@@ -20,3 +20,6 @@ target_sources_ifdef(CONFIG_PJMEDIA_PHASE3_SDP_NEG_TEST app PRIVATE
 target_sources_ifdef(CONFIG_PJMEDIA_PHASE3_LINK_PROBE app PRIVATE
   src/phase3_link_probe.c
 )
+target_sources_ifdef(CONFIG_PJMEDIA_PHASE4_INVITE_TEST app PRIVATE
+  src/phase4_invite.c
+)

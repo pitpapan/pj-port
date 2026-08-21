@@ -214,6 +214,12 @@ if(CONFIG_PJPROJECT AND CONFIG_PJSIP)
     ${PJPROJECT_ROOT_DIR}/pjsip/src/pjsip/sip_ua_layer.c
   )
 
+  set(PJSIP_INVITE_SOURCES
+    ${PJPROJECT_ROOT_DIR}/pjsip/src/pjsip-ua/sip_inv.c
+    ${PJPROJECT_ROOT_DIR}/pjsip/src/pjsip-ua/sip_100rel.c
+    ${PJPROJECT_ROOT_DIR}/pjsip/src/pjsip-ua/sip_timer.c
+  )
+
   zephyr_library_named(pjsip)
   zephyr_library_sources(${PJSIP_CORE_SOURCES})
   zephyr_library_sources_ifdef(CONFIG_PJSIP_UDP_TRANSPORT
@@ -221,6 +227,9 @@ if(CONFIG_PJPROJECT AND CONFIG_PJSIP)
   )
   zephyr_library_sources_ifdef(CONFIG_PJSIP_TCP_TRANSPORT
     ${PJPROJECT_ROOT_DIR}/pjsip/src/pjsip/sip_transport_tcp.c
+  )
+  zephyr_library_sources_ifdef(CONFIG_PJSIP_INVITE
+    ${PJSIP_INVITE_SOURCES}
   )
   zephyr_library_sources_ifdef(CONFIG_PJSIP_REGC
     ${PJPROJECT_ROOT_DIR}/pjsip/src/pjsip-ua/sip_reg.c
@@ -232,4 +241,10 @@ if(CONFIG_PJPROJECT AND CONFIG_PJSIP)
   )
   zephyr_include_directories(${PJPROJECT_ROOT_DIR}/pjsip/include)
   target_link_libraries(pjsip PUBLIC pjlib-util pjlib)
+  if(CONFIG_PJSIP_INVITE)
+    zephyr_library_include_directories(
+      ${PJPROJECT_ROOT_DIR}/pjmedia/include
+    )
+    target_link_libraries(pjsip PUBLIC pjmedia)
+  endif()
 endif()
