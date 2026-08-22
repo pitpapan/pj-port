@@ -1,6 +1,7 @@
 [manifest]
 path = zephyr
 file = west.yml
+project-filter = -lvgl,-hal_stm32
 
 [zephyr]
 base = zephyr

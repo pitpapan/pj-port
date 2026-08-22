@@ -1,38 +1,51 @@
 # PJMEDIA Phase 4 INVITE Lifecycle Validation
 
-Date: 2026-08-21
+Date: 2026-08-22
 
 ## Result
 
-The Phase 4 INVITE module lifecycle passed under QEMU on `mps2/an385`. Three
-complete PJLIB/PJLIB-UTIL/PJSIP endpoint lifecycles initialized the transaction
-layer, UA layer, 100rel module, session timer, and INVITE usage. Each lifecycle
-created and terminated UAC and loop-delivered UAS INVITE sessions, destroyed
-the loop transport and endpoint, and completed pool cleanup.
+Phase 4 passes on `mps2/an385` under QEMU.
 
-Phase 5 was not started. The Phase 4 implementation, runtime gates, and
-available PJMEDIA/PJSIP regressions all passed.
+The validation initializes the PJSIP transaction, UA, 100rel, session-timer,
+and INVITE modules; creates and destroys UAC and UAS INVITE sessions; and
+repeats the complete endpoint lifecycle three times. The UAS request is built
+and processed entirely in memory. No INVITE is sent, no PJSIP transport is
+started, and no network socket is opened by the Phase 4 harness.
 
-## Scope
+Phase 5 was not started.
+
+## Environment
 
 | Item | Value |
 | --- | --- |
-| Goal | Compile, initialize, create, terminate, and destroy INVITE support |
-| Production symbol | `CONFIG_PJSIP_INVITE` |
-| Validation selector | `CONFIG_PJMEDIA_PHASE4_INVITE_TEST` |
+| PJPROJECT | 2.16 |
+| Zephyr | 4.4.0 |
+| west | 1.5.0 |
+| Zephyr SDK | 1.0.1 |
+| Python | 3.12.13 from workspace `.venv` |
+| CMake | 4.4.2 |
 | Board | `mps2/an385` |
-| Build | `build-stage4` |
-| Previous regression | PJMEDIA Phase 3 SDP negotiation |
-| Explicitly deferred | RTP, RTCP, endpoint, codecs, streams, audio, sockets, Phase 5 call control |
+| Build directory | `build-pjmedia-phase4` |
 
-## Runtime evidence
+## Build and runtime
 
-Command:
+Pristine build:
 
 ```sh
-timeout --signal=TERM --kill-after=5s 30s \
-  west build -d build-stage4 -t run
+CCACHE_DISABLE=1 CMAKE_BUILD_PARALLEL_LEVEL=1 \
+west build -p always -b mps2/an385 applications/pjmedia_minimal \
+  -d build-pjmedia-phase4 -- -DEXTRA_CONF_FILE=phase4_invite.conf
 ```
+
+Final runtime check:
+
+```sh
+timeout --signal=TERM --kill-after=5s 5s \
+  west build -d build-pjmedia-phase4 -t run
+```
+
+The harness completes in less than one simulated second. The timeout then
+stops the QEMU runner, so exit status 124 after the pass marker is expected.
 
 Observed markers:
 
@@ -48,68 +61,63 @@ Observed markers:
 PHASE 4 RESULT: PASSED (3 complete INVITE module lifecycles)
 ```
 
-The five initialization stops occurred after transaction-layer, UA, 100rel,
-session-timer, and INVITE-usage initialization respectively. Every stop
-destroyed the endpoint and reported zero checked-out caching-pool resources.
-
-Final build footprint:
+Final footprint:
 
 ```text
-FLASH: 228248 B / 4 MB (5.44%)
-RAM:   387448 B / 4 MB (9.24%)
+FLASH: 220720 B / 4 MB (5.26%)
+RAM:   346312 B / 4 MB (8.26%)
 ```
 
-The QEMU trace also showed successful registration and cleanup of:
+## Lifecycle coverage
+
+The five partial-initialization tests stop after:
+
+1. transaction-layer initialization;
+2. UA-layer initialization;
+3. 100rel initialization;
+4. session-timer initialization;
+5. INVITE-usage initialization.
+
+Every initialization result is checked before the test may report success.
+Each partial lifecycle destroys its endpoint and verifies that the caching
+pool has no checked-out resources.
+
+Each of the three complete lifecycles performs:
+
+- PJLIB and PJLIB-UTIL initialization;
+- endpoint and module initialization in the required order;
+- parsing of PCMU, PCMA, and telephone-event SDP;
+- UAC dialog and INVITE-session creation and termination without creating or
+  sending an INVITE request;
+- construction of an in-memory incoming INVITE with the public PJSIP message
+  API;
+- UAS transaction, dialog, and INVITE-session creation from that in-memory
+  request;
+- checked UAS termination and bounded transaction-timer draining;
+- verification of zero live dialog sets, transactions, and timers;
+- transmit-data release, endpoint destruction, caching-pool destruction, and
+  PJLIB shutdown.
+
+The small stack-local `pjsip_transport` value used while constructing the UAS
+dialog supplies only request metadata required by the public API. It is never
+registered with the transport manager, has no worker thread or socket, and is
+never used to send data.
+
+## Configuration and source closure
+
+Effective Phase 4 configuration includes:
 
 ```text
-mod-tsx-layer
-mod-stateful-util
-mod-ua
-mod-100rel
-mod-invite
+CONFIG_PJMEDIA_SDP=y
+CONFIG_PJMEDIA_SDP_NEG=y
+CONFIG_PJSIP_INVITE=y
+CONFIG_PJMEDIA_PHASE4_INVITE_TEST=y
+# CONFIG_PJMEDIA_ENDPOINT is not set
+# CONFIG_PJSIP_UDP_TRANSPORT is not set
+# CONFIG_PJSIP_TCP_TRANSPORT is not set
 ```
 
-Each UAC session transitioned to `DISCONNECTED`, released its dialog usage,
-destroyed its dialog, and left an empty timer heap before endpoint destruction.
-
-The loop test also delivered a real INVITE through `PJSIP_TRANSPORT_LOOP_DGRAM`;
-the validation module created a UAS dialog and UAS INVITE session from the
-endpoint-provided `pjsip_rx_data`, parsed the PCMU SDP offer, terminated the
-UAS session, and shut down the loop transport.
-
-## Production source closure
-
-The Phase 4 PJSIP additions are exactly:
-
-```text
-pjsip/src/pjsip-ua/sip_inv.c
-pjsip/src/pjsip-ua/sip_100rel.c
-pjsip/src/pjsip-ua/sip_timer.c
-```
-
-The PJMEDIA closure remains the seven Phase 3 SDP/negotiation objects. No
-PJSUA-LIB, PJSIP-SIMPLE, PJNATH, RTP, audio-device, or optional PJSIP-UA
-source was added.
-
-## Validation-only implementation
-
-```text
-applications/pjmedia_minimal/src/phase4_invite.c
-```
-
-The harness validates:
-
-- three repeated PJLIB and PJLIB-UTIL initialization/shutdown cycles;
-- deterministic PJSIP endpoint creation and module initialization order;
-- the mandatory `on_state_changed` INVITE callback;
-- UAC dialog and INVITE session creation and termination;
-- loop-delivered UAS dialog and INVITE session creation from parsed PCMU SDP;
-- loop transport shutdown and validation-module unregister;
-- endpoint destruction and caching-pool cleanup after each lifecycle.
-
-## Audits
-
-The Phase 4 image contains exactly these new PJSIP archive members:
+The only Phase 4 additions to the PJSIP production archive are:
 
 ```text
 sip_inv.c.obj
@@ -117,42 +125,40 @@ sip_100rel.c.obj
 sip_timer.c.obj
 ```
 
-The PJMEDIA archive retains the seven Phase 3 objects, and
-`arm-none-eabi-nm -u build-stage4/zephyr/zephyr.elf` reports no undefined
-symbols.
+The PJMEDIA production archive remains the Phase 3 seven-object closure:
 
-## Regression attempts
-
-The regressions were rerun with the workspace Python 3.12 environment:
-
-```sh
-source /home/pchen/zephyrproject/.venv312/bin/activate
-source zephyr/zephyr-env.sh
-export CCACHE_DISABLE=1
-export CMAKE_BUILD_PARALLEL_LEVEL=1
-
-west build -p always -b mps2/an385 applications/pjmedia_minimal \
-  -d build-pjmedia-phase3 -- -DEXTRA_CONF_FILE=phase3_sdp_neg.conf
-timeout --signal=TERM --kill-after=5s 15s \
-  west build -d build-pjmedia-phase3 -t run
+```text
+errno.c.obj
+sdp.c.obj
+sdp_cmp.c.obj
+sdp_neg.c.obj
+codec.c.obj
+stream_common.c.obj
+types.c.obj
 ```
 
-Result:
+The final ELF contains the required INVITE/100rel/timer APIs and does not
+contain `pjsip_loop_start`. The following command produced no output:
+
+```sh
+arm-zephyr-eabi-nm -u build-pjmedia-phase4/zephyr/zephyr.elf
+```
+
+No PJSIP UDP/TCP source, PJMEDIA endpoint, RTP/RTCP, media UDP transport,
+stream, audio-device, PJSUA, PJSIP-SIMPLE, or PJNATH source was added for this
+phase.
+
+## Regressions
+
+PJMEDIA Phase 3 was rebuilt pristine and run:
 
 ```text
 PHASE 3 RESULT: PASSED (3 complete negotiation lifecycles)
 ```
 
-The existing PJSIP Phase 11 regression was also built pristine and run:
-
-```sh
-west build -p always -b mps2/an385 applications/pjsip_minimal \
-  -d build-pjsip-phase11 -- -DEXTRA_CONF_FILE=phase11_robustness.conf
-timeout --signal=TERM --kill-after=5s 60s \
-  west build -d build-pjsip-phase11 -t run
-```
-
-Result:
+The existing PJSIP Phase 11 image was rebuilt pristine. It includes the Phase
+7 UDP lifecycle, Phase 10 registration/OPTIONS lifecycle, and Phase 11
+resource soak:
 
 ```text
 PHASE 7 RESULT: PASSED (2/2 lifecycles)
@@ -160,10 +166,22 @@ PHASE 10 RESULT: PASSED (2/2 lifecycles)
 PHASE 11 RESULT: PASSED (5 complete lifecycles; 30-second active soak)
 ```
 
-## Open gates
+No QEMU process remained after any run.
 
-- [x] Exercise controlled initialization-stop cleanup at each module boundary.
-- [x] Verify parser/module global state after endpoint recreation through three
-  complete module lifecycles.
-- [x] Audit actual PJSIP/PJMEDIA archive members and final ELF undefined symbols.
-- [x] Rerun PJMEDIA Phase 3 and existing PJSIP signaling regressions.
+## Repository hygiene
+
+`build-pjmedia-phase4` is ignored by Git. Generated `CMakeCache.txt`,
+`cmake.check_cache`, and `build_info.yml` files are not version-controlled.
+The final whitespace check passes.
+
+## Completion gates
+
+- [x] Exactly three PJSIP-UA production sources are enabled conditionally.
+- [x] All initialization and validation cleanup results are authoritative.
+- [x] No INVITE is sent and no transport or socket is started by the harness.
+- [x] UAC and UAS sessions are created and destroyed with public APIs.
+- [x] Three complete lifecycles return dialogs, transactions, timers, and
+  pools to baseline.
+- [x] Phase 3 and existing PJSIP signaling/resource regressions pass.
+- [x] Generated build artifacts are absent from version control.
+- [x] Phase 5 was not started.
