@@ -47,4 +47,16 @@ config PJMEDIA_PHASE4_INVITE_TEST
 	  Validate PJSIP INVITE, 100rel, and session-timer module lifecycle and
 	  session creation without sockets, media runtime, codecs, or audio.
 
+config PJMEDIA_PHASE5_LOOP_CALL_TEST
+	bool "PJMEDIA Phase 5 loop call-control validation"
+	depends on PJPROJECT && PJSIP && PJSIP_INVITE && PJMEDIA_SDP_NEG
+	depends on !PJSIP_UDP_TRANSPORT && !PJSIP_TCP_TRANSPORT
+	depends on !PJMEDIA_ENDPOINT && !PJMEDIA_G711 && !PJMEDIA_RTP_RTCP
+	depends on !PJMEDIA_UDP_TRANSPORT && !PJMEDIA_STREAM && !PJMEDIA_AUDIODEV
+	help
+	  Validate socket-free INVITE call control, CANCEL, rejection, timeout,
+	  transport failure, offerless INVITE, re-INVITE, SDP direction changes,
+	  and complete teardown over PJSIP's in-memory loop transport. No RTP or
+	  audio runtime is selected.
+
 endmenu

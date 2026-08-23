@@ -133,16 +133,24 @@ Implement in this order:
 1. Parse fixed local and remote SDP bodies containing PCMU, PCMA, and
    telephone-event.
 2. Create the UAC dialog with `pjsip_dlg_create_uac()`.
-3. Bind it to the loop transport using a `pjsip_tpselector` and
-   `pjsip_dlg_set_transport()` so no resolver or socket transport is selected.
-4. Create the UAC INVITE session with `pjsip_inv_create_uac()`.
+3. Increment the new UAC dialog lock, bind it to the loop transport using a
+   `pjsip_tpselector` and `pjsip_dlg_set_transport()`, and keep the lock held
+   until the INVITE usage has been created. With PJPROJECT 2.16, the internal
+   lock release in `pjsip_dlg_set_transport()` can otherwise destroy a new
+   dialog that still has zero usages.
+4. Create the UAC INVITE session with `pjsip_inv_create_uac()`, then release
+   the caller-held dialog lock.
 5. Create and send the initial request with `pjsip_inv_invite()` and
    `pjsip_inv_send_msg()`.
 6. In the incoming INVITE path, verify the request and create the UAS dialog
    with `pjsip_dlg_create_uas_and_inc_lock()`.
 7. Create the UAS session with `pjsip_inv_create_uas()`.
 8. Send 100 Trying with `pjsip_inv_initial_answer()`.
-9. Send 180 Ringing and then 200 OK with `pjsip_inv_answer()`.
+9. Schedule 180 Ringing and then 200 OK with `pjsip_inv_answer()` on separate
+   endpoint timer turns. Do not queue all three responses back-to-back from a
+   single receive callback: PJPROJECT 2.16's asynchronous loop transport can
+   reuse the pending response state, causing the provisional response to be
+   observed as another final response.
 10. Let the UAC send ACK and verify both sessions reach confirmed state.
 11. End the session with `pjsip_inv_end_session()` and send the resulting BYE.
 12. Verify 200 OK and both sessions reach disconnected state.

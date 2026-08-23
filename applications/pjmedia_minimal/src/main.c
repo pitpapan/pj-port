@@ -24,11 +24,17 @@ int phase3_link_probe_run(void);
 int phase4_invite_run(void);
 #endif
 
+#if defined(CONFIG_PJMEDIA_PHASE5_LOOP_CALL_TEST)
+int phase5_loop_call_run(void);
+#endif
+
 int main(void)
 {
 	printk("PJMEDIA minimal Zephyr application\n");
 
-#if defined(CONFIG_PJMEDIA_PHASE3_LINK_PROBE)
+#if defined(CONFIG_PJMEDIA_PHASE5_LOOP_CALL_TEST)
+	return phase5_loop_call_run();
+#elif defined(CONFIG_PJMEDIA_PHASE3_LINK_PROBE)
 	return phase3_link_probe_run();
 #elif defined(CONFIG_PJMEDIA_PHASE4_INVITE_TEST)
 	return phase4_invite_run();
