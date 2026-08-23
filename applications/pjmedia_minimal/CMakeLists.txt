@@ -26,3 +26,6 @@ target_sources_ifdef(CONFIG_PJMEDIA_PHASE4_INVITE_TEST app PRIVATE
 target_sources_ifdef(CONFIG_PJMEDIA_PHASE5_LOOP_CALL_TEST app PRIVATE
   src/phase5_loop_call.c
 )
+target_sources_ifdef(CONFIG_PJMEDIA_PHASE6_UDP_CALL_TEST app PRIVATE
+  src/phase6_udp_call.c
+)

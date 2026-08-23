@@ -59,4 +59,17 @@ config PJMEDIA_PHASE5_LOOP_CALL_TEST
 	  and complete teardown over PJSIP's in-memory loop transport. No RTP or
 	  audio runtime is selected.
 
+config PJMEDIA_PHASE6_UDP_CALL_TEST
+	bool "PJMEDIA Phase 6 IPv4 UDP call-control validation"
+	depends on PJPROJECT && PJSIP && PJSIP_INVITE && PJSIP_REGC
+	depends on PJSIP_UDP_TRANSPORT && PJMEDIA_SDP_NEG
+	depends on NET_SOCKETS && NET_IPV4 && NET_UDP && !NET_IPV6
+	depends on !PJSIP_TCP_TRANSPORT
+	depends on !PJMEDIA_ENDPOINT && !PJMEDIA_G711 && !PJMEDIA_RTP_RTCP
+	depends on !PJMEDIA_UDP_TRANSPORT && !PJMEDIA_STREAM && !PJMEDIA_AUDIODEV
+	help
+	  Validate INVITE call control, UDP retransmission and failure handling,
+	  registration and OPTIONS concurrency, and complete teardown over two
+	  IPv4 loopback SIP transports. No RTP or audio runtime is selected.
+
 endmenu

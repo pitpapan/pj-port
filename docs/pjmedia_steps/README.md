@@ -10,7 +10,7 @@ procedure:
   defines the complete audit discipline;
 - this directory explains where to start and what to do next.
 
-Current validated state: Phase 3 is complete. Start with Phase 4.
+Current validated state: Phase 6 is complete. Phase 7 has not been started.
 
 ## Guides
 
