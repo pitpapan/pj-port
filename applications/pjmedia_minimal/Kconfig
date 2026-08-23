@@ -93,4 +93,35 @@ config PJMEDIA_PHASE7_LINK_PROBE
 	  Retain the Phase 7 endpoint, codec manager, G.711, conversion, PLC,
 	  VAD, WSOLA, event, format, and port public API closure.
 
+config PJMEDIA_PHASE8_PACKET_TEST
+	bool "PJMEDIA Phase 8 RTP/RTCP/jitter-buffer validation"
+	depends on PJPROJECT && PJMEDIA_ENDPOINT && PJMEDIA_RTP_RTCP
+	depends on !PJMEDIA_G711 && !PJMEDIA_SDP_NEG
+	depends on !PJMEDIA_UDP_TRANSPORT && !PJMEDIA_STREAM && !PJMEDIA_AUDIODEV
+	depends on !PJSIP
+	help
+	  Validate deterministic RTP packet bounds and sequence state, RTCP
+	  reports/statistics, and jitter-buffer behavior without sockets, media
+	  transport, streams, codecs, PJSIP, or audio devices.
+
+config PJMEDIA_PHASE8_LINK_PROBE
+	bool "PJMEDIA Phase 8 public API link probe"
+	depends on PJPROJECT && PJMEDIA_ENDPOINT && PJMEDIA_RTP_RTCP
+	depends on !PJMEDIA_G711 && !PJMEDIA_SDP_NEG
+	depends on !PJMEDIA_UDP_TRANSPORT && !PJMEDIA_STREAM && !PJMEDIA_AUDIODEV
+	depends on !PJSIP
+	help
+	  Retain the supported RTP, RTCP, RTCP-feedback, and jitter-buffer public
+	  API closure under the normal section garbage-collection policy.
+
+config PJMEDIA_PHASE8_DISABLED_TEST
+	bool "PJMEDIA Phase 8 feature-disabled marker"
+	depends on PJPROJECT && PJMEDIA_ENDPOINT && !PJMEDIA_RTP_RTCP
+	depends on !PJMEDIA_G711 && !PJMEDIA_SDP_NEG
+	depends on !PJMEDIA_UDP_TRANSPORT && !PJMEDIA_STREAM && !PJMEDIA_AUDIODEV
+	depends on !PJSIP
+	help
+	  Emit an explicit marker for the like-for-like profile in which the
+	  Phase 8 RTP/RTCP/jitter-buffer production gate remains disabled.
+
 endmenu

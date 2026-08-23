@@ -40,11 +40,36 @@ int phase7_g711_run(void);
 int phase7_link_probe_run(void);
 #endif
 
+#if defined(CONFIG_PJMEDIA_PHASE8_PACKET_TEST)
+int phase8_packet_run(void);
+#endif
+
+#if defined(CONFIG_PJMEDIA_PHASE8_LINK_PROBE)
+int phase8_link_probe_run(void);
+#endif
+
 int main(void)
 {
 	printk("PJMEDIA minimal Zephyr application\n");
 
-#if defined(CONFIG_PJMEDIA_PHASE7_LINK_PROBE)
+#if defined(CONFIG_PJMEDIA_PHASE8_LINK_PROBE)
+	return phase8_link_probe_run();
+#elif defined(CONFIG_PJMEDIA_PHASE8_PACKET_TEST)
+	return phase8_packet_run();
+#elif defined(CONFIG_PJMEDIA_PHASE8_DISABLED_TEST)
+	{
+		pj_status_t status = pj_init();
+
+		if (status != PJ_SUCCESS) {
+			printk("Phase 8 disabled profile: PJLIB init failed: %d\n",
+			       status);
+			return 1;
+		}
+		pj_shutdown();
+		printk("PHASE 8 DISABLED: PASSED (no RTP/RTCP/jitter objects)\n");
+		return 0;
+	}
+#elif defined(CONFIG_PJMEDIA_PHASE7_LINK_PROBE)
 	return phase7_link_probe_run();
 #elif defined(CONFIG_PJMEDIA_PHASE7_G711_TEST)
 	return phase7_g711_run();

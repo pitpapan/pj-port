@@ -35,3 +35,9 @@ target_sources_ifdef(CONFIG_PJMEDIA_PHASE7_G711_TEST app PRIVATE
 target_sources_ifdef(CONFIG_PJMEDIA_PHASE7_LINK_PROBE app PRIVATE
   src/phase7_link_probe.c
 )
+target_sources_ifdef(CONFIG_PJMEDIA_PHASE8_PACKET_TEST app PRIVATE
+  src/phase8_packet.c
+)
+target_sources_ifdef(CONFIG_PJMEDIA_PHASE8_LINK_PROBE app PRIVATE
+  src/phase8_link_probe.c
+)

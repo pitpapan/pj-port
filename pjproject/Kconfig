@@ -66,10 +66,12 @@ config PJMEDIA_G711
 	  remain disabled by the Zephyr profile.
 
 config PJMEDIA_RTP_RTCP
-	bool "PJMEDIA RTP and RTCP"
+	bool "PJMEDIA RTP, RTCP, and jitter buffer primitives"
 	depends on PJMEDIA_ENDPOINT
 	help
-	  Select the RTP/RTCP packet and session boundary without SRTP or ICE.
+	  Select the socket-free RTP/RTCP packet, feedback, session, and adaptive
+	  jitter-buffer primitives. This does not select a media transport, stream,
+	  SRTP, ICE, or audio device.
 
 config PJMEDIA_UDP_TRANSPORT
 	bool "PJMEDIA IPv4 UDP transport"

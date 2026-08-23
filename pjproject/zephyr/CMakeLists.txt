@@ -188,6 +188,9 @@ if(CONFIG_PJPROJECT AND CONFIG_PJMEDIA)
     zephyr_library_sources_ifdef(CONFIG_PJMEDIA_G711
       ${PJMEDIA_G711_SOURCES}
     )
+    zephyr_library_sources_ifdef(CONFIG_PJMEDIA_RTP_RTCP
+      ${PJMEDIA_RTP_RTCP_SOURCES}
+    )
   endif()
 endif()
 
