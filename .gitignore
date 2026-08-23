@@ -37,3 +37,6 @@ build-pjmedia-phase3-link-probe
 build-pjmedia-phase4
 build-pjmedia-phase5
 build-pjmedia-phase6
+build-pjmedia-phase7
+build-pjmedia-phase7-link-probe
+build-pjmedia-phase7-disabled

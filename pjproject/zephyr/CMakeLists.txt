@@ -182,6 +182,12 @@ if(CONFIG_PJPROJECT AND CONFIG_PJMEDIA)
     zephyr_library_sources_ifdef(CONFIG_PJMEDIA_SDP_NEG
       ${PJMEDIA_SDP_NEG_SOURCES}
     )
+    zephyr_library_sources_ifdef(CONFIG_PJMEDIA_ENDPOINT
+      ${PJMEDIA_ENDPOINT_SOURCES}
+    )
+    zephyr_library_sources_ifdef(CONFIG_PJMEDIA_G711
+      ${PJMEDIA_G711_SOURCES}
+    )
   endif()
 endif()
 

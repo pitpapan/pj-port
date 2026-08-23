@@ -10,7 +10,7 @@ procedure:
   defines the complete audit discipline;
 - this directory explains where to start and what to do next.
 
-Current validated state: Phase 6 is complete. Phase 7 has not been started.
+Current validated state: Phase 7 is complete. Phase 8 has not been started.
 
 ## Guides
 
@@ -20,6 +20,8 @@ Current validated state: Phase 6 is complete. Phase 7 has not been started.
    INVITE state machine using the socket-free PJSIP loop transport.
 3. [`PHASE6_UDP_CALL_CONTROL.md`](PHASE6_UDP_CALL_CONTROL.md) — repeat call
    control over deterministic IPv4 UDP loopback while RTP remains disabled.
+4. [`PHASE7_ENDPOINT_G711.md`](PHASE7_ENDPOINT_G711.md) — create the PJMEDIA
+   endpoint and validate direct PCMU/PCMA conversion without media transport.
 
 Read only the guide for the active phase. Do not prepare files for the next
 guide until the active phase has passed and has a validation report.
@@ -39,6 +41,7 @@ The development target for these three phases is `mps2/an385` under QEMU.
 
 ## What these phases do not prove
 
-Phases 4–6 validate SIP call control and SDP negotiation. They do not compile
-or validate a PJMEDIA endpoint, G.711 implementation, RTP/RTCP, media UDP
-transport, audio stream, or audio device. Those begin in Phase 7.
+Phases 4–7 validate SIP call control, SDP negotiation, the PJMEDIA endpoint,
+and direct G.711 conversion. They do not validate RTP/RTCP, jitter buffering,
+media UDP transport, an audio stream, or an audio device. Those begin in
+Phase 8 or later.

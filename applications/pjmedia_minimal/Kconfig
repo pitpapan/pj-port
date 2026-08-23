@@ -72,4 +72,25 @@ config PJMEDIA_PHASE6_UDP_CALL_TEST
 	  registration and OPTIONS concurrency, and complete teardown over two
 	  IPv4 loopback SIP transports. No RTP or audio runtime is selected.
 
+config PJMEDIA_PHASE7_G711_TEST
+	bool "PJMEDIA Phase 7 endpoint and G.711 validation"
+	depends on PJPROJECT && PJSIP && PJMEDIA_ENDPOINT && PJMEDIA_G711
+	depends on !PJSIP_INVITE && !PJSIP_UDP_TRANSPORT && !PJSIP_TCP_TRANSPORT
+	depends on !PJMEDIA_SDP_NEG && !PJMEDIA_RTP_RTCP
+	depends on !PJMEDIA_UDP_TRANSPORT && !PJMEDIA_STREAM && !PJMEDIA_AUDIODEV
+	help
+	  Validate a zero-worker PJMEDIA endpoint sharing the PJSIP ioqueue and
+	  deterministic PCMU/PCMA codec conversion, PLC, VAD, and teardown. This
+	  does not select RTP, media transport, stream, or audio-device runtime.
+
+config PJMEDIA_PHASE7_LINK_PROBE
+	bool "PJMEDIA Phase 7 public API link probe"
+	depends on PJPROJECT && PJSIP && PJMEDIA_ENDPOINT && PJMEDIA_G711
+	depends on !PJSIP_INVITE && !PJSIP_UDP_TRANSPORT && !PJSIP_TCP_TRANSPORT
+	depends on !PJMEDIA_SDP_NEG && !PJMEDIA_RTP_RTCP
+	depends on !PJMEDIA_UDP_TRANSPORT && !PJMEDIA_STREAM && !PJMEDIA_AUDIODEV
+	help
+	  Retain the Phase 7 endpoint, codec manager, G.711, conversion, PLC,
+	  VAD, WSOLA, event, format, and port public API closure.
+
 endmenu

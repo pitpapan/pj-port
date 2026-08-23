@@ -32,11 +32,23 @@ int phase5_loop_call_run(void);
 int phase6_udp_call_run(void);
 #endif
 
+#if defined(CONFIG_PJMEDIA_PHASE7_G711_TEST)
+int phase7_g711_run(void);
+#endif
+
+#if defined(CONFIG_PJMEDIA_PHASE7_LINK_PROBE)
+int phase7_link_probe_run(void);
+#endif
+
 int main(void)
 {
 	printk("PJMEDIA minimal Zephyr application\n");
 
-#if defined(CONFIG_PJMEDIA_PHASE6_UDP_CALL_TEST)
+#if defined(CONFIG_PJMEDIA_PHASE7_LINK_PROBE)
+	return phase7_link_probe_run();
+#elif defined(CONFIG_PJMEDIA_PHASE7_G711_TEST)
+	return phase7_g711_run();
+#elif defined(CONFIG_PJMEDIA_PHASE6_UDP_CALL_TEST)
 	return phase6_udp_call_run();
 #elif defined(CONFIG_PJMEDIA_PHASE5_LOOP_CALL_TEST)
 	return phase5_loop_call_run();
