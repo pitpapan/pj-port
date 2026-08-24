@@ -5,7 +5,12 @@
 #include <pjmedia/endpoint.h>
 #include <pjsip.h>
 #include <pjsip-ua/sip_regc.h>
+#include <pjsip-ua/sip_100rel.h>
+#include <pjsip-ua/sip_inv.h>
+#include <pjsip-ua/sip_timer.h>
 #include <pjsip/sip_transport_tcp.h>
+#include <pjmedia/sdp.h>
+#include <pjmedia/sdp_neg.h>
 
 #include <zephyr/kernel.h>
 #include <zephyr/sys/atomic.h>
@@ -24,6 +29,10 @@ enum class CommandType : std::uint8_t {
     configure_account,
     register_account,
     unregister_account,
+    start_call,
+    accept_call,
+    reject_call,
+    end_call,
     inject_registration,
     stop,
 };
@@ -40,6 +49,7 @@ struct Command {
     RegistrationState registration_state;
     Error error;
     Completion *completion;
+    char uri[max_uri_length + 1];
 };
 
 Error TranslateStatus(pj_status_t status) noexcept {
@@ -64,9 +74,20 @@ public:
           tcp_port(0), account_configured(false), account_uri{}, registrar_uri{},
           username{}, password{}, expires(0),
           registration_state(RegistrationState::disabled), retry_timer{},
-          retry_attempts(0), retry_scheduled(false) {
+          retry_attempts(0), retry_scheduled(false), invite_initialized(false),
+          call_module{}, active_invite(nullptr), call_state(CallState::idle),
+          negotiated_codec(Codec::pcmu), remote_uri{}, call_transport(nullptr),
+          previous_transport_callback(nullptr),
+          transport_callback_installed(false) {
         k_msgq_init(&queue, reinterpret_cast<char *>(queue_buffer),
                     sizeof(Command), command_capacity);
+#if defined(CONFIG_VOIP_PJ_CALL_CONTROL)
+        pj_bzero(&call_module, sizeof(call_module));
+        call_module.name = pj_str(const_cast<char *>("voip-call-owner"));
+        call_module.id = -1;
+        call_module.priority = PJSIP_MOD_PRIORITY_APPLICATION;
+        call_module.on_rx_request = &IncomingRequest;
+#endif
     }
 
     Observer *observer;
@@ -101,6 +122,222 @@ public:
     pj_timer_entry retry_timer;
     unsigned retry_attempts;
     bool retry_scheduled;
+    bool invite_initialized;
+    pjsip_module call_module;
+    pjsip_inv_session *active_invite;
+    CallState call_state;
+    Codec negotiated_codec;
+    char remote_uri[max_uri_length + 1];
+    pjsip_transport *call_transport;
+    pjsip_tp_state_callback previous_transport_callback;
+    bool transport_callback_installed;
+    static Impl *active_instance;
+
+    static pj_status_t ParseCallSdp(pj_pool_t *pool,
+                                    pjmedia_sdp_session **session) noexcept {
+        static const char text[] =
+            "v=0\r\n"
+            "o=voip 1 1 IN IP4 127.0.0.1\r\n"
+            "s=voip-call\r\n"
+            "c=IN IP4 127.0.0.1\r\n"
+            "t=0 0\r\n"
+            "m=audio 4000 RTP/AVP 0 8\r\n"
+            "a=sendrecv\r\n"
+            "a=rtpmap:0 PCMU/8000\r\n"
+            "a=rtpmap:8 PCMA/8000\r\n";
+        char *copy = static_cast<char *>(pj_pool_alloc(pool, sizeof(text)));
+        if (copy == nullptr) return PJ_ENOMEM;
+        pj_memcpy(copy, text, sizeof(text));
+        return pjmedia_sdp_parse(pool, copy, sizeof(text) - 1, session);
+    }
+
+    void NotifyCall(CallState state, Error error = Error::ok,
+                    std::uint16_t sip_status = 0) noexcept {
+        call_state = state;
+        Observer *current = observer;
+        if (current == nullptr) return;
+        CallInfo info{};
+        info.state = state;
+        info.codec = negotiated_codec;
+        info.direction = state == CallState::established
+                           ? MediaDirection::send_receive
+                           : MediaDirection::inactive;
+        pj_ansi_strncpy(info.remote_uri, remote_uri, max_uri_length);
+        Status status{};
+        status.error = error;
+        status.sip_status = sip_status;
+        current->OnCallState(info, status);
+    }
+
+    static void InviteStateChanged(pjsip_inv_session *invite,
+                                   pjsip_event *event) noexcept {
+        Impl *self = active_instance;
+        if (self == nullptr || invite != self->active_invite) return;
+        std::uint16_t code = 0;
+        if (event != nullptr && event->type == PJSIP_EVENT_TSX_STATE &&
+            event->body.tsx_state.tsx != nullptr) {
+            code = static_cast<std::uint16_t>(event->body.tsx_state.tsx->status_code);
+            if (event->body.tsx_state.tsx->transport != nullptr)
+                self->call_transport = event->body.tsx_state.tsx->transport;
+        }
+        switch (invite->state) {
+        case PJSIP_INV_STATE_CALLING: self->NotifyCall(CallState::outgoing); break;
+        case PJSIP_INV_STATE_INCOMING: self->NotifyCall(CallState::incoming); break;
+        case PJSIP_INV_STATE_EARLY: self->NotifyCall(CallState::early, Error::ok, code); break;
+        case PJSIP_INV_STATE_CONFIRMED:
+            self->NotifyCall(CallState::established, Error::ok, code); break;
+        case PJSIP_INV_STATE_DISCONNECTED:
+            self->NotifyCall(CallState::disconnected,
+                             code >= 300 ? Error::transport_failure : Error::ok,
+                             code);
+            self->active_invite = nullptr;
+            self->call_transport = nullptr;
+            break;
+        default: break;
+        }
+    }
+
+    static void TransportState(pjsip_transport *transport,
+                               pjsip_transport_state state,
+                               const pjsip_transport_state_info *info) noexcept {
+        Impl *self = active_instance;
+        pjsip_tp_state_callback previous = self == nullptr
+            ? nullptr : self->previous_transport_callback;
+        if (self != nullptr && state == PJSIP_TP_STATE_DISCONNECTED &&
+            self->active_invite != nullptr && transport == self->call_transport) {
+            self->NotifyCall(CallState::failed, Error::transport_failure,
+                             info == nullptr ? 0 :
+                             static_cast<std::uint16_t>(info->status));
+            (void)pjsip_inv_terminate(self->active_invite,
+                                      PJSIP_SC_SERVICE_UNAVAILABLE, PJ_TRUE);
+        }
+        if (previous != nullptr && previous != &TransportState)
+            previous(transport, state, info);
+    }
+
+    static void InviteMediaUpdate(pjsip_inv_session *invite,
+                                  pj_status_t status) noexcept {
+        Impl *self = active_instance;
+        if (self == nullptr || invite != self->active_invite) return;
+        if (status != PJ_SUCCESS) {
+            self->NotifyCall(CallState::failed, Error::negotiation_failure);
+            return;
+        }
+        const pjmedia_sdp_session *local = nullptr;
+        if (invite->neg != nullptr &&
+            pjmedia_sdp_neg_get_active_local(invite->neg, &local) == PJ_SUCCESS &&
+            local != nullptr && local->media_count != 0 &&
+            local->media[0]->desc.fmt_count != 0 &&
+            pj_strcmp2(&local->media[0]->desc.fmt[0], "8") == 0)
+            self->negotiated_codec = Codec::pcma;
+    }
+
+    static void InviteRxOffer(pjsip_inv_session *invite,
+                              const pjmedia_sdp_session *) noexcept {
+        pjmedia_sdp_session *answer = nullptr;
+        if (ParseCallSdp(invite->pool_prov, &answer) == PJ_SUCCESS)
+            (void)pjsip_inv_set_sdp_answer(invite, answer);
+    }
+
+    static pj_bool_t IncomingRequest(pjsip_rx_data *data) noexcept {
+        Impl *self = active_instance;
+        if (self == nullptr || self->active_invite != nullptr ||
+            data->msg_info.msg->line.req.method.id != PJSIP_INVITE_METHOD ||
+            data->msg_info.to == nullptr || data->msg_info.to->tag.slen != 0)
+            return PJ_FALSE;
+        auto *uri = static_cast<pjsip_sip_uri *>(
+            pjsip_uri_get_uri(data->msg_info.to->uri));
+        if (uri == nullptr || pj_strcmp2(&uri->user, self->username) != 0)
+            return PJ_FALSE;
+        pjsip_dialog *dialog = nullptr;
+        pjsip_inv_session *invite = nullptr;
+        pjmedia_sdp_session *answer = nullptr;
+        char contact_text[max_username_length + 64];
+        pj_ansi_snprintf(contact_text, sizeof(contact_text),
+                         "<sip:%s@127.0.0.1:%u;transport=tcp>", self->username,
+                         self->tcp_port);
+        pj_str_t contact = pj_str(contact_text);
+        pj_status_t status = pjsip_dlg_create_uas_and_inc_lock(
+            pjsip_ua_instance(), data, &contact, &dialog);
+        if (status == PJ_SUCCESS)
+            status = ParseCallSdp(dialog->pool, &answer);
+        if (status == PJ_SUCCESS)
+            status = pjsip_inv_create_uas(dialog, data, answer, 0, &invite);
+        if (dialog != nullptr) pjsip_dlg_dec_lock(dialog);
+        if (status != PJ_SUCCESS) return PJ_FALSE;
+        self->active_invite = invite;
+        self->negotiated_codec = Codec::pcmu;
+        pj_ansi_strncpy(self->remote_uri, "<sip:peer@127.0.0.1>",
+                        max_uri_length);
+        pjsip_tx_data *response = nullptr;
+        status = pjsip_inv_initial_answer(invite, data, 100, nullptr, nullptr,
+                                          &response);
+        if (status == PJ_SUCCESS) status = pjsip_inv_send_msg(invite, response);
+        self->NotifyCall(CallState::incoming);
+        CallInfo info{};
+        info.state = CallState::incoming;
+        info.codec = Codec::pcmu;
+        info.direction = MediaDirection::inactive;
+        pj_ansi_strncpy(info.remote_uri, self->remote_uri, max_uri_length);
+        if (self->observer != nullptr) self->observer->OnIncomingCall(info);
+        return PJ_TRUE;
+    }
+
+    Error StartCallOnEventThread(const char *uri) noexcept {
+        if (registration_state != RegistrationState::registered)
+            return Error::invalid_state;
+        if (active_invite != nullptr) return Error::busy;
+        negotiated_codec = Codec::pcmu;
+        pjsip_dialog *dialog = nullptr;
+        pjmedia_sdp_session *offer = nullptr;
+        pjsip_tx_data *request = nullptr;
+        char contact_text[max_username_length + 64];
+        pj_ansi_snprintf(contact_text, sizeof(contact_text),
+                         "<sip:%s@127.0.0.1:%u;transport=tcp>", username,
+                         tcp_port);
+        pj_str_t local = pj_str(account_uri);
+        pj_str_t contact = pj_str(contact_text);
+        pj_str_t remote = pj_str(const_cast<char *>(uri));
+        pj_status_t status = pjsip_dlg_create_uac(pjsip_ua_instance(), &local,
+                                                   &contact, &remote, &remote,
+                                                   &dialog);
+        if (status != PJ_SUCCESS) return TranslateStatus(status);
+        pjsip_dlg_inc_lock(dialog);
+        status = ParseCallSdp(dialog->pool, &offer);
+        if (status == PJ_SUCCESS)
+            status = pjsip_inv_create_uac(dialog, offer, 0, &active_invite);
+        pjsip_dlg_dec_lock(dialog);
+        if (status == PJ_SUCCESS) status = pjsip_inv_invite(active_invite, &request);
+        if (status == PJ_SUCCESS) status = pjsip_inv_send_msg(active_invite, request);
+        if (status != PJ_SUCCESS) {
+            active_invite = nullptr;
+            return TranslateStatus(status);
+        }
+        pj_ansi_strncpy(remote_uri, uri, max_uri_length);
+        NotifyCall(CallState::outgoing);
+        return Error::ok;
+    }
+
+    Error AnswerCallOnEventThread(int code) noexcept {
+        if (active_invite == nullptr || active_invite->role != PJSIP_ROLE_UAS)
+            return Error::invalid_state;
+        pjsip_tx_data *response = nullptr;
+        pj_status_t status = pjsip_inv_answer(active_invite, code, nullptr,
+                                               nullptr, &response);
+        if (status == PJ_SUCCESS) status = pjsip_inv_send_msg(active_invite, response);
+        return TranslateStatus(status);
+    }
+
+    Error EndCallOnEventThread() noexcept {
+        if (active_invite == nullptr) return Error::invalid_state;
+        pjsip_tx_data *request = nullptr;
+        pj_status_t status = pjsip_inv_end_session(active_invite,
+            PJSIP_SC_REQUEST_TERMINATED, nullptr, &request);
+        if (status == PJ_SUCCESS && request != nullptr)
+            status = pjsip_inv_send_msg(active_invite, request);
+        if (status == PJ_SUCCESS) NotifyCall(CallState::disconnecting);
+        return TranslateStatus(status);
+    }
 
     static void Complete(Command &command, Error result) noexcept {
         if (command.completion != nullptr) {
@@ -286,6 +523,17 @@ failure:
                     Complete(command, self->SendRegistration(false));
                 } else if (command.type == CommandType::unregister_account) {
                     Complete(command, self->SendRegistration(true));
+#if defined(CONFIG_VOIP_PJ_CALL_CONTROL)
+                } else if (command.type == CommandType::start_call) {
+                    Complete(command, self->StartCallOnEventThread(command.uri));
+                } else if (command.type == CommandType::accept_call) {
+                    Complete(command, self->AnswerCallOnEventThread(200));
+                } else if (command.type == CommandType::reject_call) {
+                    Complete(command, self->AnswerCallOnEventThread(
+                        static_cast<int>(command.sip_status)));
+                } else if (command.type == CommandType::end_call) {
+                    Complete(command, self->EndCallOnEventThread());
+#endif
                 } else if (command.type == CommandType::inject_registration) {
                     self->NotifyRegistration(command);
                     Complete(command, Error::ok);
@@ -306,6 +554,25 @@ failure:
 
     void Cleanup() noexcept {
         atomic_set(&accepting, 0);
+
+#if defined(CONFIG_VOIP_PJ_CALL_CONTROL)
+        if (active_invite != nullptr) {
+            pjsip_tx_data *request = nullptr;
+            if (pjsip_inv_end_session(active_invite,
+                    PJSIP_SC_REQUEST_TERMINATED, nullptr, &request) == PJ_SUCCESS &&
+                request != nullptr)
+                (void)pjsip_inv_send_msg(active_invite, request);
+            active_invite = nullptr;
+        }
+        if (call_module.id >= 0 && sip_endpoint != nullptr)
+            (void)pjsip_endpt_unregister_module(sip_endpoint, &call_module);
+        if (sip_endpoint != nullptr && transport_callback_installed) {
+            (void)pjsip_tpmgr_set_state_cb(pjsip_endpt_get_tpmgr(sip_endpoint),
+                                            previous_transport_callback);
+            transport_callback_installed = false;
+        }
+        active_instance = nullptr;
+#endif
 
 #if defined(CONFIG_PJSIP_REGC)
         if (retry_scheduled && sip_endpoint != nullptr) {
@@ -367,6 +634,8 @@ failure:
         tcp_port = 0;
         account_configured = false;
         registration_state = RegistrationState::disabled;
+        call_state = CallState::idle;
+        pj_bzero(remote_uri, sizeof(remote_uri));
         pj_bzero(account_uri, sizeof(account_uri));
         pj_bzero(registrar_uri, sizeof(registrar_uri));
         pj_bzero(username, sizeof(username));
@@ -387,6 +656,8 @@ failure:
         return completion.result;
     }
 };
+
+PjVoipBackend::Impl *PjVoipBackend::Impl::active_instance = nullptr;
 
 PjVoipBackend::PjVoipBackend(RuntimeFailurePoint failure) noexcept
     : impl_(nullptr), failure_(failure) {}
@@ -434,6 +705,28 @@ Error PjVoipBackend::Initialize(Observer *observer) {
     if (status != PJ_SUCCESS) goto status_failure;
     impl_->transaction_layer_initialized = true;
 #endif
+#if defined(CONFIG_VOIP_PJ_CALL_CONTROL)
+    {
+        pjsip_ua_init_param ua{};
+        status = pjsip_ua_init_module(impl_->sip_endpoint, &ua);
+        if (status != PJ_SUCCESS) goto status_failure;
+        status = pjsip_100rel_init_module(impl_->sip_endpoint);
+        if (status != PJ_SUCCESS) goto status_failure;
+        status = pjsip_timer_init_module(impl_->sip_endpoint);
+        if (status != PJ_SUCCESS) goto status_failure;
+        pjsip_inv_callback callbacks{};
+        callbacks.on_state_changed = &Impl::InviteStateChanged;
+        callbacks.on_media_update = &Impl::InviteMediaUpdate;
+        callbacks.on_rx_offer = &Impl::InviteRxOffer;
+        status = pjsip_inv_usage_init(impl_->sip_endpoint, &callbacks);
+        if (status != PJ_SUCCESS) goto status_failure;
+        Impl::active_instance = impl_;
+        status = pjsip_endpt_register_module(impl_->sip_endpoint,
+                                              &impl_->call_module);
+        if (status != PJ_SUCCESS) goto status_failure;
+        impl_->invite_initialized = true;
+    }
+#endif
     if (failure_ == RuntimeFailurePoint::after_sip_endpoint) goto injected_failure;
 
     status = pjmedia_endpt_create2(&impl_->caching_pool.factory,
@@ -450,6 +743,14 @@ Error PjVoipBackend::Initialize(Observer *observer) {
                                         &impl_->tcp_factory);
     if (status != PJ_SUCCESS) goto status_failure;
     impl_->tcp_port = impl_->tcp_factory->addr_name.port;
+#if defined(CONFIG_VOIP_PJ_CALL_CONTROL)
+    impl_->previous_transport_callback = pjsip_tpmgr_get_state_cb(
+        pjsip_endpt_get_tpmgr(impl_->sip_endpoint));
+    status = pjsip_tpmgr_set_state_cb(pjsip_endpt_get_tpmgr(impl_->sip_endpoint),
+                                      &Impl::TransportState);
+    if (status != PJ_SUCCESS) goto status_failure;
+    impl_->transport_callback_installed = true;
+#endif
     if (failure_ == RuntimeFailurePoint::after_tcp_factory) goto injected_failure;
 
     impl_->thread_pool = pjsip_endpt_create_pool(impl_->sip_endpoint,
@@ -604,10 +905,50 @@ Error PjVoipBackend::UnregisterAccount() {
     return impl_->RunSync(command);
 #endif
 }
-Error PjVoipBackend::StartOutgoingCall(const char *) { return Error::invalid_state; }
-Error PjVoipBackend::AcceptCall() { return Error::invalid_state; }
-Error PjVoipBackend::RejectCall(std::uint16_t) { return Error::invalid_state; }
-Error PjVoipBackend::EndCall() { return Error::invalid_state; }
+Error PjVoipBackend::StartOutgoingCall(const char *uri) {
+#if !defined(CONFIG_VOIP_PJ_CALL_CONTROL)
+    (void)uri;
+    return Error::invalid_state;
+#else
+    if (impl_ == nullptr || !impl_->pj_initialized) return Error::not_initialized;
+    if (uri == nullptr) return Error::invalid_argument;
+    const std::size_t length = pj_ansi_strlen(uri);
+    if (length > max_uri_length) return Error::value_too_long;
+    Command command{CommandType::start_call, 0, 0,
+                    RegistrationState::disabled, Error::ok, nullptr, {}};
+    pj_ansi_strcpy(command.uri, uri);
+    return impl_->RunSync(command);
+#endif
+}
+Error PjVoipBackend::AcceptCall() {
+#if !defined(CONFIG_VOIP_PJ_CALL_CONTROL)
+    return Error::invalid_state;
+#else
+    Command command{CommandType::accept_call, 0, 0,
+                    RegistrationState::disabled, Error::ok, nullptr, {}};
+    return impl_ == nullptr ? Error::not_initialized : impl_->RunSync(command);
+#endif
+}
+Error PjVoipBackend::RejectCall(std::uint16_t code) {
+#if !defined(CONFIG_VOIP_PJ_CALL_CONTROL)
+    (void)code;
+    return Error::invalid_state;
+#else
+    if (code < 300 || code > 699) return Error::invalid_argument;
+    Command command{CommandType::reject_call, 0, code,
+                    RegistrationState::disabled, Error::ok, nullptr, {}};
+    return impl_ == nullptr ? Error::not_initialized : impl_->RunSync(command);
+#endif
+}
+Error PjVoipBackend::EndCall() {
+#if !defined(CONFIG_VOIP_PJ_CALL_CONTROL)
+    return Error::invalid_state;
+#else
+    Command command{CommandType::end_call, 0, 0,
+                    RegistrationState::disabled, Error::ok, nullptr, {}};
+    return impl_ == nullptr ? Error::not_initialized : impl_->RunSync(command);
+#endif
+}
 Error PjVoipBackend::SetHeld(bool) { return Error::invalid_state; }
 RegistrationState PjVoipBackend::GetRegistrationState() const {
     return impl_ == nullptr ? RegistrationState::disabled
@@ -615,9 +956,13 @@ RegistrationState PjVoipBackend::GetRegistrationState() const {
 }
 CallInfo PjVoipBackend::GetCallInfo() const {
     CallInfo info{};
-    info.state = CallState::idle;
+    info.state = impl_ == nullptr ? CallState::idle : impl_->call_state;
     info.codec = Codec::pcmu;
-    info.direction = MediaDirection::inactive;
+    info.direction = info.state == CallState::established
+                       ? MediaDirection::send_receive
+                       : MediaDirection::inactive;
+    if (impl_ != nullptr)
+        pj_ansi_strncpy(info.remote_uri, impl_->remote_uri, max_uri_length);
     return info;
 }
 

@@ -31,4 +31,13 @@ config VOIP_PJ_REGISTRATION_NETWORK
 	  Enable REGISTER, Digest authentication, automatic refresh, unregister,
 	  and bounded reconnect through the PJPROJECT registration client.
 
+config VOIP_PJ_CALL_CONTROL
+	bool "VoIP PJSIP one-call control"
+	depends on VOIP_PJ_BACKEND && VOIP_PJ_REGISTRATION_NETWORK
+	depends on PJSIP_INVITE && PJMEDIA_SDP_NEG
+	default n
+	help
+	  Enable one PJSIP dialog/INVITE session over SIP TCP. Media negotiation is
+	  limited to PCMU/PCMA SDP; RTP and audio remain disabled.
+
 endif

@@ -18,4 +18,8 @@ config VOIP_PHASE4_REGISTRATION_TEST
 	bool "Phase 4 TCP registration validation"
 	depends on VOIP_FACADE && VOIP_PJ_BACKEND && PJSIP_REGC && PJSIP_TCP_TRANSPORT
 
+config VOIP_PHASE5_CALL_TEST
+	bool "Phase 5 one-call TCP validation"
+	depends on VOIP_PJ_CALL_CONTROL
+
 endmenu
