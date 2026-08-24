@@ -96,6 +96,14 @@ config PJMEDIA_STREAM
 	help
 	  Select one G.711 audio stream over the validated RTP/RTCP UDP boundary.
 
+config PJMEDIA_SRTP
+	bool "PJMEDIA bundled SRTP primitives"
+	depends on PJMEDIA && PJMEDIA_RTP_RTCP
+	help
+	  Compile the bundled libsrtp AES-CM/HMAC-SHA1 closure. This gate alone
+	  provides crypto primitives; transport wrapping and SDP keying remain
+	  separate integration phases.
+
 config PJMEDIA_AUDIODEV
 	bool "PJMEDIA audio-device core"
 	depends on PJMEDIA_ENDPOINT

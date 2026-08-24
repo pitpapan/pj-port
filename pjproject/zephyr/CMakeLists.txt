@@ -163,7 +163,26 @@ if(CONFIG_PJPROJECT AND CONFIG_PJMEDIA)
   # These unsupported/deferred families intentionally have no Zephyr source
   # selector in the initial profile.
   set(PJMEDIA_VIDEO_SOURCES)
-  set(PJMEDIA_SRTP_SOURCES)
+  set(PJMEDIA_SRTP_SOURCES
+    ${PJPROJECT_ROOT_DIR}/third_party/srtp/srtp/srtp.c
+    ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/cipher/cipher.c
+    ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/cipher/null_cipher.c
+    ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/cipher/cipher_test_cases.c
+    ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/cipher/aes.c
+    ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/cipher/aes_icm.c
+    ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/hash/null_auth.c
+    ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/hash/auth.c
+    ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/hash/auth_test_cases.c
+    ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/hash/sha1.c
+    ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/hash/hmac.c
+    ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/replay/rdb.c
+    ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/replay/rdbx.c
+    ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/math/datatypes.c
+    ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/kernel/crypto_kernel.c
+    ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/kernel/alloc.c
+    ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/kernel/key.c
+    ${PJPROJECT_ROOT_DIR}/third_party/srtp/pjlib/srtp_err.c
+  )
   set(PJMEDIA_ICE_SOURCES)
   set(PJMEDIA_RESAMPLE_SOURCES)
   set(PJMEDIA_AEC_SOURCES)
@@ -204,6 +223,22 @@ if(CONFIG_PJPROJECT AND CONFIG_PJMEDIA)
     zephyr_library_sources_ifdef(CONFIG_PJMEDIA_STREAM
       ${PJMEDIA_STREAM_SOURCES}
     )
+    if(CONFIG_PJMEDIA_SRTP)
+      zephyr_library_named(srtp)
+      zephyr_library_sources(${PJMEDIA_SRTP_SOURCES})
+      zephyr_library_include_directories(
+        ${PJPROJECT_ROOT_DIR}/third_party/build/srtp
+        ${PJPROJECT_ROOT_DIR}/third_party/srtp/include
+        ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/include
+        ${PJPROJECT_ROOT_DIR}/pjlib/include
+      )
+      zephyr_library_compile_definitions(HAVE_CONFIG_H=1)
+      zephyr_include_directories(
+        ${PJPROJECT_ROOT_DIR}/third_party/srtp/include
+        ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/include
+      )
+      target_link_libraries(srtp PUBLIC pjlib)
+    endif()
   endif()
 endif()
 

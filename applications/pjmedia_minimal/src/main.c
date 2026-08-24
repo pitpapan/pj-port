@@ -68,11 +68,17 @@ int phase11_call_run(void);
 int phase12_robustness_run(void);
 #endif
 
+#if defined(CONFIG_PJMEDIA_SRTP_PRIMITIVE_TEST)
+int srtp_primitives_run(void);
+#endif
+
 int main(void)
 {
 	printk("PJMEDIA minimal Zephyr application\n");
 
-#if defined(CONFIG_PJMEDIA_PHASE12_ROBUSTNESS_TEST)
+#if defined(CONFIG_PJMEDIA_SRTP_PRIMITIVE_TEST)
+	return srtp_primitives_run();
+#elif defined(CONFIG_PJMEDIA_PHASE12_ROBUSTNESS_TEST)
 	return phase12_robustness_run();
 #elif defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
 	return phase11_call_run();

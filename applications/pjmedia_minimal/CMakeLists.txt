@@ -58,3 +58,6 @@ target_sources_ifdef(CONFIG_PJMEDIA_PHASE12_ROBUSTNESS_TEST app PRIVATE
   src/phase12_robustness.c
   src/phase11_media.c
 )
+target_sources_ifdef(CONFIG_PJMEDIA_SRTP_PRIMITIVE_TEST app PRIVATE
+  src/srtp_primitives.c
+)

@@ -200,4 +200,13 @@ config PJMEDIA_PHASE12_ROBUSTNESS_TEST
 	  calls, cadence bounds, failure paths, resource accounting, and teardown.
 	  The supported profile remains one call with two G.711 streams.
 
+config PJMEDIA_SRTP_PRIMITIVE_TEST
+	bool "PJMEDIA bundled SRTP primitive validation"
+	depends on PJPROJECT && PJMEDIA_ENDPOINT && PJMEDIA_RTP_RTCP && PJMEDIA_SRTP
+	depends on !PJSIP && !PJMEDIA_G711 && !PJMEDIA_UDP_TRANSPORT
+	depends on !PJMEDIA_STREAM && !PJMEDIA_AUDIODEV
+	help
+	  Validate AES_CM_128_HMAC_SHA1_80 RTP/SRTCP protection, authentication,
+	  replay rejection, lifecycle, and bounded packets without sockets.
+
 endmenu
