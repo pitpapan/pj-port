@@ -60,7 +60,7 @@ SRTP-secured**. The remaining increments are:
 1. build and adapt PJMEDIA's SRTP transport over the existing UDP media
    transport (completed and validated in increment 2);
 2. add SDP offer/answer for `RTP/SAVP` and `a=crypto`, with strict suite and
-   key-length validation;
+   key-length validation (completed and validated in increment 3);
 3. generate per-call master keys from a production CSPRNG, keep them out of
    logs, zero transient key material, and define the hardware key-storage
    boundary;

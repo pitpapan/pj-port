@@ -221,4 +221,15 @@ config PJMEDIA_SRTP_TRANSPORT_TEST
 	  RTP and RTCP over distinct IPv4 UDP transports, including plaintext
 	  rejection and complete transport teardown.
 
+config PJMEDIA_SRTP_SDES_TEST
+	bool "PJMEDIA strict SRTP SDES negotiation validation"
+	depends on PJPROJECT && PJLIB_UTIL && PJMEDIA_ENDPOINT && PJMEDIA_SDP
+	depends on PJMEDIA_RTP_RTCP && PJMEDIA_LOOP_TRANSPORT
+	depends on PJMEDIA_SRTP && PJMEDIA_SRTP_TRANSPORT && PJMEDIA_SRTP_SDES
+	depends on !PJSIP && !PJMEDIA_G711 && !PJMEDIA_STREAM && !PJMEDIA_AUDIODEV
+	help
+	  Validate mandatory RTP/SAVP and AES_CM_128_HMAC_SHA1_80 SDES
+	  offer/answer, malformed and unsupported crypto rejection, downgrade
+	  rejection, key containment, and teardown without a media stream.
+
 endmenu

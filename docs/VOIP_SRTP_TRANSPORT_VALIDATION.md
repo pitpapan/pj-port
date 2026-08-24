@@ -66,8 +66,9 @@ This increment validates explicit-key SRTP transport operation. Integrated
 VoIP calls are not yet secured because SDP offer/answer and per-call key
 generation are not connected.
 
-The next increment is strict SDES negotiation using `RTP/SAVP` and
-`a=crypto:... AES_CM_128_HMAC_SHA1_80 inline:...`, including malformed input,
-wrong suite, wrong key length, downgrade, key redaction, and teardown tests.
+The next increment was strict SDES negotiation using `RTP/SAVP` and
+`a=crypto:... AES_CM_128_HMAC_SHA1_80 inline:...`; it is completed in
+`VOIP_SRTP_SDES_VALIDATION.md`, including malformed input, wrong suite, wrong
+key length, downgrade, key redaction, and teardown tests.
 Because SDES carries its master key in SIP/SDP, the resulting mode is suitable
 for production only when SIP TLS with certificate verification is active.

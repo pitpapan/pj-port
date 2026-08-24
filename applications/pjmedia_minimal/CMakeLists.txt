@@ -64,3 +64,6 @@ target_sources_ifdef(CONFIG_PJMEDIA_SRTP_PRIMITIVE_TEST app PRIVATE
 target_sources_ifdef(CONFIG_PJMEDIA_SRTP_TRANSPORT_TEST app PRIVATE
   src/srtp_transport.c
 )
+target_sources_ifdef(CONFIG_PJMEDIA_SRTP_SDES_TEST app PRIVATE
+  src/srtp_sdes.c
+)

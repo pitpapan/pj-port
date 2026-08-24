@@ -28,7 +28,11 @@
 #else
 #  define PJMEDIA_HAS_SRTP                   0
 #endif
-#define PJMEDIA_SRTP_HAS_SDES                0
+#if defined(CONFIG_PJMEDIA_SRTP_SDES)
+#  define PJMEDIA_SRTP_HAS_SDES              1
+#else
+#  define PJMEDIA_SRTP_HAS_SDES              0
+#endif
 #define PJMEDIA_SRTP_HAS_DTLS                0
 #define PJMEDIA_HAS_RTCP_XR                  0
 #define PJMEDIA_STREAM_ENABLE_XR             0

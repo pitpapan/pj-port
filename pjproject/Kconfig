@@ -113,6 +113,14 @@ config PJMEDIA_SRTP_TRANSPORT
 	  engine. This gate provides explicit-key transport operation; SDP key
 	  negotiation remains a separate security increment.
 
+config PJMEDIA_SRTP_SDES
+	bool "PJMEDIA SRTP SDES negotiation"
+	depends on PJMEDIA_SRTP_TRANSPORT && PJMEDIA_SDP
+	help
+	  Enable RFC 4568 SDP security descriptions for the single supported
+	  AES_CM_128_HMAC_SHA1_80 suite. SDES exposes keys to signaling and must
+	  not be used in production without authenticated SIP TLS.
+
 config PJMEDIA_AUDIODEV
 	bool "PJMEDIA audio-device core"
 	depends on PJMEDIA_ENDPOINT
