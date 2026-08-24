@@ -43,3 +43,6 @@ build-pjmedia-phase7-disabled
 build-pjmedia-phase8
 build-pjmedia-phase8-link-probe
 build-pjmedia-phase8-disabled
+build-pjmedia-phase9-link-probe
+build-pjmedia-phase9
+build-pjmedia-phase9-disabled

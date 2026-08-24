@@ -48,11 +48,36 @@ int phase8_packet_run(void);
 int phase8_link_probe_run(void);
 #endif
 
+#if defined(CONFIG_PJMEDIA_PHASE9_TRANSPORT_TEST)
+int phase9_transport_run(void);
+#endif
+
+#if defined(CONFIG_PJMEDIA_PHASE9_LINK_PROBE)
+int phase9_link_probe_run(void);
+#endif
+
 int main(void)
 {
 	printk("PJMEDIA minimal Zephyr application\n");
 
-#if defined(CONFIG_PJMEDIA_PHASE8_LINK_PROBE)
+#if defined(CONFIG_PJMEDIA_PHASE9_LINK_PROBE)
+	return phase9_link_probe_run();
+#elif defined(CONFIG_PJMEDIA_PHASE9_TRANSPORT_TEST)
+	return phase9_transport_run();
+#elif defined(CONFIG_PJMEDIA_PHASE9_DISABLED_TEST)
+	{
+		pj_status_t status = pj_init();
+
+		if (status != PJ_SUCCESS) {
+			printk("Phase 9 disabled profile: PJLIB init failed: %d\n",
+			       status);
+			return 1;
+		}
+		pj_shutdown();
+		printk("PHASE 9 DISABLED: PASSED (no media transport objects)\n");
+		return 0;
+	}
+#elif defined(CONFIG_PJMEDIA_PHASE8_LINK_PROBE)
 	return phase8_link_probe_run();
 #elif defined(CONFIG_PJMEDIA_PHASE8_PACKET_TEST)
 	return phase8_packet_run();

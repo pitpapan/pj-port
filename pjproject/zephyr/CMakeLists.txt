@@ -131,6 +131,9 @@ if(CONFIG_PJPROJECT AND CONFIG_PJMEDIA)
     ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/rtcp_fb.c
     ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/jbuf.c
   )
+  set(PJMEDIA_LOOP_TRANSPORT_SOURCES
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/transport_loop.c
+  )
   set(PJMEDIA_UDP_TRANSPORT_SOURCES
     ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/transport_udp.c
   )
@@ -190,6 +193,12 @@ if(CONFIG_PJPROJECT AND CONFIG_PJMEDIA)
     )
     zephyr_library_sources_ifdef(CONFIG_PJMEDIA_RTP_RTCP
       ${PJMEDIA_RTP_RTCP_SOURCES}
+    )
+    zephyr_library_sources_ifdef(CONFIG_PJMEDIA_LOOP_TRANSPORT
+      ${PJMEDIA_LOOP_TRANSPORT_SOURCES}
+    )
+    zephyr_library_sources_ifdef(CONFIG_PJMEDIA_UDP_TRANSPORT
+      ${PJMEDIA_UDP_TRANSPORT_SOURCES}
     )
   endif()
 endif()

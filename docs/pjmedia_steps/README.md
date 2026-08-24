@@ -10,7 +10,7 @@ procedure:
   defines the complete audit discipline;
 - this directory explains where to start and what to do next.
 
-Current validated state: Phase 8 is complete. Phase 9 has not been started.
+Current validated state: Phase 9 is complete. Phase 10 has not been started.
 
 ## Guides
 
@@ -24,6 +24,9 @@ Current validated state: Phase 8 is complete. Phase 9 has not been started.
    endpoint and validate direct PCMU/PCMA conversion without media transport.
 5. [`PHASE8_RTP_RTCP_JBUF.md`](PHASE8_RTP_RTCP_JBUF.md) — validate RTP, RTCP,
    feedback, and jitter-buffer primitives without sockets or streams.
+6. [`PHASE9_LOOP_UDP_TRANSPORT.md`](PHASE9_LOOP_UDP_TRANSPORT.md) — validate
+   loop callbacks and explicit IPv4 RTP/RTCP sockets on the shared PJSIP
+   ioqueue without creating a media stream.
 
 Read only the guide for the active phase. Do not prepare files for the next
 guide until the active phase has passed and has a validation report.
@@ -39,11 +42,11 @@ export CCACHE_DISABLE=1
 export CMAKE_BUILD_PARALLEL_LEVEL=1
 ```
 
-The development target for these three phases is `mps2/an385` under QEMU.
+The development target for these phases is `mps2/an385` under QEMU.
 
 ## What these phases do not prove
 
-Phases 4–8 validate SIP call control, SDP negotiation, the PJMEDIA endpoint,
-direct G.711 conversion, and socket-free RTP/RTCP/jitter primitives. They do
-not validate media transport callbacks or sockets, an audio stream, or an
-audio device. Those begin in Phase 9 or later.
+Phases 4–9 validate SIP call control, SDP negotiation, the PJMEDIA endpoint,
+direct G.711 conversion, socket-free RTP/RTCP/jitter primitives, media
+transport callbacks, and explicit IPv4 RTP/RTCP sockets. They do not validate
+a PJMEDIA audio stream or audio device. Those begin in Phase 10 or later.

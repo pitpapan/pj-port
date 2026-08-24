@@ -124,4 +124,40 @@ config PJMEDIA_PHASE8_DISABLED_TEST
 	  Emit an explicit marker for the like-for-like profile in which the
 	  Phase 8 RTP/RTCP/jitter-buffer production gate remains disabled.
 
+config PJMEDIA_PHASE9_TRANSPORT_TEST
+	bool "PJMEDIA Phase 9 loop and IPv4 UDP transport validation"
+	depends on PJPROJECT && PJSIP && PJSIP_REGC && PJSIP_UDP_TRANSPORT
+	depends on PJMEDIA_ENDPOINT && PJMEDIA_RTP_RTCP
+	depends on PJMEDIA_LOOP_TRANSPORT && PJMEDIA_UDP_TRANSPORT
+	depends on NET_SOCKETS && NET_IPV4 && NET_UDP && !NET_IPV6
+	depends on !PJSIP_INVITE && !PJSIP_TCP_TRANSPORT
+	depends on !PJMEDIA_G711 && !PJMEDIA_SDP_NEG
+	depends on !PJMEDIA_STREAM && !PJMEDIA_AUDIODEV
+	help
+	  Validate socket-free loop transport first, then deterministic RTP and
+	  RTCP callbacks over explicit IPv4 UDP loopback sockets sharing PJSIP's
+	  ioqueue. Also validate detach/cancellation/destruction and signaling
+	  coexistence without creating a media stream or audio device.
+
+config PJMEDIA_PHASE9_LINK_PROBE
+	bool "PJMEDIA Phase 9 public API link probe"
+	depends on PJPROJECT && PJSIP && PJMEDIA_ENDPOINT && PJMEDIA_RTP_RTCP
+	depends on PJMEDIA_LOOP_TRANSPORT && PJMEDIA_UDP_TRANSPORT
+	depends on NET_SOCKETS && NET_IPV4 && NET_UDP && !NET_IPV6
+	depends on !PJMEDIA_G711 && !PJMEDIA_SDP_NEG
+	depends on !PJMEDIA_STREAM && !PJMEDIA_AUDIODEV
+	help
+	  Retain the public loop and UDP media transport API closure under the
+	  normal section garbage-collection policy.
+
+config PJMEDIA_PHASE9_DISABLED_TEST
+	bool "PJMEDIA Phase 9 feature-disabled marker"
+	depends on PJPROJECT && PJMEDIA_ENDPOINT && PJMEDIA_RTP_RTCP
+	depends on !PJMEDIA_LOOP_TRANSPORT && !PJMEDIA_UDP_TRANSPORT
+	depends on !PJMEDIA_G711 && !PJMEDIA_SDP_NEG
+	depends on !PJMEDIA_STREAM && !PJMEDIA_AUDIODEV && !PJSIP
+	help
+	  Emit an explicit marker for the like-for-like profile in which both
+	  Phase 9 media transport production gates remain disabled.
+
 endmenu
