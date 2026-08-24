@@ -54,3 +54,7 @@ target_sources_ifdef(CONFIG_PJMEDIA_PHASE11_CALL_TEST app PRIVATE
   src/phase11_call.c
   src/phase11_media.c
 )
+target_sources_ifdef(CONFIG_PJMEDIA_PHASE12_ROBUSTNESS_TEST app PRIVATE
+  src/phase12_robustness.c
+  src/phase11_media.c
+)

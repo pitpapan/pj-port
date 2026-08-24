@@ -11,7 +11,11 @@
 
 #define PHASE11_FRAME_SAMPLES 160
 #define PHASE11_FRAME_BYTES (PHASE11_FRAME_SAMPLES * sizeof(pj_int16_t))
+#if defined(CONFIG_PJMEDIA_PHASE12_ROBUSTNESS_TEST)
+#define PHASE11_MEDIA_FRAMES 120
+#else
 #define PHASE11_MEDIA_FRAMES 36
+#endif
 
 struct phase11_media_context {
 	pj_pool_factory *factory;
@@ -31,6 +35,7 @@ struct phase11_media_context {
 	pj_uint32_t uas_hash;
 	unsigned uac_frames;
 	unsigned uas_frames;
+	unsigned max_lateness_ms;
 	pj_bool_t codec_initialized;
 };
 
@@ -225,9 +230,11 @@ pj_status_t phase11_media_exercise_call(void)
 
 	media.uac_hash = media.uas_hash = 2166136261u;
 	media.uac_frames = media.uas_frames = 0;
+	media.max_lateness_ms = 0;
 	for (unsigned frame_no = 0; frame_no < PHASE11_MEDIA_FRAMES; ++frame_no) {
 		pjmedia_frame tx;
 		pjmedia_frame rx;
+		int64_t cadence_deadline = k_uptime_get() + 20;
 
 		for (unsigned i = 0; i < PHASE11_FRAME_SAMPLES; ++i) {
 			uac_tx[i] = (pj_int16_t)(((frame_no * 97 + i * 31) & 0x3fff) - 8192);
@@ -263,6 +270,12 @@ pj_status_t phase11_media_exercise_call(void)
 				return status;
 		}
 		pj_thread_sleep(20);
+		{
+			int64_t late = k_uptime_get() - cadence_deadline;
+
+			if (late > (int64_t)media.max_lateness_ms)
+				media.max_lateness_ms = (unsigned)late;
+		}
 		pj_bzero(&rx, sizeof(rx));
 		rx.buf = uac_rx;
 		rx.size = sizeof(uac_rx);
@@ -294,9 +307,13 @@ pj_status_t phase11_media_exercise_call(void)
 	       media.uac_frames, media.uas_frames, uac_stat.tx.pkt,
 	       uac_stat.rx.pkt, uas_stat.tx.pkt, uas_stat.rx.pkt,
 	       pjmedia_stream_check_dtmf(media.uas_stream));
-	if (media.uac_frames < 24 || media.uas_frames < 24 ||
-	    uac_stat.tx.pkt < 24 || uac_stat.rx.pkt < 24 ||
-	    uas_stat.tx.pkt < 24 || uas_stat.rx.pkt < 24 ||
+	if (media.uac_frames < PHASE11_MEDIA_FRAMES - 12 ||
+	    media.uas_frames < PHASE11_MEDIA_FRAMES - 12 ||
+	    uac_stat.tx.pkt < PHASE11_MEDIA_FRAMES - 12 ||
+	    uac_stat.rx.pkt < PHASE11_MEDIA_FRAMES - 12 ||
+	    uas_stat.tx.pkt < PHASE11_MEDIA_FRAMES - 12 ||
+	    uas_stat.rx.pkt < PHASE11_MEDIA_FRAMES - 12 ||
+	    media.max_lateness_ms > 20 ||
 	    !pjmedia_stream_check_dtmf(media.uas_stream))
 		return PJ_EUNKNOWN;
 	{
@@ -312,6 +329,10 @@ pj_status_t phase11_media_exercise_call(void)
 	       uac_stat.tx.pkt, uac_stat.rx.pkt, uas_stat.tx.pkt, uas_stat.rx.pkt,
 	       jb.size);
 	printk("[Phase 11] 20 ms cadence, telephone-event, pause, and resume: PASSED\n");
+#if defined(CONFIG_PJMEDIA_PHASE12_ROBUSTNESS_TEST)
+	printk("[Phase 12] cadence max lateness=%u ms across %u frames: PASSED\n",
+	       media.max_lateness_ms, PHASE11_MEDIA_FRAMES);
+#endif
 	return PJ_SUCCESS;
 }
 
@@ -333,6 +354,16 @@ pj_status_t phase11_media_stop_call(void)
 			result = status;
 		media.uas_stream = NULL;
 		media.uas_port = NULL;
+	}
+	if (media.uac_transport != NULL) {
+		status = pjmedia_transport_media_stop(media.uac_transport);
+		if (status != PJ_SUCCESS)
+			result = status;
+	}
+	if (media.uas_transport != NULL) {
+		status = pjmedia_transport_media_stop(media.uas_transport);
+		if (status != PJ_SUCCESS)
+			result = status;
 	}
 	if (media.uac_transport != NULL) {
 		status = pjmedia_transport_close(media.uac_transport);

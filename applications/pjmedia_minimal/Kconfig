@@ -186,4 +186,18 @@ config PJMEDIA_PHASE11_CALL_TEST
 	  deterministic PCM sources and memory sinks. This folds the stream work
 	  into Phase 11 instead of publishing a standalone Phase 10 result.
 
+config PJMEDIA_PHASE12_ROBUSTNESS_TEST
+	bool "PJMEDIA Phase 12 headless media robustness validation"
+	depends on PJPROJECT && PJSIP && PJSIP_INVITE && PJSIP_REGC
+	depends on PJSIP_UDP_TRANSPORT && !PJSIP_TCP_TRANSPORT
+	depends on PJMEDIA_SDP_NEG && PJMEDIA_ENDPOINT && PJMEDIA_G711
+	depends on PJMEDIA_RTP_RTCP && PJMEDIA_LOOP_TRANSPORT
+	depends on PJMEDIA_UDP_TRANSPORT && PJMEDIA_STREAM
+	depends on !PJMEDIA_AUDIODEV
+	depends on NET_SOCKETS && NET_IPV4 && NET_UDP && !NET_IPV6
+	help
+	  Repeat the complete Phase 11 signaling/media lifecycle with longer active
+	  calls, cadence bounds, failure paths, resource accounting, and teardown.
+	  The supported profile remains one call with two G.711 streams.
+
 endmenu

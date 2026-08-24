@@ -10,8 +10,9 @@ procedure:
   defines the complete audit discipline;
 - this directory explains where to start and what to do next.
 
-Current validated state: Phase 11 is complete. Phase 10 was intentionally
-skipped, with its stream work folded into Phase 11.
+Current validated state: Phase 12 is in progress; its extended lifecycle
+profile passes, while the remaining fault-injection and CPU gates are open.
+Phase 10 was intentionally skipped, with its stream work folded into Phase 11.
 
 ## Guides
 
@@ -30,6 +31,8 @@ skipped, with its stream work folded into Phase 11.
    ioqueue without creating a media stream.
 7. [`PHASE11_SIP_CONTROLLED_MEDIA.md`](PHASE11_SIP_CONTROLLED_MEDIA.md) — bind
    negotiated SIP/SDP call state to bidirectional headless G.711 RTP streams.
+8. [`PHASE12_ROBUSTNESS.md`](PHASE12_ROBUSTNESS.md) — validate the bounded
+   one-call/two-stream profile under extended media and signaling failures.
 
 Read only the guide for the active phase. Do not prepare files for the next
 guide until the active phase has passed and has a validation report.

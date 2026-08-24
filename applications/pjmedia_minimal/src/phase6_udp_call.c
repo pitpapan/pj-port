@@ -13,12 +13,16 @@
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/printk.h>
 
-#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
+#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST) || defined(CONFIG_PJMEDIA_PHASE12_ROBUSTNESS_TEST)
 #include "phase11_media.h"
 #endif
 
+#ifndef PHASE6_LIFECYCLES
 #define PHASE6_LIFECYCLES 3
+#endif
+#ifndef PHASE6_WAIT_MS
 #define PHASE6_WAIT_MS 2200
+#endif
 #define PHASE6_CALL_COUNT 12
 
 #define INV_STATE_BIT(state) ((atomic_val_t)1 << (state))
@@ -313,7 +317,7 @@ static pj_status_t parse_sdp(pj_pool_t *pool, const char *direction,
 	{
 		pj_status_t status = pjmedia_sdp_parse(pool, copy, length, session);
 
-#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
+#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST) || defined(CONFIG_PJMEDIA_PHASE12_ROBUSTNESS_TEST)
 		if (status == PJ_SUCCESS && compatible) {
 			unsigned port = phase11_media_sdp_port(uas);
 
@@ -963,20 +967,20 @@ static int test_connected_call(struct phase6_context *context,
 	pj_bzero(&call, sizeof(call));
 	call.scenario = scenario;
 	context->call = &call;
-#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
+#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST) || defined(CONFIG_PJMEDIA_PHASE12_ROBUSTNESS_TEST)
 	CHECK_STATUS(scenario_name(scenario), phase11_media_prepare_call());
 #endif
 	CHECK_TRUE(scenario_name(scenario),
 		   start_call(context, &call, PJ_TRUE, PJ_FALSE) == 0);
 	CHECK_TRUE(scenario_name(scenario), wait_confirmed(&call) == 0);
-#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
+#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST) || defined(CONFIG_PJMEDIA_PHASE12_ROBUSTNESS_TEST)
 	CHECK_STATUS(scenario_name(scenario),
 		     phase11_media_start_call(call.uac, call.uas));
 	CHECK_STATUS(scenario_name(scenario), phase11_media_exercise_call());
 #endif
 	result = finish_call(context, &call,
 			     scenario == PHASE6_UAS_BYE ? call.uas : call.uac);
-#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
+#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST) || defined(CONFIG_PJMEDIA_PHASE12_ROBUSTNESS_TEST)
 	if (phase11_media_stop_call() != PJ_SUCCESS)
 		return fail_value(scenario_name(scenario), __LINE__,
 				  "media stop after active BYE");
@@ -1545,7 +1549,7 @@ static int run_lifecycle(int iteration)
 	pj_bool_t callbacks_installed = PJ_FALSE;
 	pj_bool_t server_udp_started = PJ_FALSE;
 	pj_bool_t client_udp_started = PJ_FALSE;
-#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
+#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST) || defined(CONFIG_PJMEDIA_PHASE12_ROBUSTNESS_TEST)
 	pj_bool_t phase11_media_initialized = PJ_FALSE;
 #endif
 	atomic_val_t destroy_target;
@@ -1637,7 +1641,7 @@ static int run_lifecycle(int iteration)
 		goto destroy_endpoint;
 	}
 	callbacks_installed = PJ_TRUE;
-#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
+#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST) || defined(CONFIG_PJMEDIA_PHASE12_ROBUSTNESS_TEST)
 	status = phase11_media_lifecycle_init(&caching_pool.factory, endpoint);
 	if (status != PJ_SUCCESS) {
 		fail_status("Phase 11 media lifecycle init", __LINE__, status);
@@ -1728,7 +1732,7 @@ destroy_endpoint:
 	client_udp = context.client_udp;
 	server_udp = context.server_udp;
 	context.call = NULL;
-#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
+#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST) || defined(CONFIG_PJMEDIA_PHASE12_ROBUSTNESS_TEST)
 	if (phase11_media_initialized) {
 		status = phase11_media_lifecycle_destroy();
 		if (status != PJ_SUCCESS) {
@@ -1919,6 +1923,7 @@ int phase6_udp_call_run(void)
 	       (unsigned)CONFIG_MAIN_STACK_SIZE,
 	       (unsigned)(CONFIG_MAIN_STACK_SIZE - main_unused),
 	       (unsigned)main_unused);
-	printk("PHASE 6 RESULT: PASSED (3 complete IPv4 UDP call lifecycles)\n");
+	printk("PHASE 6 RESULT: PASSED (%d complete IPv4 UDP call lifecycles)\n",
+	       PHASE6_LIFECYCLES);
 	return 0;
 }
