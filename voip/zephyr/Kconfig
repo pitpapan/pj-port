@@ -1,0 +1,34 @@
+menuconfig VOIP_FACADE
+	bool "PJPROJECT VoIP C++ facade"
+	depends on CPP
+	default n
+	help
+	  Build the application-facing VoIP contract. The Phase 1 backend is a
+	  deterministic fake and does not initialize or link PJPROJECT.
+
+if VOIP_FACADE
+
+config VOIP_FAKE_BACKEND
+	bool "VoIP facade fake backend"
+	default n
+	help
+	  Build the bounded Phase 1 lifecycle backend used by facade tests.
+
+config VOIP_PJ_BACKEND
+	bool "VoIP PJPROJECT runtime backend"
+	depends on PJPROJECT && PJLIB_UTIL && PJSIP && PJSIP_TCP_TRANSPORT
+	depends on PJMEDIA_ENDPOINT
+	default n
+	help
+	  Build the shared PJLIB/PJSIP/PJMEDIA runtime owner. Account, call, and
+	  media-session behavior is introduced by later integration phases.
+
+config VOIP_PJ_REGISTRATION_NETWORK
+	bool "VoIP PJSIP network registration"
+	depends on VOIP_PJ_BACKEND && PJSIP_REGC && PJSIP_TCP_TRANSPORT
+	default n
+	help
+	  Enable REGISTER, Digest authentication, automatic refresh, unregister,
+	  and bounded reconnect through the PJPROJECT registration client.
+
+endif

@@ -49,3 +49,6 @@ build-pjmedia-phase9-disabled
 build-pjmedia-phase11
 build-pjmedia-phase11-link-probe
 build-pjmedia-phase12
+build-voip-integration-phase4
+build-voip-integration-phase2
+build-voip-integration-phase3

@@ -1,0 +1,21 @@
+source "Kconfig.zephyr"
+
+menu "VoIP integration validation"
+
+config VOIP_PHASE1_TEST
+	bool "Phase 1 facade validation"
+	depends on VOIP_FACADE && VOIP_FAKE_BACKEND
+
+config VOIP_PHASE2_RUNTIME_TEST
+	bool "Phase 2 shared runtime validation"
+	depends on VOIP_FACADE && VOIP_PJ_BACKEND
+
+config VOIP_PHASE3_ACCOUNT_TEST
+	bool "Phase 3 single-account validation"
+	depends on VOIP_FACADE && VOIP_PJ_BACKEND && PJSIP_REGC
+
+config VOIP_PHASE4_REGISTRATION_TEST
+	bool "Phase 4 TCP registration validation"
+	depends on VOIP_FACADE && VOIP_PJ_BACKEND && PJSIP_REGC && PJSIP_TCP_TRANSPORT
+
+endmenu
