@@ -56,11 +56,23 @@ int phase9_transport_run(void);
 int phase9_link_probe_run(void);
 #endif
 
+#if defined(CONFIG_PJMEDIA_PHASE11_LINK_PROBE)
+int phase11_link_probe_run(void);
+#endif
+
+#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
+int phase11_call_run(void);
+#endif
+
 int main(void)
 {
 	printk("PJMEDIA minimal Zephyr application\n");
 
-#if defined(CONFIG_PJMEDIA_PHASE9_LINK_PROBE)
+#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
+	return phase11_call_run();
+#elif defined(CONFIG_PJMEDIA_PHASE11_LINK_PROBE)
+	return phase11_link_probe_run();
+#elif defined(CONFIG_PJMEDIA_PHASE9_LINK_PROBE)
 	return phase9_link_probe_run();
 #elif defined(CONFIG_PJMEDIA_PHASE9_TRANSPORT_TEST)
 	return phase9_transport_run();

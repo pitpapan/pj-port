@@ -47,3 +47,10 @@ target_sources_ifdef(CONFIG_PJMEDIA_PHASE9_TRANSPORT_TEST app PRIVATE
 target_sources_ifdef(CONFIG_PJMEDIA_PHASE9_LINK_PROBE app PRIVATE
   src/phase9_link_probe.c
 )
+target_sources_ifdef(CONFIG_PJMEDIA_PHASE11_LINK_PROBE app PRIVATE
+  src/phase11_link_probe.c
+)
+target_sources_ifdef(CONFIG_PJMEDIA_PHASE11_CALL_TEST app PRIVATE
+  src/phase11_call.c
+  src/phase11_media.c
+)

@@ -10,7 +10,8 @@ procedure:
   defines the complete audit discipline;
 - this directory explains where to start and what to do next.
 
-Current validated state: Phase 9 is complete. Phase 10 has not been started.
+Current validated state: Phase 11 is complete. Phase 10 was intentionally
+skipped, with its stream work folded into Phase 11.
 
 ## Guides
 
@@ -27,6 +28,8 @@ Current validated state: Phase 9 is complete. Phase 10 has not been started.
 6. [`PHASE9_LOOP_UDP_TRANSPORT.md`](PHASE9_LOOP_UDP_TRANSPORT.md) — validate
    loop callbacks and explicit IPv4 RTP/RTCP sockets on the shared PJSIP
    ioqueue without creating a media stream.
+7. [`PHASE11_SIP_CONTROLLED_MEDIA.md`](PHASE11_SIP_CONTROLLED_MEDIA.md) — bind
+   negotiated SIP/SDP call state to bidirectional headless G.711 RTP streams.
 
 Read only the guide for the active phase. Do not prepare files for the next
 guide until the active phase has passed and has a validation report.
@@ -46,7 +49,7 @@ The development target for these phases is `mps2/an385` under QEMU.
 
 ## What these phases do not prove
 
-Phases 4–9 validate SIP call control, SDP negotiation, the PJMEDIA endpoint,
+Phases 4–9 and 11 validate SIP call control, SDP negotiation, the PJMEDIA endpoint,
 direct G.711 conversion, socket-free RTP/RTCP/jitter primitives, media
-transport callbacks, and explicit IPv4 RTP/RTCP sockets. They do not validate
-a PJMEDIA audio stream or audio device. Those begin in Phase 10 or later.
+transport callbacks, explicit IPv4 RTP/RTCP sockets, and SIP-controlled
+headless G.711 streams. They do not validate an audio device or hardware audio.

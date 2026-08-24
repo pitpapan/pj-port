@@ -13,6 +13,10 @@
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/printk.h>
 
+#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
+#include "phase11_media.h"
+#endif
+
 #define PHASE6_LIFECYCLES 3
 #define PHASE6_WAIT_MS 2200
 #define PHASE6_CALL_COUNT 12
@@ -241,7 +245,7 @@ static const char *scenario_name(enum phase6_scenario scenario)
 }
 
 static pj_status_t parse_sdp(pj_pool_t *pool, const char *direction,
-			     pj_bool_t compatible,
+			     pj_bool_t compatible, pj_bool_t uas,
 			     pjmedia_sdp_session **session)
 {
 	static const char sendrecv[] =
@@ -306,7 +310,21 @@ static pj_status_t parse_sdp(pj_pool_t *pool, const char *direction,
 	if (copy == NULL)
 		return PJ_ENOMEM;
 	pj_memcpy(copy, text, length + 1);
-	return pjmedia_sdp_parse(pool, copy, length, session);
+	{
+		pj_status_t status = pjmedia_sdp_parse(pool, copy, length, session);
+
+#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
+		if (status == PJ_SUCCESS && compatible) {
+			unsigned port = phase11_media_sdp_port(uas);
+
+			if (port != 0)
+				(*session)->media[0]->desc.port = port;
+		}
+#else
+		PJ_UNUSED_ARG(uas);
+#endif
+		return status;
+	}
 }
 
 static struct phase6_call *current_call(void)
@@ -364,7 +382,7 @@ static void on_rx_offer(pjsip_inv_session *inv,
 	if (call->scenario == PHASE6_REINVITE &&
 	    atomic_get(&call->request_invite) >= 2)
 		direction = "recvonly";
-	status = parse_sdp(inv->pool_prov, direction, PJ_TRUE, &answer);
+	status = parse_sdp(inv->pool_prov, direction, PJ_TRUE, PJ_TRUE, &answer);
 	if (status == PJ_SUCCESS)
 		status = pjsip_inv_set_sdp_answer(inv, answer);
 	if (status != PJ_SUCCESS)
@@ -639,7 +657,8 @@ static pj_bool_t phase6_on_rx_request(pjsip_rx_data *rdata)
 	selector.u.transport = active_context->server_udp;
 	status = pjsip_dlg_set_transport(dialog, &selector);
 	if (status == PJ_SUCCESS)
-		status = parse_sdp(dialog->pool, "sendrecv", PJ_TRUE, &answer);
+		status = parse_sdp(dialog->pool, "sendrecv", PJ_TRUE, PJ_TRUE,
+				   &answer);
 	if (status == PJ_SUCCESS)
 		status = pjsip_inv_create_uas(dialog, rdata, answer, 0, &invite);
 	if (status == PJ_SUCCESS) {
@@ -864,7 +883,8 @@ static int start_call(struct phase6_context *context, struct phase6_call *call,
 	selector.u.transport = context->client_udp;
 	status = pjsip_dlg_set_transport(dialog, &selector);
 	if (status == PJ_SUCCESS && with_offer)
-		status = parse_sdp(dialog->pool, "sendrecv", PJ_TRUE, &offer);
+		status = parse_sdp(dialog->pool, "sendrecv", PJ_TRUE, PJ_FALSE,
+				   &offer);
 	if (status == PJ_SUCCESS && offer != NULL)
 		status = pjmedia_sdp_validate(offer);
 	if (status == PJ_SUCCESS)
@@ -938,16 +958,30 @@ static int test_connected_call(struct phase6_context *context,
 			       enum phase6_scenario scenario)
 {
 	struct phase6_call call;
+	int result;
 
 	pj_bzero(&call, sizeof(call));
 	call.scenario = scenario;
 	context->call = &call;
+#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
+	CHECK_STATUS(scenario_name(scenario), phase11_media_prepare_call());
+#endif
 	CHECK_TRUE(scenario_name(scenario),
 		   start_call(context, &call, PJ_TRUE, PJ_FALSE) == 0);
 	CHECK_TRUE(scenario_name(scenario), wait_confirmed(&call) == 0);
-	CHECK_TRUE(scenario_name(scenario),
-		   finish_call(context, &call,
-			       scenario == PHASE6_UAS_BYE ? call.uas : call.uac) == 0);
+#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
+	CHECK_STATUS(scenario_name(scenario),
+		     phase11_media_start_call(call.uac, call.uas));
+	CHECK_STATUS(scenario_name(scenario), phase11_media_exercise_call());
+#endif
+	result = finish_call(context, &call,
+			     scenario == PHASE6_UAS_BYE ? call.uas : call.uac);
+#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
+	if (phase11_media_stop_call() != PJ_SUCCESS)
+		return fail_value(scenario_name(scenario), __LINE__,
+				  "media stop after active BYE");
+#endif
+	CHECK_TRUE(scenario_name(scenario), result == 0);
 	printk("[Phase 6] %s call flow: PASSED\n", scenario_name(scenario));
 	return 0;
 }
@@ -1076,6 +1110,7 @@ static int test_reinvite(struct phase6_context *context)
 	CHECK_TRUE(test, start_call(context, &call, PJ_TRUE, PJ_FALSE) == 0);
 	CHECK_TRUE(test, wait_confirmed(&call) == 0);
 	CHECK_STATUS(test, parse_sdp(call.uac->pool_prov, "sendonly", PJ_TRUE,
+					    PJ_FALSE,
 					    &offer));
 	CHECK_STATUS(test, pjsip_inv_reinvite(call.uac, NULL, offer, &tdata));
 	CHECK_STATUS(test, pjsip_inv_send_msg(call.uac, tdata));
@@ -1105,6 +1140,7 @@ static int test_reinvite(struct phase6_context *context)
 	offer = NULL;
 	tdata = NULL;
 	CHECK_STATUS(test, parse_sdp(call.uac->pool_prov, "sendrecv", PJ_FALSE,
+					    PJ_FALSE,
 					    &offer));
 	CHECK_STATUS(test, pjsip_inv_reinvite(call.uac, NULL, offer, &tdata));
 	CHECK_STATUS(test, pjsip_inv_send_msg(call.uac, tdata));
@@ -1509,6 +1545,9 @@ static int run_lifecycle(int iteration)
 	pj_bool_t callbacks_installed = PJ_FALSE;
 	pj_bool_t server_udp_started = PJ_FALSE;
 	pj_bool_t client_udp_started = PJ_FALSE;
+#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
+	pj_bool_t phase11_media_initialized = PJ_FALSE;
+#endif
 	atomic_val_t destroy_target;
 	int result = -1;
 
@@ -1598,6 +1637,14 @@ static int run_lifecycle(int iteration)
 		goto destroy_endpoint;
 	}
 	callbacks_installed = PJ_TRUE;
+#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
+	status = phase11_media_lifecycle_init(&caching_pool.factory, endpoint);
+	if (status != PJ_SUCCESS) {
+		fail_status("Phase 11 media lifecycle init", __LINE__, status);
+		goto destroy_endpoint;
+	}
+	phase11_media_initialized = PJ_TRUE;
+#endif
 	status = select_unused_loopback_port(&context.unused_port);
 	if (status == PJ_SUCCESS)
 		status = pj_sockaddr_in_init(&bind_address, &loopback, 0);
@@ -1681,6 +1728,16 @@ destroy_endpoint:
 	client_udp = context.client_udp;
 	server_udp = context.server_udp;
 	context.call = NULL;
+#if defined(CONFIG_PJMEDIA_PHASE11_CALL_TEST)
+	if (phase11_media_initialized) {
+		status = phase11_media_lifecycle_destroy();
+		if (status != PJ_SUCCESS) {
+			fail_status("Phase 11 media lifecycle destroy", __LINE__, status);
+			result = -1;
+		}
+		phase11_media_initialized = PJ_FALSE;
+	}
+#endif
 	if (context.registration != NULL) {
 		status = pjsip_regc_destroy2(context.registration, PJ_TRUE);
 		if (status != PJ_SUCCESS) {

@@ -138,6 +138,7 @@ if(CONFIG_PJPROJECT AND CONFIG_PJMEDIA)
     ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/transport_udp.c
   )
   set(PJMEDIA_STREAM_SOURCES
+    ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/av_sync.c
     ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/stream_common.c
     ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/stream_info.c
     ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/stream.c
@@ -199,6 +200,9 @@ if(CONFIG_PJPROJECT AND CONFIG_PJMEDIA)
     )
     zephyr_library_sources_ifdef(CONFIG_PJMEDIA_UDP_TRANSPORT
       ${PJMEDIA_UDP_TRANSPORT_SOURCES}
+    )
+    zephyr_library_sources_ifdef(CONFIG_PJMEDIA_STREAM
+      ${PJMEDIA_STREAM_SOURCES}
     )
   endif()
 endif()
