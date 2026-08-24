@@ -92,6 +92,9 @@ if(CONFIG_PJPROJECT AND CONFIG_PJLIB_UTIL)
     ${PJPROJECT_ROOT_DIR}/pjlib-util/src/pjlib-util/resolver.c
     ${PJPROJECT_ROOT_DIR}/pjlib-util/src/pjlib-util/srv_resolver.c
   )
+  zephyr_library_sources_ifdef(CONFIG_PJMEDIA_SRTP_TRANSPORT
+    ${PJPROJECT_ROOT_DIR}/pjlib-util/src/pjlib-util/base64.c
+  )
   zephyr_library_include_directories(
     ${PJPROJECT_ROOT_DIR}/pjlib-util/include
     ${PJPROJECT_ROOT_DIR}/pjlib/include
@@ -238,6 +241,15 @@ if(CONFIG_PJPROJECT AND CONFIG_PJMEDIA)
         ${PJPROJECT_ROOT_DIR}/third_party/srtp/crypto/include
       )
       target_link_libraries(srtp PUBLIC pjlib)
+      if(CONFIG_PJMEDIA_SRTP_TRANSPORT)
+        target_sources(pjmedia PRIVATE
+          ${PJPROJECT_ROOT_DIR}/pjmedia/src/pjmedia/transport_srtp.c
+        )
+        target_include_directories(pjmedia PRIVATE
+          ${PJPROJECT_ROOT_DIR}/third_party/build/srtp
+        )
+        target_link_libraries(pjmedia PUBLIC srtp)
+      endif()
     endif()
   endif()
 endif()

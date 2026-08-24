@@ -58,7 +58,7 @@ This increment proves the cryptographic packet engine only. Calls are **not yet
 SRTP-secured**. The remaining increments are:
 
 1. build and adapt PJMEDIA's SRTP transport over the existing UDP media
-   transport;
+   transport (completed and validated in increment 2);
 2. add SDP offer/answer for `RTP/SAVP` and `a=crypto`, with strict suite and
    key-length validation;
 3. generate per-call master keys from a production CSPRNG, keep them out of

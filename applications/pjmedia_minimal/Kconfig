@@ -209,4 +209,16 @@ config PJMEDIA_SRTP_PRIMITIVE_TEST
 	  Validate AES_CM_128_HMAC_SHA1_80 RTP/SRTCP protection, authentication,
 	  replay rejection, lifecycle, and bounded packets without sockets.
 
+config PJMEDIA_SRTP_TRANSPORT_TEST
+	bool "PJMEDIA SRTP transport over IPv4 UDP validation"
+	depends on PJPROJECT && PJLIB_UTIL && PJMEDIA_ENDPOINT
+	depends on PJMEDIA_RTP_RTCP && PJMEDIA_UDP_TRANSPORT
+	depends on PJMEDIA_SRTP && PJMEDIA_SRTP_TRANSPORT
+	depends on NET_SOCKETS && NET_IPV4 && NET_UDP && !NET_IPV6
+	depends on !PJSIP && !PJMEDIA_G711 && !PJMEDIA_STREAM && !PJMEDIA_AUDIODEV
+	help
+	  Validate two explicit-key PJMEDIA SRTP adapters carrying authenticated
+	  RTP and RTCP over distinct IPv4 UDP transports, including plaintext
+	  rejection and complete transport teardown.
+
 endmenu

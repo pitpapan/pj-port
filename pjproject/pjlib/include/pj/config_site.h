@@ -17,7 +17,17 @@
 
 /* Zephyr's initial PJMEDIA profile is audio-only and dependency-minimal. */
 #define PJMEDIA_HAS_VIDEO                    0
-#define PJMEDIA_HAS_SRTP                     0
+#if defined(CONFIG_PJMEDIA_SRTP_TRANSPORT)
+#  define PJ_LOG_MAX_LEVEL                      4
+#  define PJMEDIA_HAS_SRTP                   1
+#  define PJMEDIA_SRTP_HAS_AES_CM_128        1
+#  define PJMEDIA_SRTP_HAS_AES_CM_192        0
+#  define PJMEDIA_SRTP_HAS_AES_CM_256        0
+#  define PJMEDIA_SRTP_HAS_AES_GCM_128       0
+#  define PJMEDIA_SRTP_HAS_AES_GCM_256       0
+#else
+#  define PJMEDIA_HAS_SRTP                   0
+#endif
 #define PJMEDIA_SRTP_HAS_SDES                0
 #define PJMEDIA_SRTP_HAS_DTLS                0
 #define PJMEDIA_HAS_RTCP_XR                  0

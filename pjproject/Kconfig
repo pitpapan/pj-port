@@ -104,6 +104,15 @@ config PJMEDIA_SRTP
 	  provides crypto primitives; transport wrapping and SDP keying remain
 	  separate integration phases.
 
+config PJMEDIA_SRTP_TRANSPORT
+	bool "PJMEDIA SRTP media transport"
+	depends on PJMEDIA_SRTP && PJMEDIA_ENDPOINT && PJMEDIA_UDP_TRANSPORT
+	depends on PJLIB_UTIL
+	help
+	  Build PJMEDIA's SRTP adapter transport over the bundled libsrtp packet
+	  engine. This gate provides explicit-key transport operation; SDP key
+	  negotiation remains a separate security increment.
+
 config PJMEDIA_AUDIODEV
 	bool "PJMEDIA audio-device core"
 	depends on PJMEDIA_ENDPOINT
