@@ -43,6 +43,7 @@ struct PjHeadlessMedia::State {
     Codec codec;
     unsigned first_rtp_port;
     unsigned second_rtp_port;
+    char remote_address[64];
     MediaStats stats;
     pj_int16_t sink[sink_capacity][frame_samples];
     unsigned sink_next;
@@ -89,15 +90,16 @@ struct PjHeadlessMedia::State {
         return status;
     }
 
-    pj_status_t ParseSdp(unsigned port, pjmedia_sdp_session **session) noexcept {
+    pj_status_t ParseSdp(unsigned port, const char *address,
+                         pjmedia_sdp_session **session) noexcept {
         char text[320];
         const unsigned payload = codec == Codec::pcmu ? 0U : 8U;
         const char *name = codec == Codec::pcmu ? "PCMU" : "PCMA";
         const int length = pj_ansi_snprintf(text, sizeof(text),
             "v=0\r\no=voip 1 1 IN IP4 127.0.0.1\r\ns=headless\r\n"
-            "c=IN IP4 127.0.0.1\r\nt=0 0\r\n"
+            "c=IN IP4 %s\r\nt=0 0\r\n"
             "m=audio %u RTP/AVP %u\r\na=sendrecv\r\n"
-            "a=rtpmap:%u %s/8000\r\n", port, payload, payload, name);
+            "a=rtpmap:%u %s/8000\r\n", address, port, payload, payload, name);
         if (length <= 0 || static_cast<unsigned>(length) >= sizeof(text))
             return PJ_ETOOBIG;
         char *copy = static_cast<char *>(pj_pool_alloc(pool, length + 1));
@@ -112,8 +114,9 @@ struct PjHeadlessMedia::State {
         pjmedia_sdp_session *local = nullptr;
         pjmedia_sdp_session *remote = nullptr;
         pjmedia_stream_info info;
-        pj_status_t status = ParseSdp(local_port, &local);
-        if (status == PJ_SUCCESS) status = ParseSdp(remote_port, &remote);
+        pj_status_t status = ParseSdp(local_port, "127.0.0.1", &local);
+        if (status == PJ_SUCCESS) status = ParseSdp(remote_port,
+                                                    remote_address, &remote);
         if (status == PJ_SUCCESS)
             status = pjmedia_stream_info_from_sdp(&info, pool, endpoint,
                                                    local, remote, 0);
@@ -214,14 +217,27 @@ Error PjHeadlessMedia::Initialize() noexcept {
         PJMEDIA_EVENT_MGR_NO_THREAD, &state_->event_manager);
     if (status == PJ_SUCCESS) status = pjmedia_codec_g711_init(state_->endpoint);
     state_->codec_initialized = status == PJ_SUCCESS;
+    if (status == PJ_SUCCESS) {
+        state_->pool = pj_pool_create(state_->factory, "voip-media", 65536,
+                                      32768, nullptr);
+        if (state_->pool == nullptr) status = PJ_ENOMEM;
+    }
     return Translate(status);
 }
 
 Error PjHeadlessMedia::Start(Codec codec) noexcept {
+    Error result = Prepare();
+    if (result != Error::ok) return result;
+    return StartPrepared(codec, "127.0.0.1", state_->second_rtp_port);
+}
+
+Error PjHeadlessMedia::Prepare() noexcept {
     if (state_ == nullptr || state_->codec_initialized == false)
         return Error::not_initialized;
-    if (state_->pool != nullptr) return Error::busy;
-    state_->codec = codec;
+    if (state_->pool == nullptr) return Error::not_initialized;
+    if (state_->first_stream != nullptr || state_->worker != nullptr)
+        return Error::busy;
+    pj_pool_reset(state_->pool);
     state_->stats = {};
     state_->stats.sink_hash = 2166136261U;
     state_->stats.sink_capacity_frames = sink_capacity;
@@ -229,17 +245,47 @@ Error PjHeadlessMedia::Start(Codec codec) noexcept {
     atomic_set(&state_->stop, 0);
     atomic_set(&state_->paused, 0);
     atomic_set(&state_->worker_status, PJ_SUCCESS);
-    state_->pool = pj_pool_create(state_->factory, "voip-media", 65536,
-                                   32768, nullptr);
-    if (state_->pool == nullptr) return Error::media_failure;
-    pj_status_t status = state_->CreateTransport("voip-media-a",
-        &state_->first_transport, &state_->first_rtp_port);
-    if (status == PJ_SUCCESS)
+    pj_status_t status = PJ_SUCCESS;
+    if (state_->first_transport == nullptr)
+        status = state_->CreateTransport("voip-media-a",
+            &state_->first_transport, &state_->first_rtp_port);
+    if (status == PJ_SUCCESS && state_->second_transport == nullptr)
         status = state_->CreateTransport("voip-media-b",
             &state_->second_transport, &state_->second_rtp_port);
+    if (status != PJ_SUCCESS) {
+        (void)Stop();
+        return Error::media_failure;
+    }
+    return Error::ok;
+}
+
+unsigned PjHeadlessMedia::LocalRtpPort() const noexcept {
+    return state_ == nullptr ? 0U : state_->first_rtp_port;
+}
+
+unsigned PjHeadlessMedia::PeerRtpPortForValidation() const noexcept {
+    return state_ == nullptr ? 0U : state_->second_rtp_port;
+}
+
+Error PjHeadlessMedia::StartPrepared(Codec codec, const char *remote_address,
+                                     unsigned remote_rtp_port) noexcept {
+    if (state_ == nullptr || state_->pool == nullptr ||
+        state_->first_transport == nullptr || state_->second_transport == nullptr)
+        return Error::invalid_state;
+    if (state_->first_stream != nullptr || state_->worker != nullptr)
+        return Error::busy;
+    if (remote_address == nullptr || remote_address[0] == '\0' ||
+        remote_rtp_port == 0) {
+        (void)Stop();
+        return Error::negotiation_failure;
+    }
+    state_->codec = codec;
+    pj_ansi_strncpy(state_->remote_address, remote_address,
+                    sizeof(state_->remote_address) - 1);
+    pj_status_t status = PJ_SUCCESS;
     if (status == PJ_SUCCESS)
         status = state_->CreateStream(state_->first_transport,
-            state_->first_rtp_port, state_->second_rtp_port,
+            state_->first_rtp_port, remote_rtp_port,
             &state_->first_stream, &state_->first_port);
     if (status == PJ_SUCCESS)
         status = state_->CreateStream(state_->second_transport,
@@ -258,7 +304,8 @@ Error PjHeadlessMedia::Start(Codec codec) noexcept {
 }
 
 Error PjHeadlessMedia::SetPaused(bool paused) noexcept {
-    if (state_ == nullptr || state_->pool == nullptr) return Error::invalid_state;
+    if (state_ == nullptr || state_->first_stream == nullptr)
+        return Error::invalid_state;
     if ((atomic_get(&state_->paused) != 0) == paused) return Error::invalid_state;
     const pjmedia_dir direction = PJMEDIA_DIR_ENCODING_DECODING;
     pj_status_t status = paused
@@ -289,7 +336,7 @@ MediaStats PjHeadlessMedia::Stats() const noexcept {
 }
 
 bool PjHeadlessMedia::Running() const noexcept {
-    return state_ != nullptr && state_->pool != nullptr &&
+    return state_ != nullptr && state_->first_stream != nullptr &&
            atomic_get(&state_->running) != 0;
 }
 
@@ -317,7 +364,30 @@ Error PjHeadlessMedia::InjectTransportFailure() noexcept {
 }
 
 Error PjHeadlessMedia::Stop() noexcept {
-    if (state_ == nullptr || state_->pool == nullptr) return Error::invalid_state;
+    if (state_ == nullptr || (state_->first_transport == nullptr &&
+        state_->second_transport == nullptr && state_->first_stream == nullptr &&
+        state_->worker == nullptr)) return Error::invalid_state;
+    Error call_result = StopCall();
+    pj_status_t result = call_result == Error::ok ? PJ_SUCCESS : PJ_EUNKNOWN;
+    if (state_->first_transport != nullptr) {
+        const pj_status_t status = pjmedia_transport_close(state_->first_transport);
+        if (result == PJ_SUCCESS) result = status;
+        state_->first_transport = nullptr;
+    }
+    if (state_->second_transport != nullptr) {
+        const pj_status_t status = pjmedia_transport_close(state_->second_transport);
+        if (result == PJ_SUCCESS) result = status;
+        state_->second_transport = nullptr;
+    }
+    state_->first_rtp_port = 0;
+    state_->second_rtp_port = 0;
+    return Translate(result);
+}
+
+Error PjHeadlessMedia::StopCall() noexcept {
+    if (state_ == nullptr || (state_->first_transport == nullptr &&
+        state_->second_transport == nullptr && state_->first_stream == nullptr &&
+        state_->worker == nullptr)) return Error::invalid_state;
     atomic_set(&state_->stop, 1);
     if (state_->worker != nullptr) {
         pj_thread_join(state_->worker);
@@ -336,27 +406,26 @@ Error PjHeadlessMedia::Stop() noexcept {
         state_->second_stream = nullptr;
         state_->second_port = nullptr;
     }
-    if (state_->first_transport != nullptr) {
+    if (state_->first_transport != nullptr && state_->first_stream == nullptr) {
         (void)pjmedia_transport_media_stop(state_->first_transport);
-        const pj_status_t status = pjmedia_transport_close(state_->first_transport);
-        if (result == PJ_SUCCESS) result = status;
-        state_->first_transport = nullptr;
     }
-    if (state_->second_transport != nullptr) {
+    if (state_->second_transport != nullptr && state_->second_stream == nullptr) {
         (void)pjmedia_transport_media_stop(state_->second_transport);
-        const pj_status_t status = pjmedia_transport_close(state_->second_transport);
-        if (result == PJ_SUCCESS) result = status;
-        state_->second_transport = nullptr;
     }
-    pj_pool_release(state_->pool);
-    state_->pool = nullptr;
+    pj_pool_reset(state_->pool);
     atomic_set(&state_->running, 0);
     return Translate(result);
 }
 
 void PjHeadlessMedia::Destroy() noexcept {
     if (state_ == nullptr) return;
-    if (state_->pool != nullptr) (void)Stop();
+    if (state_->first_transport != nullptr || state_->second_transport != nullptr ||
+        state_->first_stream != nullptr || state_->worker != nullptr)
+        (void)Stop();
+    if (state_->pool != nullptr) {
+        pj_pool_release(state_->pool);
+        state_->pool = nullptr;
+    }
     if (state_->codec_initialized) {
         (void)pjmedia_codec_g711_deinit();
         state_->codec_initialized = false;

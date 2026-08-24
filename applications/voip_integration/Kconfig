@@ -26,4 +26,8 @@ config VOIP_PHASE6_MEDIA_TEST
 	bool "Phase 6 headless G.711 media validation"
 	depends on VOIP_PJ_HEADLESS_MEDIA
 
+config VOIP_PHASE7_SIP_MEDIA_TEST
+	bool "Phase 7 SIP-controlled headless media validation"
+	depends on VOIP_PJ_CALL_CONTROL && VOIP_PJ_HEADLESS_MEDIA
+
 endmenu

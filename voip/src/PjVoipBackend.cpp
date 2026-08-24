@@ -81,6 +81,7 @@ public:
           retry_attempts(0), retry_scheduled(false), invite_initialized(false),
           call_module{}, active_invite(nullptr), call_state(CallState::idle),
           negotiated_codec(Codec::pcmu), remote_uri{}, call_transport(nullptr),
+          negotiated_rtp_port(0), media_negotiated(false), media_started(false),
           previous_transport_callback(nullptr),
           transport_callback_installed(false)
 #if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
@@ -137,6 +138,10 @@ public:
     Codec negotiated_codec;
     char remote_uri[max_uri_length + 1];
     pjsip_transport *call_transport;
+    unsigned negotiated_rtp_port;
+    char negotiated_rtp_address[64]{};
+    bool media_negotiated;
+    bool media_started;
     pjsip_tp_state_callback previous_transport_callback;
     bool transport_callback_installed;
 #if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
@@ -144,22 +149,89 @@ public:
 #endif
     static Impl *active_instance;
 
-    static pj_status_t ParseCallSdp(pj_pool_t *pool,
+    static pj_status_t ParseCallSdp(pj_pool_t *pool, unsigned rtp_port,
                                     pjmedia_sdp_session **session) noexcept {
-        static const char text[] =
-            "v=0\r\n"
-            "o=voip 1 1 IN IP4 127.0.0.1\r\n"
-            "s=voip-call\r\n"
-            "c=IN IP4 127.0.0.1\r\n"
-            "t=0 0\r\n"
-            "m=audio 4000 RTP/AVP 0 8\r\n"
-            "a=sendrecv\r\n"
-            "a=rtpmap:0 PCMU/8000\r\n"
-            "a=rtpmap:8 PCMA/8000\r\n";
-        char *copy = static_cast<char *>(pj_pool_alloc(pool, sizeof(text)));
+        char text[320];
+        const int length = pj_ansi_snprintf(text, sizeof(text),
+            "v=0\r\no=voip 1 1 IN IP4 127.0.0.1\r\ns=voip-call\r\n"
+            "c=IN IP4 127.0.0.1\r\nt=0 0\r\n"
+            "m=audio %u RTP/AVP 0 8\r\na=sendrecv\r\n"
+            "a=rtpmap:0 PCMU/8000\r\na=rtpmap:8 PCMA/8000\r\n", rtp_port);
+        if (length <= 0 || static_cast<unsigned>(length) >= sizeof(text))
+            return PJ_ETOOBIG;
+        char *copy = static_cast<char *>(pj_pool_alloc(pool, length + 1));
         if (copy == nullptr) return PJ_ENOMEM;
-        pj_memcpy(copy, text, sizeof(text));
-        return pjmedia_sdp_parse(pool, copy, sizeof(text) - 1, session);
+        pj_memcpy(copy, text, length + 1);
+        return pjmedia_sdp_parse(pool, copy, length, session);
+    }
+
+    Error PrepareCallMedia() noexcept {
+#if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
+        if (headless_media == nullptr) return Error::not_initialized;
+        const Error result = headless_media->Prepare();
+        if (result == Error::ok) {
+            media_negotiated = false;
+            media_started = false;
+            negotiated_rtp_port = 0;
+            negotiated_rtp_address[0] = '\0';
+        }
+        return result;
+#else
+        return Error::ok;
+#endif
+    }
+
+    unsigned LocalCallRtpPort() const noexcept {
+#if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
+        return headless_media == nullptr ? 0U : headless_media->LocalRtpPort();
+#else
+        return 4000U;
+#endif
+    }
+
+    void NotifyMedia(MediaDirection direction, Error error = Error::ok) noexcept {
+        if (observer == nullptr) return;
+        CallInfo info{};
+        info.state = call_state;
+        info.codec = negotiated_codec;
+        info.direction = direction;
+        pj_ansi_strncpy(info.remote_uri, remote_uri, max_uri_length);
+        Status status{};
+        status.error = error;
+        observer->OnMediaState(info, status);
+    }
+
+    Error StartNegotiatedMedia() noexcept {
+#if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
+        if (media_started || !media_negotiated || call_state != CallState::established)
+            return Error::invalid_state;
+        const Error result = headless_media->StartPrepared(negotiated_codec,
+                                                            negotiated_rtp_address,
+                                                            negotiated_rtp_port);
+        if (result == Error::ok) {
+            media_started = true;
+            NotifyMedia(MediaDirection::send_receive);
+        } else {
+            NotifyMedia(MediaDirection::inactive, result);
+        }
+        return result;
+#else
+        return Error::ok;
+#endif
+    }
+
+    void StopCallMedia() noexcept {
+#if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
+        if (headless_media != nullptr &&
+            (media_started || headless_media->LocalRtpPort() != 0)) {
+            (void)headless_media->StopCall();
+            if (media_started) NotifyMedia(MediaDirection::inactive);
+        }
+        media_started = false;
+        media_negotiated = false;
+        negotiated_rtp_port = 0;
+        negotiated_rtp_address[0] = '\0';
+#endif
     }
 
     void NotifyCall(CallState state, Error error = Error::ok,
@@ -196,8 +268,12 @@ public:
         case PJSIP_INV_STATE_INCOMING: self->NotifyCall(CallState::incoming); break;
         case PJSIP_INV_STATE_EARLY: self->NotifyCall(CallState::early, Error::ok, code); break;
         case PJSIP_INV_STATE_CONFIRMED:
-            self->NotifyCall(CallState::established, Error::ok, code); break;
+            self->NotifyCall(CallState::established, Error::ok, code);
+            if (self->media_negotiated && !self->media_started)
+                (void)self->StartNegotiatedMedia();
+            break;
         case PJSIP_INV_STATE_DISCONNECTED:
+            self->StopCallMedia();
             self->NotifyCall(CallState::disconnected,
                              code >= 300 ? Error::transport_failure : Error::ok,
                              code);
@@ -216,6 +292,7 @@ public:
             ? nullptr : self->previous_transport_callback;
         if (self != nullptr && state == PJSIP_TP_STATE_DISCONNECTED &&
             self->active_invite != nullptr && transport == self->call_transport) {
+            self->StopCallMedia();
             self->NotifyCall(CallState::failed, Error::transport_failure,
                              info == nullptr ? 0 :
                              static_cast<std::uint16_t>(info->status));
@@ -231,22 +308,52 @@ public:
         Impl *self = active_instance;
         if (self == nullptr || invite != self->active_invite) return;
         if (status != PJ_SUCCESS) {
+            self->StopCallMedia();
             self->NotifyCall(CallState::failed, Error::negotiation_failure);
             return;
         }
         const pjmedia_sdp_session *local = nullptr;
+        const pjmedia_sdp_session *remote = nullptr;
         if (invite->neg != nullptr &&
             pjmedia_sdp_neg_get_active_local(invite->neg, &local) == PJ_SUCCESS &&
             local != nullptr && local->media_count != 0 &&
             local->media[0]->desc.fmt_count != 0 &&
             pj_strcmp2(&local->media[0]->desc.fmt[0], "8") == 0)
             self->negotiated_codec = Codec::pcma;
+        const pjmedia_sdp_conn *connection = nullptr;
+        if (invite->neg == nullptr ||
+            pjmedia_sdp_neg_get_active_remote(invite->neg, &remote) != PJ_SUCCESS ||
+            remote == nullptr || remote->media_count == 0 ||
+            remote->media[0]->desc.port == 0) {
+            self->StopCallMedia();
+            self->NotifyCall(CallState::failed, Error::negotiation_failure);
+            return;
+        }
+        connection = remote->media[0]->conn != nullptr
+            ? remote->media[0]->conn : remote->conn;
+        if (connection == nullptr || connection->addr.slen <= 0 ||
+            static_cast<std::size_t>(connection->addr.slen) >=
+                sizeof(self->negotiated_rtp_address)) {
+            self->StopCallMedia();
+            self->NotifyCall(CallState::failed, Error::negotiation_failure);
+            return;
+        }
+        pj_ansi_snprintf(self->negotiated_rtp_address,
+                         sizeof(self->negotiated_rtp_address), "%.*s",
+                         static_cast<int>(connection->addr.slen),
+                         connection->addr.ptr);
+        self->negotiated_rtp_port = remote->media[0]->desc.port;
+        self->media_negotiated = true;
+        if (self->call_state == CallState::established && !self->media_started)
+            (void)self->StartNegotiatedMedia();
     }
 
     static void InviteRxOffer(pjsip_inv_session *invite,
                               const pjmedia_sdp_session *) noexcept {
         pjmedia_sdp_session *answer = nullptr;
-        if (ParseCallSdp(invite->pool_prov, &answer) == PJ_SUCCESS)
+        if (ParseCallSdp(invite->pool_prov,
+                         active_instance == nullptr ? 4000U :
+                         active_instance->LocalCallRtpPort(), &answer) == PJ_SUCCESS)
             (void)pjsip_inv_set_sdp_answer(invite, answer);
     }
 
@@ -270,12 +377,19 @@ public:
         pj_str_t contact = pj_str(contact_text);
         pj_status_t status = pjsip_dlg_create_uas_and_inc_lock(
             pjsip_ua_instance(), data, &contact, &dialog);
+        if (status == PJ_SUCCESS) {
+            const Error media = self->PrepareCallMedia();
+            if (media != Error::ok) status = PJ_EUNKNOWN;
+        }
         if (status == PJ_SUCCESS)
-            status = ParseCallSdp(dialog->pool, &answer);
+            status = ParseCallSdp(dialog->pool, self->LocalCallRtpPort(), &answer);
         if (status == PJ_SUCCESS)
             status = pjsip_inv_create_uas(dialog, data, answer, 0, &invite);
         if (dialog != nullptr) pjsip_dlg_dec_lock(dialog);
-        if (status != PJ_SUCCESS) return PJ_FALSE;
+        if (status != PJ_SUCCESS) {
+            self->StopCallMedia();
+            return PJ_FALSE;
+        }
         self->active_invite = invite;
         self->negotiated_codec = Codec::pcmu;
         pj_ansi_strncpy(self->remote_uri, "<sip:peer@127.0.0.1>",
@@ -298,6 +412,8 @@ public:
         if (registration_state != RegistrationState::registered)
             return Error::invalid_state;
         if (active_invite != nullptr) return Error::busy;
+        const Error media = PrepareCallMedia();
+        if (media != Error::ok) return media;
         negotiated_codec = Codec::pcmu;
         pjsip_dialog *dialog = nullptr;
         pjmedia_sdp_session *offer = nullptr;
@@ -314,13 +430,14 @@ public:
                                                    &dialog);
         if (status != PJ_SUCCESS) return TranslateStatus(status);
         pjsip_dlg_inc_lock(dialog);
-        status = ParseCallSdp(dialog->pool, &offer);
+        status = ParseCallSdp(dialog->pool, LocalCallRtpPort(), &offer);
         if (status == PJ_SUCCESS)
             status = pjsip_inv_create_uac(dialog, offer, 0, &active_invite);
         pjsip_dlg_dec_lock(dialog);
         if (status == PJ_SUCCESS) status = pjsip_inv_invite(active_invite, &request);
         if (status == PJ_SUCCESS) status = pjsip_inv_send_msg(active_invite, request);
         if (status != PJ_SUCCESS) {
+            StopCallMedia();
             active_invite = nullptr;
             return TranslateStatus(status);
         }
@@ -341,6 +458,7 @@ public:
 
     Error EndCallOnEventThread() noexcept {
         if (active_invite == nullptr) return Error::invalid_state;
+        StopCallMedia();
         pjsip_tx_data *request = nullptr;
         pj_status_t status = pjsip_inv_end_session(active_invite,
             PJSIP_SC_REQUEST_TERMINATED, nullptr, &request);
@@ -713,7 +831,9 @@ Error PjVoipBackend::Initialize(Observer *observer) {
     impl_->util_initialized = true;
     if (failure_ == RuntimeFailurePoint::after_pjlib_util) goto injected_failure;
 
-    pj_caching_pool_init(&impl_->caching_pool, nullptr, 0);
+    // Bound released per-call transport/stream pools instead of retaining an
+    // unbounded sequence across repeated calls.
+    pj_caching_pool_init(&impl_->caching_pool, nullptr, 1);
     impl_->pool_initialized = true;
     if (failure_ == RuntimeFailurePoint::after_pool_factory) goto injected_failure;
 
@@ -1051,7 +1171,7 @@ RegistrationState PjVoipBackend::GetRegistrationState() const {
 CallInfo PjVoipBackend::GetCallInfo() const {
     CallInfo info{};
     info.state = impl_ == nullptr ? CallState::idle : impl_->call_state;
-    info.codec = Codec::pcmu;
+    info.codec = impl_ == nullptr ? Codec::pcmu : impl_->negotiated_codec;
     info.direction = info.state == CallState::established
                        ? MediaDirection::send_receive
                        : MediaDirection::inactive;
@@ -1066,9 +1186,14 @@ void *PjVoipBackend::NativeSipEndpointForValidation() const noexcept {
 
 Error PjVoipBackend::InjectMediaTransportFailureForValidation() noexcept {
 #if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
-    return impl_ != nullptr && impl_->headless_media != nullptr
-        ? impl_->headless_media->InjectTransportFailure()
-        : Error::not_initialized;
+    if (impl_ == nullptr || impl_->headless_media == nullptr)
+        return Error::not_initialized;
+    const Error result = impl_->headless_media->InjectTransportFailure();
+    if (result == Error::ok && impl_->media_started) {
+        impl_->media_started = false;
+        impl_->NotifyMedia(MediaDirection::inactive, Error::media_failure);
+    }
+    return result;
 #else
     return Error::invalid_state;
 #endif

@@ -218,6 +218,9 @@ public:
     atomic_t disconnecting{};
     atomic_t disconnected{};
     atomic_t failed{};
+    atomic_t media_active{};
+    atomic_t media_inactive{};
+    atomic_t media_failed{};
     voip::CallInfo last{};
 
     void OnRegistrationState(voip::RegistrationState state,
@@ -246,6 +249,18 @@ public:
         default: break;
         }
     }
+
+    void OnMediaState(const voip::CallInfo &info,
+                      const voip::Status &status) override {
+        if (status.error != voip::Error::ok) {
+            atomic_inc(&media_failed);
+            return;
+        }
+        if (info.direction == voip::MediaDirection::send_receive)
+            atomic_inc(&media_active);
+        else if (info.direction == voip::MediaDirection::inactive)
+            atomic_inc(&media_inactive);
+    }
 };
 
 bool WaitFor(atomic_t &value, atomic_val_t expected = 1) {
@@ -255,6 +270,20 @@ bool WaitFor(atomic_t &value, atomic_val_t expected = 1) {
     }
     return false;
 }
+
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+bool WaitForMedia(voip::VoipManager &manager, std::uint32_t minimum = 8) {
+    for (unsigned elapsed = 0; elapsed < wait_ms; elapsed += 20) {
+        const voip::MediaStats stats = manager.GetMediaStats();
+        if (stats.received_frames >= minimum && stats.rtp_packets_sent != 0 &&
+            stats.rtp_packets_received != 0 && stats.sink_hash != 2166136261U &&
+            stats.sink_capacity_frames == 8 && stats.sink_peak_frames <= 8)
+            return true;
+        k_msleep(20);
+    }
+    return false;
+}
+#endif
 
 bool WaitQuiescent(pjsip_endpoint *endpoint) {
     (void)endpoint;
@@ -307,6 +336,9 @@ void Lifecycle(unsigned number) {
     RecordingObserver observer;
     Peer peer;
     CHECK(manager.Initialize(&observer) == voip::Error::ok);
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+    pj_log_set_level(1);
+#endif
     peer.endpoint = static_cast<pjsip_endpoint *>(
         backend.NativeSipEndpointForValidation());
     active_peer = &peer;
@@ -331,6 +363,12 @@ void Lifecycle(unsigned number) {
     CHECK(WaitFor(observer.established));
     CHECK(observer.last.codec == voip::Codec::pcmu);
     CHECK(observer.last.direction == voip::MediaDirection::send_receive);
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+    CHECK(WaitForMedia(manager));
+    CHECK(backend.InjectMediaTransportFailureForValidation() == voip::Error::ok);
+    CHECK(WaitFor(observer.media_failed));
+    CHECK(manager.GetCallInfo().state == voip::CallState::established);
+#endif
     CHECK(atomic_get(&peer.invites) == 1);
     CHECK(atomic_get(&peer.tcp_requests) == 1);
     CHECK(manager.EndCall() == voip::Error::ok);
@@ -351,6 +389,9 @@ void Lifecycle(unsigned number) {
     CHECK(manager.StartOutgoingCall(remote) == voip::Error::ok);
     CHECK(WaitFor(observer.established, 2));
     CHECK(observer.last.codec == voip::Codec::pcma);
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+    CHECK(WaitForMedia(manager));
+#endif
     CHECK(manager.EndCall() == voip::Error::ok);
     CHECK(WaitFor(observer.disconnected, 4));
     CHECK(WaitQuiescent(peer.endpoint));
@@ -394,6 +435,9 @@ void Lifecycle(unsigned number) {
     k_msleep(50);
     CHECK(manager.AcceptCall() == voip::Error::ok);
     CHECK(WaitFor(observer.established, 5));
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+    CHECK(WaitForMedia(manager));
+#endif
     CHECK(WaitFor(observer.registered, 4));
     CHECK(atomic_get(&peer.registrations) >= 4);
     CHECK(EndPeerCall(peer) == PJ_SUCCESS);
@@ -413,6 +457,10 @@ void Lifecycle(unsigned number) {
     CHECK(WaitFor(observer.disconnected, 12));
     CHECK(atomic_get(&observer.failed) == 2);
     CHECK(atomic_get(&callback_failures) == 0);
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+    CHECK(atomic_get(&observer.media_active) >= 3);
+    CHECK(atomic_get(&observer.media_inactive) >= 3);
+#endif
     CHECK(manager.UnregisterAccount() == voip::Error::ok);
     CHECK(WaitFor(observer.registration_disabled));
     CHECK(atomic_get(&peer.unregistrations) == 1);
@@ -422,18 +470,36 @@ void Lifecycle(unsigned number) {
     active_peer = nullptr;
     CHECK(manager.Shutdown() == voip::Error::ok);
     CHECK(!backend.HasLiveResources());
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+    printk("[Phase 7] lifecycle %u SIP TCP/G.711 UDP media matrix: %s\n", number,
+#else
     printk("[Phase 5] lifecycle %u TCP call-control matrix: %s\n", number,
+#endif
            failures == 0 ? "PASSED" : "FAILED");
 }
 
 } // namespace
 
 int main() {
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+    printk("VoIP integration Phase 7 SIP-controlled headless call validation\n");
+    Lifecycle(1);
+#else
     printk("VoIP integration Phase 5 one-call TCP validation\n");
     for (unsigned lifecycle = 1; lifecycle <= 3; ++lifecycle) Lifecycle(lifecycle);
-    if (failures == 0)
+#endif
+    if (failures == 0) {
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+        printk("VOIP INTEGRATION PHASE 7 RESULT: PASSED (1 complete boot lifecycle)\n");
+#else
         printk("VOIP INTEGRATION PHASE 5 RESULT: PASSED (3 call lifecycles)\n");
-    else
+#endif
+    } else {
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+        printk("VOIP INTEGRATION PHASE 7 RESULT: FAILED (%d checks)\n", failures);
+#else
         printk("VOIP INTEGRATION PHASE 5 RESULT: FAILED (%d checks)\n", failures);
+#endif
+    }
     return failures == 0 ? 0 : 1;
 }
