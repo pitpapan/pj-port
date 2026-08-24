@@ -34,4 +34,8 @@ config VOIP_PHASE8_HOLD_RECOVERY_TEST
 	bool "Phase 8 hold and recovery validation"
 	depends on VOIP_PJ_CALL_CONTROL && VOIP_PJ_HEADLESS_MEDIA
 
+config VOIP_PHASE9_ROBUSTNESS_TEST
+	bool "Phase 9 robustness and resource qualification"
+	depends on VOIP_PJ_CALL_CONTROL && VOIP_PJ_HEADLESS_MEDIA
+
 endmenu

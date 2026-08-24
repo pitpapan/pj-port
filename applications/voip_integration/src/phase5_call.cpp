@@ -12,6 +12,27 @@ namespace {
 constexpr unsigned wait_ms = 7000;
 int failures;
 atomic_t callback_failures;
+#if defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
+voip::RuntimeResources resource_max{};
+std::size_t main_stack_min_unused = CONFIG_MAIN_STACK_SIZE;
+
+void RecordResources(const voip::RuntimeResources &sample) {
+#define RECORD_MAX(field) do { if (sample.field > resource_max.field)          \
+    resource_max.field = sample.field; } while (false)
+    RECORD_MAX(pj_pool_bytes);
+    RECORD_MAX(pj_pool_peak_bytes);
+    RECORD_MAX(pj_pools);
+    RECORD_MAX(timers);
+    RECORD_MAX(transactions);
+    RECORD_MAX(dialogs);
+    RECORD_MAX(event_stack_max_bytes);
+#undef RECORD_MAX
+    std::size_t unused = 0;
+    if (k_thread_stack_space_get(k_current_get(), &unused) == 0 &&
+        unused < main_stack_min_unused)
+        main_stack_min_unused = unused;
+}
+#endif
 
 #define CHECK(condition) do {                                                   \
     if (!(condition)) {                                                         \
@@ -273,7 +294,7 @@ bool WaitFor(atomic_t &value, atomic_val_t expected = 1) {
     return false;
 }
 
-#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST) || defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
 bool WaitForMedia(voip::VoipManager &manager, std::uint32_t minimum = 8) {
     for (unsigned elapsed = 0; elapsed < wait_ms; elapsed += 20) {
         const voip::MediaStats stats = manager.GetMediaStats();
@@ -283,6 +304,12 @@ bool WaitForMedia(voip::VoipManager &manager, std::uint32_t minimum = 8) {
             return true;
         k_msleep(20);
     }
+#if defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
+    const voip::MediaStats stats = manager.GetMediaStats();
+    printk("[Phase 9] media timeout: generated=%u received=%u tx=%u rx=%u hash=%u\n",
+           stats.generated_frames, stats.received_frames,
+           stats.rtp_packets_sent, stats.rtp_packets_received, stats.sink_hash);
+#endif
     return false;
 }
 #endif
@@ -338,7 +365,25 @@ void Lifecycle(unsigned number) {
     RecordingObserver observer;
     Peer peer;
     CHECK(manager.Initialize(&observer) == voip::Error::ok);
-#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
+#if defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
+    backend.SetProbeProcessingPaused(true);
+    unsigned accepted_probes = 0;
+    while (backend.SubmitProbe(accepted_probes) == voip::Error::ok)
+        ++accepted_probes;
+    CHECK(accepted_probes == 8);
+    CHECK(backend.SubmitProbe(99) == voip::Error::queue_full);
+    backend.SetProbeProcessingPaused(false);
+    for (unsigned elapsed = 0; elapsed < wait_ms &&
+         backend.ProcessedProbeCount() != accepted_probes; elapsed += 10)
+        k_msleep(10);
+    CHECK(backend.ProcessedProbeCount() == accepted_probes);
+    const voip::AccountConfig malformed_account{nullptr, nullptr, nullptr,
+                                                 nullptr, 0};
+    CHECK(manager.ConfigureAccount(malformed_account) ==
+          voip::Error::invalid_argument);
+    CHECK(manager.StartOutgoingCall(nullptr) == voip::Error::invalid_argument);
+#endif
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST) || defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
     pj_log_set_level(1);
 #endif
     peer.endpoint = static_cast<pjsip_endpoint *>(
@@ -385,6 +430,10 @@ void Lifecycle(unsigned number) {
     CHECK(backend.InjectMediaTransportFailureForValidation() == voip::Error::ok);
     CHECK(WaitFor(observer.media_failed));
     CHECK(manager.GetCallInfo().state == voip::CallState::established);
+#elif defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
+    CHECK(WaitForMedia(manager, number == 1 ? 250U : 8U));
+    CHECK(manager.StartOutgoingCall(remote) == voip::Error::busy);
+    RecordResources(backend.ResourcesForValidation());
 #endif
     CHECK(atomic_get(&peer.invites) == 1);
     CHECK(atomic_get(&peer.tcp_requests) == 1);
@@ -412,7 +461,7 @@ void Lifecycle(unsigned number) {
 #endif
     ));
     CHECK(observer.last.codec == voip::Codec::pcma);
-#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST) || defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
     CHECK(WaitForMedia(manager));
 #endif
     CHECK(manager.EndCall() == voip::Error::ok);
@@ -476,7 +525,7 @@ void Lifecycle(unsigned number) {
                   5
 #endif
     ));
-#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST) || defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
     CHECK(WaitForMedia(manager));
 #endif
     CHECK(WaitFor(observer.registered, 4));
@@ -504,13 +553,16 @@ void Lifecycle(unsigned number) {
     CHECK(WaitFor(observer.disconnected, 12));
     CHECK(atomic_get(&observer.failed) == 2);
     CHECK(atomic_get(&callback_failures) == 0);
-#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST) || defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
     CHECK(atomic_get(&observer.media_active) >= 3);
     CHECK(atomic_get(&observer.media_inactive) >= 3);
 #endif
     CHECK(manager.UnregisterAccount() == voip::Error::ok);
     CHECK(WaitFor(observer.registration_disabled));
     CHECK(atomic_get(&peer.unregistrations) == 1);
+#if defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
+    RecordResources(backend.ResourcesForValidation());
+#endif
 
     k_msleep(100);
     CHECK(pjsip_endpt_unregister_module(peer.endpoint, &peer_module) == PJ_SUCCESS);
@@ -519,6 +571,8 @@ void Lifecycle(unsigned number) {
     CHECK(!backend.HasLiveResources());
 #if defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
     printk("[Phase 8] lifecycle %u hold/recovery matrix: %s\n", number,
+#elif defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
+    printk("[Phase 9] lifecycle %u robustness matrix: %s\n", number,
 #elif defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
     printk("[Phase 7] lifecycle %u SIP TCP/G.711 UDP media matrix: %s\n", number,
 #else
@@ -533,6 +587,9 @@ int main() {
 #if defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
     printk("VoIP integration Phase 8 hold/recovery validation\n");
     Lifecycle(1);
+#elif defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
+    printk("VoIP integration Phase 9 robustness/resource validation\n");
+    Lifecycle(1);
 #elif defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
     printk("VoIP integration Phase 7 SIP-controlled headless call validation\n");
     Lifecycle(1);
@@ -543,6 +600,14 @@ int main() {
     if (failures == 0) {
 #if defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
         printk("VOIP INTEGRATION PHASE 8 RESULT: PASSED (hold/recovery lifecycle)\n");
+#elif defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
+        printk("[Phase 9] resources: PJ pools peak=%u B, pools=%u, tx=%u, "
+               "timers=%u, dialogs=%u, event stack max=%u B, main stack max=%u B\n",
+               resource_max.pj_pool_peak_bytes, resource_max.pj_pools,
+               resource_max.transactions, resource_max.timers,
+               resource_max.dialogs, resource_max.event_stack_max_bytes,
+               static_cast<unsigned>(CONFIG_MAIN_STACK_SIZE - main_stack_min_unused));
+        printk("VOIP INTEGRATION PHASE 9 RESULT: PASSED (complete lifecycle; active media soak)\n");
 #elif defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
         printk("VOIP INTEGRATION PHASE 7 RESULT: PASSED (1 complete boot lifecycle)\n");
 #else
@@ -551,6 +616,8 @@ int main() {
     } else {
 #if defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
         printk("VOIP INTEGRATION PHASE 8 RESULT: FAILED (%d checks)\n", failures);
+#elif defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
+        printk("VOIP INTEGRATION PHASE 9 RESULT: FAILED (%d checks)\n", failures);
 #elif defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
         printk("VOIP INTEGRATION PHASE 7 RESULT: FAILED (%d checks)\n", failures);
 #else

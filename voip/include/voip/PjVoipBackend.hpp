@@ -18,6 +18,16 @@ enum class RuntimeFailurePoint : std::uint8_t {
     after_event_thread,
 };
 
+struct RuntimeResources {
+    std::uint32_t pj_pool_bytes;
+    std::uint32_t pj_pool_peak_bytes;
+    std::uint32_t pj_pools;
+    std::uint32_t timers;
+    std::uint32_t transactions;
+    std::uint32_t dialogs;
+    std::uint32_t event_stack_max_bytes;
+};
+
 class PjVoipBackend final : public Backend {
 public:
     explicit PjVoipBackend(
@@ -59,6 +69,7 @@ public:
                                   Error error = Error::ok) noexcept;
     void *NativeSipEndpointForValidation() const noexcept;
     Error InjectMediaTransportFailureForValidation() noexcept;
+    RuntimeResources ResourcesForValidation() const noexcept;
 
 private:
     class Impl;

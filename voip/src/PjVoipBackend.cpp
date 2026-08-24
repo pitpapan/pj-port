@@ -76,6 +76,7 @@ public:
           event_thread(nullptr),
           queue{}, queue_buffer{}, accepting(0), stop(0), started(0),
           event_error(0), processing_paused(0), processed(0), last_value(0),
+          event_stack_max(0), pool_bytes(0), pool_peak_bytes(0), pool_blocks(0),
           tcp_port(0), account_configured(false), account_uri{}, registrar_uri{},
           username{}, password{}, expires(0),
           registration_state(RegistrationState::disabled), retry_timer{},
@@ -122,6 +123,10 @@ public:
     atomic_t processing_paused;
     atomic_t processed;
     atomic_t last_value;
+    atomic_t event_stack_max;
+    atomic_t pool_bytes;
+    atomic_t pool_peak_bytes;
+    atomic_t pool_blocks;
     std::uint16_t tcp_port;
     bool account_configured;
     char account_uri[max_uri_length + 1];
@@ -153,6 +158,30 @@ public:
     PjHeadlessMedia *headless_media;
 #endif
     static Impl *active_instance;
+    static Impl *resource_instance;
+
+    static void RecordMaximum(atomic_t &maximum, atomic_val_t value) noexcept {
+        atomic_val_t previous = atomic_get(&maximum);
+        while (value > previous && !atomic_cas(&maximum, previous, value))
+            previous = atomic_get(&maximum);
+    }
+
+    static pj_bool_t PoolAllocated(pj_pool_factory *, pj_size_t size) noexcept {
+        Impl *self = resource_instance;
+        if (self == nullptr) return PJ_TRUE;
+        const atomic_val_t bytes = atomic_add(&self->pool_bytes,
+            static_cast<atomic_val_t>(size)) + static_cast<atomic_val_t>(size);
+        atomic_inc(&self->pool_blocks);
+        RecordMaximum(self->pool_peak_bytes, bytes);
+        return PJ_TRUE;
+    }
+
+    static void PoolFreed(pj_pool_factory *, pj_size_t size) noexcept {
+        Impl *self = resource_instance;
+        if (self == nullptr) return;
+        atomic_sub(&self->pool_bytes, static_cast<atomic_val_t>(size));
+        atomic_dec(&self->pool_blocks);
+    }
 
     static pj_status_t ParseCallSdp(pj_pool_t *pool, unsigned rtp_port,
                                     const char *direction,
@@ -708,6 +737,12 @@ failure:
         auto *self = static_cast<Impl *>(argument);
         atomic_set(&self->started, 1);
         while (atomic_get(&self->stop) == 0) {
+#if defined(CONFIG_THREAD_STACK_INFO)
+            std::size_t unused = 0;
+            if (k_thread_stack_space_get(k_current_get(), &unused) == 0)
+                RecordMaximum(self->event_stack_max,
+                    static_cast<atomic_val_t>(PJ_THREAD_DEFAULT_STACK_SIZE - unused));
+#endif
             if (atomic_get(&self->processing_paused) != 0) {
                 pj_thread_sleep(1);
                 continue;
@@ -840,6 +875,7 @@ failure:
         if (pool_initialized) {
             pj_caching_pool_destroy(&caching_pool);
             pool_initialized = false;
+            resource_instance = nullptr;
         }
         if (pj_initialized) {
             pj_shutdown();
@@ -874,6 +910,7 @@ failure:
 };
 
 PjVoipBackend::Impl *PjVoipBackend::Impl::active_instance = nullptr;
+PjVoipBackend::Impl *PjVoipBackend::Impl::resource_instance = nullptr;
 
 PjVoipBackend::PjVoipBackend(RuntimeFailurePoint failure) noexcept
     : impl_(nullptr), failure_(failure) {}
@@ -913,6 +950,9 @@ Error PjVoipBackend::Initialize(Observer *observer) {
     // Bound released per-call transport/stream pools instead of retaining an
     // unbounded sequence across repeated calls.
     pj_caching_pool_init(&impl_->caching_pool, nullptr, 1);
+    Impl::resource_instance = impl_;
+    impl_->caching_pool.factory.on_block_alloc = &Impl::PoolAllocated;
+    impl_->caching_pool.factory.on_block_free = &Impl::PoolFreed;
     impl_->pool_initialized = true;
     if (failure_ == RuntimeFailurePoint::after_pool_factory) goto injected_failure;
 
@@ -1286,6 +1326,24 @@ Error PjVoipBackend::InjectMediaTransportFailureForValidation() noexcept {
 #else
     return Error::invalid_state;
 #endif
+}
+
+RuntimeResources PjVoipBackend::ResourcesForValidation() const noexcept {
+    RuntimeResources result{};
+    if (impl_ == nullptr || !impl_->pool_initialized) return result;
+    result.pj_pool_bytes = static_cast<std::uint32_t>(atomic_get(&impl_->pool_bytes));
+    result.pj_pool_peak_bytes =
+        static_cast<std::uint32_t>(atomic_get(&impl_->pool_peak_bytes));
+    result.pj_pools = static_cast<std::uint32_t>(atomic_get(&impl_->pool_blocks));
+    if (impl_->sip_endpoint != nullptr) {
+        result.timers = static_cast<std::uint32_t>(pj_timer_heap_count(
+            pjsip_endpt_get_timer_heap(impl_->sip_endpoint)));
+        result.transactions = pjsip_tsx_layer_get_tsx_count();
+        result.dialogs = pjsip_ua_get_dlg_set_count();
+    }
+    result.event_stack_max_bytes =
+        static_cast<std::uint32_t>(atomic_get(&impl_->event_stack_max));
+    return result;
 }
 
 } // namespace voip

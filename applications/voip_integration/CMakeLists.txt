@@ -30,3 +30,6 @@ target_sources_ifdef(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST app PRIVATE
 target_sources_ifdef(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST app PRIVATE
   src/phase5_call.cpp
 )
+target_sources_ifdef(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST app PRIVATE
+  src/phase5_call.cpp
+)
