@@ -215,6 +215,7 @@ public:
     atomic_t outgoing{};
     atomic_t early{};
     atomic_t established{};
+    atomic_t held{};
     atomic_t disconnecting{};
     atomic_t disconnected{};
     atomic_t failed{};
@@ -243,6 +244,7 @@ public:
         case voip::CallState::outgoing: atomic_inc(&outgoing); break;
         case voip::CallState::early: atomic_inc(&early); break;
         case voip::CallState::established: atomic_inc(&established); break;
+        case voip::CallState::held: atomic_inc(&held); break;
         case voip::CallState::disconnecting: atomic_inc(&disconnecting); break;
         case voip::CallState::disconnected: atomic_inc(&disconnected); break;
         case voip::CallState::failed: atomic_inc(&failed); break;
@@ -271,7 +273,7 @@ bool WaitFor(atomic_t &value, atomic_val_t expected = 1) {
     return false;
 }
 
-#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
 bool WaitForMedia(voip::VoipManager &manager, std::uint32_t minimum = 8) {
     for (unsigned elapsed = 0; elapsed < wait_ms; elapsed += 20) {
         const voip::MediaStats stats = manager.GetMediaStats();
@@ -336,7 +338,7 @@ void Lifecycle(unsigned number) {
     RecordingObserver observer;
     Peer peer;
     CHECK(manager.Initialize(&observer) == voip::Error::ok);
-#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
     pj_log_set_level(1);
 #endif
     peer.endpoint = static_cast<pjsip_endpoint *>(
@@ -368,6 +370,21 @@ void Lifecycle(unsigned number) {
     CHECK(backend.InjectMediaTransportFailureForValidation() == voip::Error::ok);
     CHECK(WaitFor(observer.media_failed));
     CHECK(manager.GetCallInfo().state == voip::CallState::established);
+#elif defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
+    CHECK(WaitForMedia(manager));
+    CHECK(manager.SetHeld(true) == voip::Error::ok);
+    const voip::Error overlap = manager.SetHeld(false);
+    CHECK(overlap == voip::Error::busy || overlap == voip::Error::ok);
+    CHECK(WaitFor(observer.held));
+    CHECK(WaitFor(observer.media_inactive));
+    if (overlap == voip::Error::busy)
+        CHECK(manager.SetHeld(false) == voip::Error::ok);
+    CHECK(WaitFor(observer.established, 2));
+    CHECK(WaitFor(observer.media_active, 2));
+    CHECK(manager.GetCallInfo().state == voip::CallState::established);
+    CHECK(backend.InjectMediaTransportFailureForValidation() == voip::Error::ok);
+    CHECK(WaitFor(observer.media_failed));
+    CHECK(manager.GetCallInfo().state == voip::CallState::established);
 #endif
     CHECK(atomic_get(&peer.invites) == 1);
     CHECK(atomic_get(&peer.tcp_requests) == 1);
@@ -387,9 +404,15 @@ void Lifecycle(unsigned number) {
 
     peer.mode = Peer::Mode::pcma;
     CHECK(manager.StartOutgoingCall(remote) == voip::Error::ok);
-    CHECK(WaitFor(observer.established, 2));
+    CHECK(WaitFor(observer.established,
+#if defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
+                  3
+#else
+                  2
+#endif
+    ));
     CHECK(observer.last.codec == voip::Codec::pcma);
-#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
     CHECK(WaitForMedia(manager));
 #endif
     CHECK(manager.EndCall() == voip::Error::ok);
@@ -405,7 +428,13 @@ void Lifecycle(unsigned number) {
 
     peer.mode = Peer::Mode::remote_bye;
     CHECK(manager.StartOutgoingCall(remote) == voip::Error::ok);
-    CHECK(WaitFor(observer.established, 3));
+    CHECK(WaitFor(observer.established,
+#if defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
+                  4
+#else
+                  3
+#endif
+    ));
     CHECK(WaitFor(observer.disconnected, 6));
     CHECK(WaitQuiescent(peer.endpoint));
     CHECK(atomic_get(&peer.invites) == 6);
@@ -419,7 +448,13 @@ void Lifecycle(unsigned number) {
 
     peer.mode = Peer::Mode::close_confirmed;
     CHECK(manager.StartOutgoingCall(remote) == voip::Error::ok);
-    CHECK(WaitFor(observer.established, 4));
+    CHECK(WaitFor(observer.established,
+#if defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
+                  5
+#else
+                  4
+#endif
+    ));
     CHECK(WaitFor(observer.failed, 2));
     CHECK(WaitFor(observer.disconnected, 8));
     CHECK(WaitFor(observer.registered, 3));
@@ -434,8 +469,14 @@ void Lifecycle(unsigned number) {
     CHECK(WaitFor(observer.incoming, 2));
     k_msleep(50);
     CHECK(manager.AcceptCall() == voip::Error::ok);
-    CHECK(WaitFor(observer.established, 5));
-#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+    CHECK(WaitFor(observer.established,
+#if defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
+                  6
+#else
+                  5
+#endif
+    ));
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
     CHECK(WaitForMedia(manager));
 #endif
     CHECK(WaitFor(observer.registered, 4));
@@ -447,7 +488,13 @@ void Lifecycle(unsigned number) {
     CHECK(WaitFor(observer.incoming, 3));
     k_msleep(50);
     CHECK(manager.AcceptCall() == voip::Error::ok);
-    CHECK(WaitFor(observer.established, 6));
+    CHECK(WaitFor(observer.established,
+#if defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
+                  7
+#else
+                  6
+#endif
+    ));
     CHECK(EndPeerCall(peer) == PJ_SUCCESS);
     CHECK(WaitFor(observer.disconnected, 11));
 
@@ -457,7 +504,7 @@ void Lifecycle(unsigned number) {
     CHECK(WaitFor(observer.disconnected, 12));
     CHECK(atomic_get(&observer.failed) == 2);
     CHECK(atomic_get(&callback_failures) == 0);
-#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
     CHECK(atomic_get(&observer.media_active) >= 3);
     CHECK(atomic_get(&observer.media_inactive) >= 3);
 #endif
@@ -470,7 +517,9 @@ void Lifecycle(unsigned number) {
     active_peer = nullptr;
     CHECK(manager.Shutdown() == voip::Error::ok);
     CHECK(!backend.HasLiveResources());
-#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+#if defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
+    printk("[Phase 8] lifecycle %u hold/recovery matrix: %s\n", number,
+#elif defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
     printk("[Phase 7] lifecycle %u SIP TCP/G.711 UDP media matrix: %s\n", number,
 #else
     printk("[Phase 5] lifecycle %u TCP call-control matrix: %s\n", number,
@@ -481,7 +530,10 @@ void Lifecycle(unsigned number) {
 } // namespace
 
 int main() {
-#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+#if defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
+    printk("VoIP integration Phase 8 hold/recovery validation\n");
+    Lifecycle(1);
+#elif defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
     printk("VoIP integration Phase 7 SIP-controlled headless call validation\n");
     Lifecycle(1);
 #else
@@ -489,13 +541,17 @@ int main() {
     for (unsigned lifecycle = 1; lifecycle <= 3; ++lifecycle) Lifecycle(lifecycle);
 #endif
     if (failures == 0) {
-#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+#if defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
+        printk("VOIP INTEGRATION PHASE 8 RESULT: PASSED (hold/recovery lifecycle)\n");
+#elif defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
         printk("VOIP INTEGRATION PHASE 7 RESULT: PASSED (1 complete boot lifecycle)\n");
 #else
         printk("VOIP INTEGRATION PHASE 5 RESULT: PASSED (3 call lifecycles)\n");
 #endif
     } else {
-#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+#if defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST)
+        printk("VOIP INTEGRATION PHASE 8 RESULT: FAILED (%d checks)\n", failures);
+#elif defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
         printk("VOIP INTEGRATION PHASE 7 RESULT: FAILED (%d checks)\n", failures);
 #else
         printk("VOIP INTEGRATION PHASE 5 RESULT: FAILED (%d checks)\n", failures);
