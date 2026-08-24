@@ -22,4 +22,8 @@ config VOIP_PHASE5_CALL_TEST
 	bool "Phase 5 one-call TCP validation"
 	depends on VOIP_PJ_CALL_CONTROL
 
+config VOIP_PHASE6_MEDIA_TEST
+	bool "Phase 6 headless G.711 media validation"
+	depends on VOIP_PJ_HEADLESS_MEDIA
+
 endmenu

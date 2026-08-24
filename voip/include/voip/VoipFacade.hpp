@@ -87,6 +87,17 @@ struct Status {
     char reason[max_reason_length + 1];
 };
 
+struct MediaStats {
+    std::uint32_t generated_frames;
+    std::uint32_t received_frames;
+    std::uint32_t rtp_packets_sent;
+    std::uint32_t rtp_packets_received;
+    std::uint32_t sink_hash;
+    std::uint32_t sink_capacity_frames;
+    std::uint32_t sink_peak_frames;
+    std::uint32_t jitter_buffer_frames;
+};
+
 class Observer {
 public:
     virtual ~Observer() = default;
@@ -109,6 +120,10 @@ public:
     virtual Error RejectCall(std::uint16_t) = 0;
     virtual Error EndCall() = 0;
     virtual Error SetHeld(bool) = 0;
+    virtual Error StartHeadlessMedia(Codec) { return Error::invalid_state; }
+    virtual Error SetMediaPaused(bool) { return Error::invalid_state; }
+    virtual Error StopMedia() { return Error::invalid_state; }
+    virtual MediaStats GetMediaStats() const { return MediaStats{}; }
     virtual RegistrationState GetRegistrationState() const = 0;
     virtual CallInfo GetCallInfo() const = 0;
 };
@@ -131,6 +146,10 @@ public:
     Error RejectCall(std::uint16_t sip_status = 486) noexcept;
     Error EndCall() noexcept;
     Error SetHeld(bool held) noexcept;
+    Error StartHeadlessMedia(Codec codec) noexcept;
+    Error SetMediaPaused(bool paused) noexcept;
+    Error StopMedia() noexcept;
+    MediaStats GetMediaStats() const noexcept;
     RegistrationState GetRegistrationState() const noexcept;
     CallInfo GetCallInfo() const noexcept;
 

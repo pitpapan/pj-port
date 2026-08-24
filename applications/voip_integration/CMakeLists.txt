@@ -21,3 +21,6 @@ target_sources_ifdef(CONFIG_VOIP_PHASE4_REGISTRATION_TEST app PRIVATE
 target_sources_ifdef(CONFIG_VOIP_PHASE5_CALL_TEST app PRIVATE
   src/phase5_call.cpp
 )
+target_sources_ifdef(CONFIG_VOIP_PHASE6_MEDIA_TEST app PRIVATE
+  src/phase6_media.cpp
+)

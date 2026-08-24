@@ -46,6 +46,13 @@ Error VoipManager::RejectCall(std::uint16_t status) noexcept {
 }
 Error VoipManager::EndCall() noexcept { VOIP_FORWARD(EndCall); }
 Error VoipManager::SetHeld(bool held) noexcept { VOIP_FORWARD(SetHeld, held); }
+Error VoipManager::StartHeadlessMedia(Codec codec) noexcept {
+    VOIP_FORWARD(StartHeadlessMedia, codec);
+}
+Error VoipManager::SetMediaPaused(bool paused) noexcept {
+    VOIP_FORWARD(SetMediaPaused, paused);
+}
+Error VoipManager::StopMedia() noexcept { VOIP_FORWARD(StopMedia); }
 
 #undef VOIP_FORWARD
 
@@ -60,6 +67,10 @@ CallInfo VoipManager::GetCallInfo() const noexcept {
     empty.codec = Codec::pcmu;
     empty.direction = MediaDirection::inactive;
     return initialized_ ? backend_.GetCallInfo() : empty;
+}
+
+MediaStats VoipManager::GetMediaStats() const noexcept {
+    return initialized_ ? backend_.GetMediaStats() : MediaStats{};
 }
 
 } // namespace voip

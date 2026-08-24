@@ -40,4 +40,13 @@ config VOIP_PJ_CALL_CONTROL
 	  Enable one PJSIP dialog/INVITE session over SIP TCP. Media negotiation is
 	  limited to PCMU/PCMA SDP; RTP and audio remain disabled.
 
+config VOIP_PJ_HEADLESS_MEDIA
+	bool "VoIP PJMEDIA headless G.711 media"
+	depends on VOIP_PJ_BACKEND && PJMEDIA_G711 && PJMEDIA_RTP_RTCP
+	depends on PJMEDIA_UDP_TRANSPORT && PJMEDIA_STREAM
+	default n
+	help
+	  Enable generated 8 kHz mono PCM, PCMU/PCMA RTP over UDP, jitter
+	  buffering, and a bounded memory sink without an audio device.
+
 endif

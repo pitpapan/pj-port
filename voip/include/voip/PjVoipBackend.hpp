@@ -37,6 +37,10 @@ public:
     Error RejectCall(std::uint16_t) override;
     Error EndCall() override;
     Error SetHeld(bool) override;
+    Error StartHeadlessMedia(Codec) override;
+    Error SetMediaPaused(bool) override;
+    Error StopMedia() override;
+    MediaStats GetMediaStats() const override;
     RegistrationState GetRegistrationState() const override;
     CallInfo GetCallInfo() const override;
 
@@ -54,6 +58,7 @@ public:
                                   std::uint16_t sip_status = 0,
                                   Error error = Error::ok) noexcept;
     void *NativeSipEndpointForValidation() const noexcept;
+    Error InjectMediaTransportFailureForValidation() noexcept;
 
 private:
     class Impl;

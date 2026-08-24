@@ -6,11 +6,15 @@ namespace voip {
 
 FakeVoipBackend::FakeVoipBackend() noexcept
     : observer_(nullptr), initialized_(false), configured_(false),
-      registration_state_(RegistrationState::disabled), call_{}, account_uri_{},
+      registration_state_(RegistrationState::disabled), call_{}, media_stats_{},
+      media_running_(false), media_paused_(false), account_uri_{},
       registrar_uri_{}, username_{}, password_{} {
     call_.state = CallState::idle;
     call_.codec = Codec::pcmu;
     call_.direction = MediaDirection::inactive;
+    media_stats_ = {};
+    media_running_ = false;
+    media_paused_ = false;
 }
 
 bool FakeVoipBackend::Copy(char *destination, std::size_t capacity,
@@ -202,6 +206,42 @@ Error FakeVoipBackend::SetHeld(bool held) {
     NotifyCall();
     return Error::ok;
 }
+
+Error FakeVoipBackend::StartHeadlessMedia(Codec codec) {
+    if (!initialized_) return Error::not_initialized;
+    if (media_running_) return Error::busy;
+    call_.codec = codec;
+    call_.direction = MediaDirection::send_receive;
+    media_stats_ = {};
+    media_stats_.sink_capacity_frames = 8;
+    media_running_ = true;
+    media_paused_ = false;
+    if (observer_ != nullptr)
+        observer_->OnMediaState(call_, MakeStatus(Error::ok, 0, ""));
+    return Error::ok;
+}
+
+Error FakeVoipBackend::SetMediaPaused(bool paused) {
+    if (!media_running_ || paused == media_paused_) return Error::invalid_state;
+    media_paused_ = paused;
+    call_.direction = paused ? MediaDirection::inactive
+                             : MediaDirection::send_receive;
+    if (observer_ != nullptr)
+        observer_->OnMediaState(call_, MakeStatus(Error::ok, 0, ""));
+    return Error::ok;
+}
+
+Error FakeVoipBackend::StopMedia() {
+    if (!media_running_) return Error::invalid_state;
+    media_running_ = false;
+    media_paused_ = false;
+    call_.direction = MediaDirection::inactive;
+    if (observer_ != nullptr)
+        observer_->OnMediaState(call_, MakeStatus(Error::ok, 0, ""));
+    return Error::ok;
+}
+
+MediaStats FakeVoipBackend::GetMediaStats() const { return media_stats_; }
 
 RegistrationState FakeVoipBackend::GetRegistrationState() const {
     return registration_state_;

@@ -1,5 +1,9 @@
 #include <voip/PjVoipBackend.hpp>
 
+#if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
+#include "PjHeadlessMedia.hpp"
+#endif
+
 #include <pjlib-util.h>
 #include <pjlib.h>
 #include <pjmedia/endpoint.h>
@@ -78,7 +82,11 @@ public:
           call_module{}, active_invite(nullptr), call_state(CallState::idle),
           negotiated_codec(Codec::pcmu), remote_uri{}, call_transport(nullptr),
           previous_transport_callback(nullptr),
-          transport_callback_installed(false) {
+          transport_callback_installed(false)
+#if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
+          , headless_media(nullptr)
+#endif
+          {
         k_msgq_init(&queue, reinterpret_cast<char *>(queue_buffer),
                     sizeof(Command), command_capacity);
 #if defined(CONFIG_VOIP_PJ_CALL_CONTROL)
@@ -131,6 +139,9 @@ public:
     pjsip_transport *call_transport;
     pjsip_tp_state_callback previous_transport_callback;
     bool transport_callback_installed;
+#if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
+    PjHeadlessMedia *headless_media;
+#endif
     static Impl *active_instance;
 
     static pj_status_t ParseCallSdp(pj_pool_t *pool,
@@ -555,6 +566,14 @@ failure:
     void Cleanup() noexcept {
         atomic_set(&accepting, 0);
 
+#if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
+        if (headless_media != nullptr) {
+            headless_media->Destroy();
+            delete headless_media;
+            headless_media = nullptr;
+        }
+#endif
+
 #if defined(CONFIG_VOIP_PJ_CALL_CONTROL)
         if (active_invite != nullptr) {
             pjsip_tx_data *request = nullptr;
@@ -733,6 +752,18 @@ Error PjVoipBackend::Initialize(Observer *observer) {
                                    pjsip_endpt_get_ioqueue(impl_->sip_endpoint),
                                    0, &impl_->media_endpoint);
     if (status != PJ_SUCCESS) goto status_failure;
+#if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
+    impl_->headless_media = new (std::nothrow) PjHeadlessMedia(
+        &impl_->caching_pool.factory, impl_->media_endpoint);
+    if (impl_->headless_media == nullptr) {
+        status = PJ_ENOMEM;
+        goto status_failure;
+    }
+    if (impl_->headless_media->Initialize() != Error::ok) {
+        status = PJ_EUNKNOWN;
+        goto status_failure;
+    }
+#endif
     if (failure_ == RuntimeFailurePoint::after_media_endpoint) goto injected_failure;
 
     pjsip_tcp_transport_cfg_default(&tcp_config, pj_AF_INET());
@@ -950,6 +981,69 @@ Error PjVoipBackend::EndCall() {
 #endif
 }
 Error PjVoipBackend::SetHeld(bool) { return Error::invalid_state; }
+Error PjVoipBackend::StartHeadlessMedia(Codec codec) {
+#if !defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
+    (void)codec;
+    return Error::invalid_state;
+#else
+    if (impl_ == nullptr || !impl_->pj_initialized ||
+        impl_->headless_media == nullptr) return Error::not_initialized;
+    const Error result = impl_->headless_media->Start(codec);
+    if (result == Error::ok && impl_->observer != nullptr) {
+        CallInfo info = GetCallInfo();
+        info.codec = codec;
+        info.direction = MediaDirection::send_receive;
+        Status status{};
+        impl_->observer->OnMediaState(info, status);
+    }
+    return result;
+#endif
+}
+
+Error PjVoipBackend::SetMediaPaused(bool paused) {
+#if !defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
+    (void)paused;
+    return Error::invalid_state;
+#else
+    if (impl_ == nullptr || impl_->headless_media == nullptr)
+        return Error::not_initialized;
+    const Error result = impl_->headless_media->SetPaused(paused);
+    if (result == Error::ok && impl_->observer != nullptr) {
+        CallInfo info = GetCallInfo();
+        info.direction = paused ? MediaDirection::inactive
+                                : MediaDirection::send_receive;
+        Status status{};
+        impl_->observer->OnMediaState(info, status);
+    }
+    return result;
+#endif
+}
+
+Error PjVoipBackend::StopMedia() {
+#if !defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
+    return Error::invalid_state;
+#else
+    if (impl_ == nullptr || impl_->headless_media == nullptr)
+        return Error::not_initialized;
+    const Error result = impl_->headless_media->Stop();
+    if (result == Error::ok && impl_->observer != nullptr) {
+        CallInfo info = GetCallInfo();
+        info.direction = MediaDirection::inactive;
+        Status status{};
+        impl_->observer->OnMediaState(info, status);
+    }
+    return result;
+#endif
+}
+
+MediaStats PjVoipBackend::GetMediaStats() const {
+#if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
+    return impl_ != nullptr && impl_->headless_media != nullptr
+        ? impl_->headless_media->Stats() : MediaStats{};
+#else
+    return MediaStats{};
+#endif
+}
 RegistrationState PjVoipBackend::GetRegistrationState() const {
     return impl_ == nullptr ? RegistrationState::disabled
                             : impl_->registration_state;
@@ -968,6 +1062,16 @@ CallInfo PjVoipBackend::GetCallInfo() const {
 
 void *PjVoipBackend::NativeSipEndpointForValidation() const noexcept {
     return impl_ == nullptr ? nullptr : impl_->sip_endpoint;
+}
+
+Error PjVoipBackend::InjectMediaTransportFailureForValidation() noexcept {
+#if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
+    return impl_ != nullptr && impl_->headless_media != nullptr
+        ? impl_->headless_media->InjectTransportFailure()
+        : Error::not_initialized;
+#else
+    return Error::invalid_state;
+#endif
 }
 
 } // namespace voip

@@ -19,6 +19,10 @@ public:
     Error RejectCall(std::uint16_t) override;
     Error EndCall() override;
     Error SetHeld(bool) override;
+    Error StartHeadlessMedia(Codec) override;
+    Error SetMediaPaused(bool) override;
+    Error StopMedia() override;
+    MediaStats GetMediaStats() const override;
     RegistrationState GetRegistrationState() const override;
     CallInfo GetCallInfo() const override;
 
@@ -31,6 +35,9 @@ private:
     bool configured_;
     RegistrationState registration_state_;
     CallInfo call_;
+    MediaStats media_stats_;
+    bool media_running_;
+    bool media_paused_;
     char account_uri_[max_uri_length + 1];
     char registrar_uri_[max_uri_length + 1];
     char username_[max_username_length + 1];
