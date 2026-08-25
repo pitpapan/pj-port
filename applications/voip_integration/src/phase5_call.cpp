@@ -42,7 +42,7 @@ void RecordResources(const voip::RuntimeResources &sample) {
 } while (false)
 
 struct Peer {
-    enum class Mode { normal, pcma, busy, unsupported, cancel, remote_bye,
+    enum class Mode { normal, pcma, busy, unsupported, downgrade, cancel, remote_bye,
                       close_early, close_confirmed }
         mode{Mode::normal};
     pjsip_endpoint *endpoint{};
@@ -63,15 +63,35 @@ struct Peer {
 Peer *active_peer;
 
 pj_status_t ParseSdp(pj_pool_t *pool, pjmedia_sdp_session **session) {
+#if defined(CONFIG_VOIP_SRTP_CALL_TEST)
+    static const char secure_text[] =
+        "v=0\r\no=peer 1 1 IN IP4 127.0.0.1\r\ns=srtp-peer\r\n"
+        "c=IN IP4 127.0.0.1\r\nt=0 0\r\n"
+        "m=audio 4002 RTP/SAVP 0 8\r\na=sendrecv\r\n"
+        "a=rtpmap:0 PCMU/8000\r\na=rtpmap:8 PCMA/8000\r\n"
+        "a=crypto:1 AES_CM_128_HMAC_SHA1_80 "
+        "inline:AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0e\r\n";
+    static const char downgrade_text[] =
+        "v=0\r\no=peer 1 1 IN IP4 127.0.0.1\r\ns=downgrade-peer\r\n"
+        "c=IN IP4 127.0.0.1\r\nt=0 0\r\n"
+        "m=audio 4002 RTP/AVP 0\r\na=sendrecv\r\n"
+        "a=rtpmap:0 PCMU/8000\r\n";
+    const char *text = active_peer != nullptr &&
+        active_peer->mode == Peer::Mode::downgrade
+        ? downgrade_text : secure_text;
+    const std::size_t text_size = pj_ansi_strlen(text) + 1;
+#else
     static const char text[] =
         "v=0\r\no=peer 1 1 IN IP4 127.0.0.1\r\ns=phase5-peer\r\n"
         "c=IN IP4 127.0.0.1\r\nt=0 0\r\n"
         "m=audio 4002 RTP/AVP 0 8\r\na=sendrecv\r\n"
         "a=rtpmap:0 PCMU/8000\r\na=rtpmap:8 PCMA/8000\r\n";
-    char *copy = static_cast<char *>(pj_pool_alloc(pool, sizeof(text)));
+    const std::size_t text_size = sizeof(text);
+#endif
+    char *copy = static_cast<char *>(pj_pool_alloc(pool, text_size));
     if (copy == nullptr) return PJ_ENOMEM;
-    pj_memcpy(copy, text, sizeof(text));
-    return pjmedia_sdp_parse(pool, copy, sizeof(text) - 1, session);
+    pj_memcpy(copy, text, text_size);
+    return pjmedia_sdp_parse(pool, copy, text_size - 1, session);
 }
 
 pj_status_t ParsePcmaSdp(pj_pool_t *pool, pjmedia_sdp_session **session) {
@@ -294,7 +314,7 @@ bool WaitFor(atomic_t &value, atomic_val_t expected = 1) {
     return false;
 }
 
-#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST) || defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST) || defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST) || defined(CONFIG_VOIP_SRTP_CALL_TEST)
 bool WaitForMedia(voip::VoipManager &manager, std::uint32_t minimum = 8) {
     for (unsigned elapsed = 0; elapsed < wait_ms; elapsed += 20) {
         const voip::MediaStats stats = manager.GetMediaStats();
@@ -359,6 +379,20 @@ pj_status_t EndPeerCall(Peer &peer) {
     return status;
 }
 
+#if defined(CONFIG_VOIP_SRTP_CALL_TEST)
+pj_status_t SendPeerReinvite(Peer &peer) {
+    if (peer.invite == nullptr) return PJ_EINVAL;
+    pjmedia_sdp_session *offer = nullptr;
+    pjsip_tx_data *request = nullptr;
+    pj_status_t status = ParseSdp(peer.invite->pool_prov, &offer);
+    if (status == PJ_SUCCESS)
+        status = pjsip_inv_reinvite(peer.invite, nullptr, offer, &request);
+    if (status == PJ_SUCCESS)
+        status = pjsip_inv_send_msg(peer.invite, request);
+    return status;
+}
+#endif
+
 void Lifecycle(unsigned number) {
     voip::PjVoipBackend backend;
     voip::VoipManager manager(backend);
@@ -383,7 +417,7 @@ void Lifecycle(unsigned number) {
           voip::Error::invalid_argument);
     CHECK(manager.StartOutgoingCall(nullptr) == voip::Error::invalid_argument);
 #endif
-#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST) || defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
+#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST) || defined(CONFIG_VOIP_PHASE8_HOLD_RECOVERY_TEST) || defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST) || defined(CONFIG_VOIP_SRTP_CALL_TEST)
     pj_log_set_level(1);
 #endif
     peer.endpoint = static_cast<pjsip_endpoint *>(
@@ -410,7 +444,21 @@ void Lifecycle(unsigned number) {
     CHECK(WaitFor(observer.established));
     CHECK(observer.last.codec == voip::Codec::pcmu);
     CHECK(observer.last.direction == voip::MediaDirection::send_receive);
-#if defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
+#if defined(CONFIG_VOIP_SRTP_CALL_TEST)
+    CHECK(backend.SrtpTransportActiveForValidation());
+    CHECK(backend.SrtpKeysActiveForValidation());
+    CHECK(WaitForMedia(manager));
+    const std::uint32_t before_hold = manager.GetMediaStats().received_frames;
+    CHECK(manager.SetHeld(true) == voip::Error::ok);
+    CHECK(WaitFor(observer.held));
+    CHECK(WaitFor(observer.media_inactive));
+    CHECK(backend.SrtpTransportActiveForValidation());
+    CHECK(manager.SetHeld(false) == voip::Error::ok);
+    CHECK(WaitFor(observer.established, 2));
+    CHECK(WaitFor(observer.media_active, 2));
+    CHECK(WaitForMedia(manager, before_hold + 8));
+    CHECK(backend.SrtpTransportActiveForValidation());
+#elif defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
     CHECK(WaitForMedia(manager));
     CHECK(backend.InjectMediaTransportFailureForValidation() == voip::Error::ok);
     CHECK(WaitFor(observer.media_failed));
@@ -440,7 +488,38 @@ void Lifecycle(unsigned number) {
     CHECK(manager.EndCall() == voip::Error::ok);
     CHECK(WaitFor(observer.disconnected));
     CHECK(WaitQuiescent(peer.endpoint));
+#if defined(CONFIG_VOIP_SRTP_CALL_TEST)
+    CHECK(backend.SrtpKeysClearedForValidation());
+    peer.mode = Peer::Mode::downgrade;
+    CHECK(manager.StartOutgoingCall(remote) == voip::Error::ok);
+    CHECK(WaitFor(observer.disconnected, 2));
+    CHECK(WaitQuiescent(peer.endpoint));
+    CHECK(atomic_get(&observer.failed) >= 1);
+    CHECK(!backend.SrtpTransportActiveForValidation());
+    CHECK(backend.SrtpKeysClearedForValidation());
 
+    peer.mode = Peer::Mode::normal;
+    CHECK(StartIncomingPeerCall(peer, backend.TcpPort()) == PJ_SUCCESS);
+    CHECK(WaitFor(observer.incoming));
+    CHECK(backend.SrtpKeysActiveForValidation());
+    CHECK(manager.AcceptCall() == voip::Error::ok);
+    CHECK(WaitFor(observer.established, 3));
+    CHECK(backend.SrtpTransportActiveForValidation());
+    CHECK(WaitForMedia(manager));
+    const std::uint32_t before_reinvite =
+        manager.GetMediaStats().received_frames;
+    CHECK(SendPeerReinvite(peer) == PJ_SUCCESS);
+    CHECK(WaitForMedia(manager, before_reinvite + 8));
+    CHECK(manager.GetCallInfo().state == voip::CallState::established);
+    CHECK(backend.SrtpTransportActiveForValidation());
+    CHECK(EndPeerCall(peer) == PJ_SUCCESS);
+    CHECK(WaitFor(observer.disconnected, 3));
+    CHECK(WaitQuiescent(peer.endpoint));
+    CHECK(!backend.SrtpTransportActiveForValidation());
+    CHECK(backend.SrtpKeysClearedForValidation());
+#endif
+
+#if !defined(CONFIG_VOIP_SRTP_CALL_TEST)
     peer.mode = Peer::Mode::busy;
     CHECK(manager.StartOutgoingCall(remote) == voip::Error::ok);
     CHECK(WaitFor(observer.disconnected, 2));
@@ -557,6 +636,7 @@ void Lifecycle(unsigned number) {
     CHECK(atomic_get(&observer.media_active) >= 3);
     CHECK(atomic_get(&observer.media_inactive) >= 3);
 #endif
+#endif
     CHECK(manager.UnregisterAccount() == voip::Error::ok);
     CHECK(WaitFor(observer.registration_disabled));
     CHECK(atomic_get(&peer.unregistrations) == 1);
@@ -573,6 +653,8 @@ void Lifecycle(unsigned number) {
     printk("[Phase 8] lifecycle %u hold/recovery matrix: %s\n", number,
 #elif defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
     printk("[Phase 9] lifecycle %u robustness matrix: %s\n", number,
+#elif defined(CONFIG_VOIP_SRTP_CALL_TEST)
+    printk("[SRTP call] lifecycle %u SIP/SDES/SRTP media: %s\n", number,
 #elif defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
     printk("[Phase 7] lifecycle %u SIP TCP/G.711 UDP media matrix: %s\n", number,
 #else
@@ -589,6 +671,9 @@ int main() {
     Lifecycle(1);
 #elif defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
     printk("VoIP integration Phase 9 robustness/resource validation\n");
+    Lifecycle(1);
+#elif defined(CONFIG_VOIP_SRTP_CALL_TEST)
+    printk("VoIP mandatory SRTP/SDES call validation\n");
     Lifecycle(1);
 #elif defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
     printk("VoIP integration Phase 7 SIP-controlled headless call validation\n");
@@ -608,6 +693,8 @@ int main() {
                resource_max.dialogs, resource_max.event_stack_max_bytes,
                static_cast<unsigned>(CONFIG_MAIN_STACK_SIZE - main_stack_min_unused));
         printk("VOIP INTEGRATION PHASE 9 RESULT: PASSED (complete lifecycle; active media soak)\n");
+#elif defined(CONFIG_VOIP_SRTP_CALL_TEST)
+        printk("SRTP SIGNALING RESULT: PASSED (RTP/SAVP; SIP-controlled media)\n");
 #elif defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
         printk("VOIP INTEGRATION PHASE 7 RESULT: PASSED (1 complete boot lifecycle)\n");
 #else
@@ -618,6 +705,8 @@ int main() {
         printk("VOIP INTEGRATION PHASE 8 RESULT: FAILED (%d checks)\n", failures);
 #elif defined(CONFIG_VOIP_PHASE9_ROBUSTNESS_TEST)
         printk("VOIP INTEGRATION PHASE 9 RESULT: FAILED (%d checks)\n", failures);
+#elif defined(CONFIG_VOIP_SRTP_CALL_TEST)
+        printk("SRTP SIGNALING RESULT: FAILED (%d checks)\n", failures);
 #elif defined(CONFIG_VOIP_PHASE7_SIP_MEDIA_TEST)
         printk("VOIP INTEGRATION PHASE 7 RESULT: FAILED (%d checks)\n", failures);
 #else

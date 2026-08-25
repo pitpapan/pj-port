@@ -69,6 +69,9 @@ public:
                                   Error error = Error::ok) noexcept;
     void *NativeSipEndpointForValidation() const noexcept;
     Error InjectMediaTransportFailureForValidation() noexcept;
+    bool SrtpKeysActiveForValidation() const noexcept;
+    bool SrtpKeysClearedForValidation() const noexcept;
+    bool SrtpTransportActiveForValidation() const noexcept;
     RuntimeResources ResourcesForValidation() const noexcept;
 
 private:

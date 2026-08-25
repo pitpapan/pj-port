@@ -82,9 +82,7 @@ not production-safe over the project's current plain SIP/TCP transport. Before
 the facade can enable SDES-SRTP in production, the remaining work is:
 
 1. port SIP TLS with certificate and hostname verification;
-2. add a Zephyr CSPRNG-backed per-call key provider and hardware key-lifetime
-   policy;
-3. integrate mandatory SDES negotiation and SRTP transport ownership into the
-   one-call C++ facade;
-4. validate a complete SIP-TLS-controlled, SRTP-protected PCMU/PCMA call; and
-5. qualify entropy, credentials, zeroization, and resources on MIMXRT1060.
+2. extend the validated outgoing, incoming, hold/resume, and remote re-INVITE
+   strict-SDES paths across offerless and remaining failure flows;
+3. validate a complete SIP-TLS-controlled, SRTP-protected PCMU/PCMA call; and
+4. qualify entropy, credentials, zeroization, and resources on MIMXRT1060.

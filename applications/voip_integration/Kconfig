@@ -38,4 +38,12 @@ config VOIP_PHASE9_ROBUSTNESS_TEST
 	bool "Phase 9 robustness and resource qualification"
 	depends on VOIP_PJ_CALL_CONTROL && VOIP_PJ_HEADLESS_MEDIA
 
+config VOIP_SRTP_KEY_TEST
+	bool "SRTP per-call key lifecycle validation"
+	depends on VOIP_PJ_SRTP_KEY_LIFECYCLE
+
+config VOIP_SRTP_CALL_TEST
+	bool "SIP-controlled mandatory SRTP/SDES call validation"
+	depends on VOIP_PJ_SRTP_SIGNALING
+
 endmenu

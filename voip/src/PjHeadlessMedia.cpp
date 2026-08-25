@@ -1,9 +1,15 @@
 #include "PjHeadlessMedia.hpp"
+#if defined(CONFIG_VOIP_PJ_SRTP_KEY_LIFECYCLE)
+#include "PjSrtpKeyMaterial.hpp"
+#endif
 
 #include <pjmedia/event.h>
 #include <pjmedia/g711.h>
 #include <pjmedia/sdp.h>
 #include <pjmedia/stream.h>
+#if defined(CONFIG_VOIP_PJ_SRTP_MEDIA)
+#include <pjmedia/transport_srtp.h>
+#endif
 #include <pjmedia/transport_udp.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/atomic.h>
@@ -48,6 +54,12 @@ struct PjHeadlessMedia::State {
     pj_int16_t sink[sink_capacity][frame_samples];
     unsigned sink_next;
     bool codec_initialized;
+    bool srtp_started;
+    bool sdes_signaling;
+#if defined(CONFIG_VOIP_PJ_SRTP_KEY_LIFECYCLE)
+    PjSrtpKeyMaterial local_key;
+    PjSrtpKeyMaterial peer_key;
+#endif
 
     static pj_status_t BoundSocket(pj_sock_t *socket, pj_sockaddr *address) noexcept {
         pj_sockaddr_in bind_address;
@@ -80,15 +92,62 @@ struct PjHeadlessMedia::State {
             status = BoundSocket(&sockets.rtcp_sock, &sockets.rtcp_addr_name);
         if (status == PJ_SUCCESS) {
             *rtp_port = pj_sockaddr_get_port(&sockets.rtp_addr_name);
+            pjmedia_transport *udp = nullptr;
             status = pjmedia_transport_udp_attach(endpoint, name, &sockets,
-                PJMEDIA_UDP_NO_SRC_ADDR_CHECKING, transport);
-            if (status == PJ_SUCCESS)
+                PJMEDIA_UDP_NO_SRC_ADDR_CHECKING, &udp);
+            if (status == PJ_SUCCESS) {
                 sockets.rtp_sock = sockets.rtcp_sock = PJ_INVALID_SOCKET;
+#if defined(CONFIG_VOIP_PJ_SRTP_MEDIA)
+                pjmedia_srtp_setting setting;
+                pjmedia_srtp_setting_default(&setting);
+                setting.use = PJMEDIA_SRTP_MANDATORY;
+                setting.close_member_tp = PJ_TRUE;
+                setting.crypto_count = 1;
+                setting.crypto[0].name =
+                    pj_str(const_cast<char *>("AES_CM_128_HMAC_SHA1_80"));
+                setting.crypto[0].key.ptr = reinterpret_cast<char *>(
+                    const_cast<std::uint8_t *>(local_key.Data()));
+                setting.crypto[0].key.slen = PjSrtpKeyMaterial::size;
+                setting.keying_count = sdes_signaling ? 1U : 0U;
+                if (sdes_signaling)
+                    setting.keying[0] = PJMEDIA_SRTP_KEYING_SDES;
+                status = pjmedia_transport_srtp_create(endpoint, udp, &setting,
+                                                        transport);
+                if (status != PJ_SUCCESS) (void)pjmedia_transport_close(udp);
+#else
+                *transport = udp;
+#endif
+            }
         }
         if (sockets.rtp_sock != PJ_INVALID_SOCKET) pj_sock_close(sockets.rtp_sock);
         if (sockets.rtcp_sock != PJ_INVALID_SOCKET) pj_sock_close(sockets.rtcp_sock);
         return status;
     }
+
+#if defined(CONFIG_VOIP_PJ_SRTP_MEDIA)
+    static void InitCrypto(pjmedia_srtp_crypto *crypto,
+                           const PjSrtpKeyMaterial &key) noexcept {
+        pj_bzero(crypto, sizeof(*crypto));
+        crypto->name = pj_str(const_cast<char *>("AES_CM_128_HMAC_SHA1_80"));
+        crypto->key.ptr = reinterpret_cast<char *>(
+            const_cast<std::uint8_t *>(key.Data()));
+        crypto->key.slen = PjSrtpKeyMaterial::size;
+    }
+
+    pj_status_t StartSrtp() noexcept {
+        pjmedia_srtp_crypto local;
+        pjmedia_srtp_crypto peer;
+        InitCrypto(&local, local_key);
+        InitCrypto(&peer, peer_key);
+        pj_status_t status = pjmedia_transport_srtp_start(first_transport,
+                                                           &local, &peer);
+        if (status == PJ_SUCCESS)
+            status = pjmedia_transport_srtp_start(second_transport,
+                                                   &peer, &local);
+        srtp_started = status == PJ_SUCCESS;
+        return status;
+    }
+#endif
 
     pj_status_t ParseSdp(unsigned port, const char *address,
                          pjmedia_sdp_session **session) noexcept {
@@ -121,8 +180,14 @@ struct PjHeadlessMedia::State {
             status = pjmedia_stream_info_from_sdp(&info, pool, endpoint,
                                                    local, remote, 0);
         if (status == PJ_SUCCESS)
+#if defined(CONFIG_VOIP_PJ_SRTP_MEDIA)
+            status = pjmedia_transport_media_start(
+                pjmedia_transport_srtp_get_member(transport), pool, local,
+                remote, 0);
+#else
             status = pjmedia_transport_media_start(transport, pool, local,
                                                     remote, 0);
+#endif
         if (status == PJ_SUCCESS)
             status = pjmedia_stream_create(endpoint, pool, &info, transport,
                                             nullptr, stream);
@@ -226,12 +291,12 @@ Error PjHeadlessMedia::Initialize() noexcept {
 }
 
 Error PjHeadlessMedia::Start(Codec codec) noexcept {
-    Error result = Prepare();
+    Error result = Prepare(false);
     if (result != Error::ok) return result;
     return StartPrepared(codec, "127.0.0.1", state_->second_rtp_port);
 }
 
-Error PjHeadlessMedia::Prepare() noexcept {
+Error PjHeadlessMedia::Prepare(bool sdes_signaling) noexcept {
     if (state_ == nullptr || state_->codec_initialized == false)
         return Error::not_initialized;
     if (state_->pool == nullptr) return Error::not_initialized;
@@ -245,6 +310,20 @@ Error PjHeadlessMedia::Prepare() noexcept {
     atomic_set(&state_->stop, 0);
     atomic_set(&state_->paused, 0);
     atomic_set(&state_->worker_status, PJ_SUCCESS);
+    state_->sdes_signaling = sdes_signaling;
+#if defined(CONFIG_VOIP_PJ_SRTP_KEY_LIFECYCLE)
+    if (!state_->local_key.Generate() || !state_->peer_key.Generate()) {
+        state_->local_key.Clear();
+        state_->peer_key.Clear();
+        return Error::internal_failure;
+    }
+    if (pj_memcmp(state_->local_key.Data(), state_->peer_key.Data(),
+                  PjSrtpKeyMaterial::size) == 0) {
+        state_->local_key.Clear();
+        state_->peer_key.Clear();
+        return Error::internal_failure;
+    }
+#endif
     pj_status_t status = PJ_SUCCESS;
     if (state_->first_transport == nullptr)
         status = state_->CreateTransport("voip-media-a",
@@ -252,11 +331,88 @@ Error PjHeadlessMedia::Prepare() noexcept {
     if (status == PJ_SUCCESS && state_->second_transport == nullptr)
         status = state_->CreateTransport("voip-media-b",
             &state_->second_transport, &state_->second_rtp_port);
+#if defined(CONFIG_VOIP_PJ_SRTP_MEDIA)
+    if (status == PJ_SUCCESS && !state_->sdes_signaling)
+        status = state_->StartSrtp();
+#endif
     if (status != PJ_SUCCESS) {
+#if defined(CONFIG_VOIP_PJ_SRTP_KEY_LIFECYCLE)
+        state_->local_key.Clear();
+        state_->peer_key.Clear();
+#endif
         (void)Stop();
         return Error::media_failure;
     }
     return Error::ok;
+}
+
+Error PjHeadlessMedia::EncodeSdesOffer(pj_pool_t *pool,
+                                       pjmedia_sdp_session *offer) noexcept {
+#if defined(CONFIG_VOIP_PJ_SRTP_SIGNALING)
+    if (state_ == nullptr || !state_->sdes_signaling ||
+        state_->first_transport == nullptr || pool == nullptr || offer == nullptr)
+        return Error::invalid_state;
+    pj_status_t status = pjmedia_transport_media_create(
+        state_->first_transport, pool, 0, nullptr, 0);
+    if (status == PJ_SUCCESS)
+        status = pjmedia_transport_encode_sdp(state_->first_transport, pool,
+                                               offer, nullptr, 0);
+    return status == PJ_SUCCESS ? Error::ok : Error::negotiation_failure;
+#else
+    (void)pool; (void)offer;
+    return Error::invalid_state;
+#endif
+}
+
+Error PjHeadlessMedia::EncodeSdesAnswer(
+    pj_pool_t *pool, pjmedia_sdp_session *answer,
+    const pjmedia_sdp_session *offer) noexcept {
+#if defined(CONFIG_VOIP_PJ_SRTP_SIGNALING)
+    if (state_ == nullptr || !state_->sdes_signaling ||
+        state_->first_transport == nullptr || pool == nullptr ||
+        answer == nullptr || offer == nullptr)
+        return Error::negotiation_failure;
+    pj_status_t status = pjmedia_transport_media_create(
+        state_->first_transport, pool, 0, offer, 0);
+    if (status == PJ_SUCCESS)
+        status = pjmedia_transport_encode_sdp(state_->first_transport, pool,
+                                               answer, offer, 0);
+    return status == PJ_SUCCESS ? Error::ok : Error::negotiation_failure;
+#else
+    (void)pool; (void)answer; (void)offer;
+    return Error::invalid_state;
+#endif
+}
+
+Error PjHeadlessMedia::ActivateSdes(
+    pj_pool_t *pool, const pjmedia_sdp_session *local,
+    const pjmedia_sdp_session *remote) noexcept {
+#if defined(CONFIG_VOIP_PJ_SRTP_SIGNALING)
+    if (state_ == nullptr || !state_->sdes_signaling ||
+        state_->first_transport == nullptr || state_->second_transport == nullptr)
+        return Error::invalid_state;
+    pj_status_t status = pjmedia_transport_media_start(
+        state_->first_transport, pool, local, remote, 0);
+    pjmedia_transport_info info;
+    pjmedia_transport_info_init(&info);
+    if (status == PJ_SUCCESS)
+        status = pjmedia_transport_get_info(state_->first_transport, &info);
+    auto *srtp = status == PJ_SUCCESS
+        ? static_cast<pjmedia_srtp_info *>(pjmedia_transport_info_get_spc_info(
+              &info, PJMEDIA_TRANSPORT_TYPE_SRTP))
+        : nullptr;
+    if (status == PJ_SUCCESS && (srtp == nullptr || !srtp->active))
+        status = PJMEDIA_SRTP_ESDPINTRANSPORT;
+    if (status == PJ_SUCCESS)
+        status = pjmedia_transport_srtp_start(state_->second_transport,
+                                               &srtp->rx_policy,
+                                               &srtp->tx_policy);
+    state_->srtp_started = status == PJ_SUCCESS;
+    return status == PJ_SUCCESS ? Error::ok : Error::negotiation_failure;
+#else
+    (void)pool; (void)local; (void)remote;
+    return Error::invalid_state;
+#endif
 }
 
 unsigned PjHeadlessMedia::LocalRtpPort() const noexcept {
@@ -340,6 +496,36 @@ bool PjHeadlessMedia::Running() const noexcept {
            atomic_get(&state_->running) != 0;
 }
 
+bool PjHeadlessMedia::SrtpKeysActiveForValidation() const noexcept {
+#if defined(CONFIG_VOIP_PJ_SRTP_KEY_LIFECYCLE)
+    return state_ != nullptr && state_->local_key.Active() &&
+           state_->peer_key.Active() &&
+           pj_memcmp(state_->local_key.Data(), state_->peer_key.Data(),
+                     PjSrtpKeyMaterial::size) != 0;
+#else
+    return false;
+#endif
+}
+
+bool PjHeadlessMedia::SrtpKeysClearedForValidation() const noexcept {
+#if defined(CONFIG_VOIP_PJ_SRTP_KEY_LIFECYCLE)
+    return state_ != nullptr && state_->local_key.ClearedForValidation() &&
+           state_->peer_key.ClearedForValidation();
+#else
+    return true;
+#endif
+}
+
+bool PjHeadlessMedia::SrtpTransportActiveForValidation() const noexcept {
+#if defined(CONFIG_VOIP_PJ_SRTP_MEDIA)
+    return state_ != nullptr && state_->srtp_started &&
+           state_->first_transport != nullptr &&
+           state_->second_transport != nullptr;
+#else
+    return false;
+#endif
+}
+
 Error PjHeadlessMedia::InjectTransportFailure() noexcept {
     if (state_ == nullptr || state_->first_transport == nullptr)
         return Error::invalid_state;
@@ -412,6 +598,11 @@ Error PjHeadlessMedia::StopCall() noexcept {
     if (state_->second_transport != nullptr && state_->second_stream == nullptr) {
         (void)pjmedia_transport_media_stop(state_->second_transport);
     }
+#if defined(CONFIG_VOIP_PJ_SRTP_KEY_LIFECYCLE)
+    state_->local_key.Clear();
+    state_->peer_key.Clear();
+#endif
+    state_->srtp_started = false;
     pj_pool_reset(state_->pool);
     atomic_set(&state_->running, 0);
     return Translate(result);

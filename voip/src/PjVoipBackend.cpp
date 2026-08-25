@@ -204,7 +204,13 @@ public:
     Error PrepareCallMedia() noexcept {
 #if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
         if (headless_media == nullptr) return Error::not_initialized;
-        const Error result = headless_media->Prepare();
+        const Error result = headless_media->Prepare(
+#if defined(CONFIG_VOIP_PJ_SRTP_SIGNALING)
+            true
+#else
+            false
+#endif
+        );
         if (result == Error::ok) {
             media_negotiated = false;
             media_started = false;
@@ -352,6 +358,17 @@ public:
         if (status != PJ_SUCCESS) {
             self->StopCallMedia();
             self->NotifyCall(CallState::failed, Error::negotiation_failure);
+#if defined(CONFIG_VOIP_PJ_SRTP_SIGNALING)
+            pjsip_tx_data *request = nullptr;
+            pj_status_t end_status = pjsip_inv_end_session(
+                invite, PJSIP_SC_NOT_ACCEPTABLE_HERE, nullptr, &request);
+            if (end_status == PJ_SUCCESS && request != nullptr)
+                end_status = pjsip_inv_send_msg(invite, request);
+            if (end_status != PJ_SUCCESS)
+                (void)pjsip_inv_terminate(invite,
+                                          PJSIP_SC_NOT_ACCEPTABLE_HERE,
+                                          PJ_TRUE);
+#endif
             return;
         }
         const pjmedia_sdp_session *local = nullptr;
@@ -385,6 +402,24 @@ public:
                          static_cast<int>(connection->addr.slen),
                          connection->addr.ptr);
         self->negotiated_rtp_port = remote->media[0]->desc.port;
+#if defined(CONFIG_VOIP_PJ_SRTP_SIGNALING)
+        if (self->headless_media == nullptr ||
+            self->headless_media->ActivateSdes(invite->pool_prov, local,
+                                                remote) != Error::ok) {
+            self->StopCallMedia();
+            self->NotifyCall(CallState::failed, Error::negotiation_failure);
+            pjsip_tx_data *request = nullptr;
+            pj_status_t end_status = pjsip_inv_end_session(
+                invite, PJSIP_SC_NOT_ACCEPTABLE_HERE, nullptr, &request);
+            if (end_status == PJ_SUCCESS && request != nullptr)
+                end_status = pjsip_inv_send_msg(invite, request);
+            if (end_status != PJ_SUCCESS)
+                (void)pjsip_inv_terminate(invite,
+                                          PJSIP_SC_NOT_ACCEPTABLE_HERE,
+                                          PJ_TRUE);
+            return;
+        }
+#endif
         self->media_negotiated = true;
         if (self->reinvite_pending) {
 #if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
@@ -431,11 +466,35 @@ public:
                 direction = "inactive";
         }
         pjmedia_sdp_session *answer = nullptr;
-        if (ParseCallSdp(invite->pool_prov,
-                         active_instance == nullptr ? 4000U :
-                         invite == active_instance->active_invite
-                             ? active_instance->LocalCallRtpPort() : 4002U,
-                         direction, &answer) == PJ_SUCCESS)
+        pj_status_t status = ParseCallSdp(
+            invite->pool_prov,
+            active_instance == nullptr ? 4000U :
+            invite == active_instance->active_invite
+                ? active_instance->LocalCallRtpPort() : 4002U,
+            direction, &answer);
+#if defined(CONFIG_VOIP_SRTP_CALL_TEST)
+        if (status == PJ_SUCCESS && active_instance != nullptr &&
+            invite != active_instance->active_invite) {
+            answer->media[0]->desc.transport =
+                pj_str(const_cast<char *>("RTP/SAVP"));
+            pj_str_t crypto = pj_str(const_cast<char *>(
+                "1 AES_CM_128_HMAC_SHA1_80 "
+                "inline:AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0e"));
+            pjmedia_sdp_attr *attribute = pjmedia_sdp_attr_create(
+                invite->pool_prov, "crypto", &crypto);
+            status = attribute == nullptr ? PJ_ENOMEM
+                : pjmedia_sdp_media_add_attr(answer->media[0], attribute);
+        }
+#endif
+#if defined(CONFIG_VOIP_PJ_SRTP_SIGNALING)
+        if (status == PJ_SUCCESS && active_instance != nullptr &&
+            invite == active_instance->active_invite &&
+            (active_instance->headless_media == nullptr ||
+             active_instance->headless_media->EncodeSdesAnswer(
+                 invite->pool_prov, answer, offer) != Error::ok))
+            status = PJMEDIA_SRTP_ESDPINTRANSPORT;
+#endif
+        if (status == PJ_SUCCESS)
             (void)pjsip_inv_set_sdp_answer(invite, answer);
     }
 
@@ -466,6 +525,15 @@ public:
         if (status == PJ_SUCCESS)
             status = ParseCallSdp(dialog->pool, self->LocalCallRtpPort(),
                                   "sendrecv", &answer);
+#if defined(CONFIG_VOIP_PJ_SRTP_SIGNALING)
+        if (status == PJ_SUCCESS) {
+            pjsip_rdata_sdp_info *sdp = pjsip_rdata_get_sdp_info(data);
+            if (sdp == nullptr || sdp->sdp_err != PJ_SUCCESS || sdp->sdp == nullptr ||
+                self->headless_media->EncodeSdesAnswer(dialog->pool, answer,
+                                                        sdp->sdp) != Error::ok)
+                status = PJMEDIA_SRTP_ESDPINTRANSPORT;
+        }
+#endif
         if (status == PJ_SUCCESS)
             status = pjsip_inv_create_uas(dialog, data, answer, 0, &invite);
         if (dialog != nullptr) pjsip_dlg_dec_lock(dialog);
@@ -514,6 +582,11 @@ public:
         if (status != PJ_SUCCESS) return TranslateStatus(status);
         pjsip_dlg_inc_lock(dialog);
         status = ParseCallSdp(dialog->pool, LocalCallRtpPort(), "sendrecv", &offer);
+#if defined(CONFIG_VOIP_PJ_SRTP_SIGNALING)
+        if (status == PJ_SUCCESS &&
+            headless_media->EncodeSdesOffer(dialog->pool, offer) != Error::ok)
+            status = PJMEDIA_SRTP_ESDPINTRANSPORT;
+#endif
         if (status == PJ_SUCCESS)
             status = pjsip_inv_create_uac(dialog, offer, 0, &active_invite);
         pjsip_dlg_dec_lock(dialog);
@@ -563,6 +636,13 @@ public:
                                           LocalCallRtpPort(),
                                           value ? "sendonly" : "sendrecv",
                                           &offer);
+#if defined(CONFIG_VOIP_PJ_SRTP_SIGNALING)
+        if (status == PJ_SUCCESS &&
+            (headless_media == nullptr ||
+             headless_media->EncodeSdesOffer(active_invite->pool_prov,
+                                              offer) != Error::ok))
+            status = PJMEDIA_SRTP_ESDPINTRANSPORT;
+#endif
         if (status == PJ_SUCCESS)
             status = pjsip_inv_reinvite(active_invite, nullptr, offer, &request);
         if (status == PJ_SUCCESS) {
@@ -1325,6 +1405,33 @@ Error PjVoipBackend::InjectMediaTransportFailureForValidation() noexcept {
     return result;
 #else
     return Error::invalid_state;
+#endif
+}
+
+bool PjVoipBackend::SrtpKeysActiveForValidation() const noexcept {
+#if defined(CONFIG_VOIP_PJ_SRTP_KEY_LIFECYCLE)
+    return impl_ != nullptr && impl_->headless_media != nullptr &&
+           impl_->headless_media->SrtpKeysActiveForValidation();
+#else
+    return false;
+#endif
+}
+
+bool PjVoipBackend::SrtpKeysClearedForValidation() const noexcept {
+#if defined(CONFIG_VOIP_PJ_SRTP_KEY_LIFECYCLE)
+    return impl_ != nullptr && impl_->headless_media != nullptr &&
+           impl_->headless_media->SrtpKeysClearedForValidation();
+#else
+    return true;
+#endif
+}
+
+bool PjVoipBackend::SrtpTransportActiveForValidation() const noexcept {
+#if defined(CONFIG_VOIP_PJ_SRTP_MEDIA)
+    return impl_ != nullptr && impl_->headless_media != nullptr &&
+           impl_->headless_media->SrtpTransportActiveForValidation();
+#else
+    return false;
 #endif
 }
 

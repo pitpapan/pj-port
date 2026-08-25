@@ -49,4 +49,35 @@ config VOIP_PJ_HEADLESS_MEDIA
 	  Enable generated 8 kHz mono PCM, PCMU/PCMA RTP over UDP, jitter
 	  buffering, and a bounded memory sink without an audio device.
 
+config VOIP_PJ_SRTP_KEY_LIFECYCLE
+	bool "VoIP per-call SRTP key lifecycle"
+	depends on VOIP_PJ_HEADLESS_MEDIA && PJMEDIA_SRTP_SDES
+	default n
+	help
+	  Generate two distinct 30-byte AES-CM master-key/salt values from the
+	  Zephyr cryptographically secure random API for every prepared call and
+	  explicitly erase them at call teardown. This gate establishes key
+	  ownership only; SIP SDP and the facade media transport are not secured
+	  until the subsequent SRTP call-path integration is enabled.
+
+config VOIP_PJ_SRTP_MEDIA
+	bool "VoIP PJMEDIA SRTP headless media"
+	depends on VOIP_PJ_SRTP_KEY_LIFECYCLE && PJMEDIA_SRTP_TRANSPORT
+	default n
+	help
+	  Wrap the facade-owned RTP/UDP transports with PJMEDIA's mandatory SRTP
+	  adapter and install the per-call AES_CM_128_HMAC_SHA1_80 keys. This gate
+	  secures the media packets but does not yet signal keys through SIP/SDES.
+
+config VOIP_PJ_SRTP_SIGNALING
+	bool "VoIP mandatory SRTP/SDES call signaling"
+	depends on VOIP_PJ_SRTP_MEDIA && VOIP_PJ_CALL_CONTROL
+	depends on PJMEDIA_SRTP_SDES
+	default n
+	help
+	  Route PJSIP INVITE offer/answer through PJMEDIA's strict SDES hooks,
+	  require RTP/SAVP, and bind the negotiated policies to the facade-owned
+	  SRTP transports. SDES reveals keys to signaling, so production use also
+	  requires authenticated SIP TLS.
+
 endif

@@ -11,4 +11,7 @@ if(CONFIG_VOIP_FACADE)
   zephyr_library_sources_ifdef(CONFIG_VOIP_PJ_HEADLESS_MEDIA
     ../src/PjHeadlessMedia.cpp
   )
+  zephyr_library_sources_ifdef(CONFIG_VOIP_PJ_SRTP_KEY_LIFECYCLE
+    ../src/PjSrtpKeyMaterial.cpp
+  )
 endif()

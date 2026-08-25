@@ -21,11 +21,11 @@
 #if defined(CONFIG_PJMEDIA_SRTP_TRANSPORT)
 #  define PJ_LOG_MAX_LEVEL                      4
 #  define PJMEDIA_HAS_SRTP                   1
-#  define PJMEDIA_SRTP_HAS_AES_CM_128        0
+#  define PJMEDIA_SRTP_HAS_AES_CM_128        1
 #  define PJMEDIA_SRTP_HAS_AES_CM_192        0
 #  define PJMEDIA_SRTP_HAS_AES_CM_256        0
 #  define PJMEDIA_SRTP_HAS_AES_GCM_128       0
-#  define PJMEDIA_SRTP_HAS_AES_GCM_256       1
+#  define PJMEDIA_SRTP_HAS_AES_GCM_256       0
 #else
 #  define PJMEDIA_HAS_SRTP                   0
 #endif
