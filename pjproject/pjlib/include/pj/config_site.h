@@ -6,7 +6,8 @@
 
 /* Keep optional facilities outside the initial PJLIB-only scope disabled. */
 #define PJ_HAS_FLOATING_POINT               0
-#define PJ_HAS_SSL_SOCK                     0
+#define PJ_HAS_SSL_SOCK                     1
+#define PJ_SSL_SOCK_IMP PJ_SSL_SOCK_IMP_MBEDTLS
 
 /* These implementations correspond to the explicit Zephyr source set. */
 #define PJ_IOQUEUE_IMP                      PJ_IOQUEUE_IMP_SELECT
@@ -20,11 +21,11 @@
 #if defined(CONFIG_PJMEDIA_SRTP_TRANSPORT)
 #  define PJ_LOG_MAX_LEVEL                      4
 #  define PJMEDIA_HAS_SRTP                   1
-#  define PJMEDIA_SRTP_HAS_AES_CM_128        1
+#  define PJMEDIA_SRTP_HAS_AES_CM_128        0
 #  define PJMEDIA_SRTP_HAS_AES_CM_192        0
 #  define PJMEDIA_SRTP_HAS_AES_CM_256        0
 #  define PJMEDIA_SRTP_HAS_AES_GCM_128       0
-#  define PJMEDIA_SRTP_HAS_AES_GCM_256       0
+#  define PJMEDIA_SRTP_HAS_AES_GCM_256       1
 #else
 #  define PJMEDIA_HAS_SRTP                   0
 #endif
