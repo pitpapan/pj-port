@@ -2,6 +2,10 @@ source "Kconfig.zephyr"
 
 menu "VoIP integration validation"
 
+config VOIP_SDK_CONTRACT_TEST
+	bool "Production SDK contract validation"
+	depends on VOIP_SDK && VOIP_FAKE_BACKEND
+
 config VOIP_PHASE1_TEST
 	bool "Phase 1 facade validation"
 	depends on VOIP_FACADE && VOIP_FAKE_BACKEND

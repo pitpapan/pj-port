@@ -2,11 +2,19 @@ if(CONFIG_VOIP_FACADE)
   zephyr_include_directories(../include)
   zephyr_library()
   zephyr_library_sources(../src/VoipManager.cpp)
+  zephyr_library_sources_ifdef(CONFIG_VOIP_SDK
+    ../src/VoipService.cpp
+    ../src/SipManager.cpp
+  )
   zephyr_library_sources_ifdef(CONFIG_VOIP_FAKE_BACKEND
     ../src/FakeVoipBackend.cpp
   )
   zephyr_library_sources_ifdef(CONFIG_VOIP_PJ_BACKEND
     ../src/PjVoipBackend.cpp
+    ../src/PjRuntime.cpp
+  )
+  zephyr_library_sources_ifdef(CONFIG_VOIP_PJ_HEADLESS_MEDIA
+    ../src/RtpManager.cpp
   )
   zephyr_library_sources_ifdef(CONFIG_VOIP_PJ_HEADLESS_MEDIA
     ../src/PjHeadlessMedia.cpp

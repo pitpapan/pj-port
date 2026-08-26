@@ -8,6 +8,9 @@ list(APPEND ZEPHYR_EXTRA_MODULES
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(voip_integration)
 
+target_sources_ifdef(CONFIG_VOIP_SDK_CONTRACT_TEST app PRIVATE
+  src/sdk_contract.cpp
+)
 target_sources_ifdef(CONFIG_VOIP_PHASE1_TEST app PRIVATE src/main.cpp)
 target_sources_ifdef(CONFIG_VOIP_PHASE2_RUNTIME_TEST app PRIVATE
   src/phase2_runtime.cpp

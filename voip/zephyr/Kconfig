@@ -8,6 +8,41 @@ menuconfig VOIP_FACADE
 
 if VOIP_FACADE
 
+config VOIP_SDK
+	bool "Production VoIP SDK service"
+	depends on CPP
+	default n
+	help
+	  Build the handle-based asynchronous VoIP service contract. The service
+	  keeps PJPROJECT private and delivers copied events through an application
+	  supplied Zephyr work queue. The legacy facade remains available for the
+	  validation applications.
+
+config VOIP_MAX_ACCOUNTS
+	int "Maximum production SDK accounts"
+	depends on VOIP_SDK
+	range 1 4
+	default 1
+	help
+	  Number of account slots reserved by the production service. Raising this
+	  value requires a fresh PJ pool and memory qualification.
+
+config VOIP_MAX_CALLS
+	int "Maximum production SDK calls"
+	depends on VOIP_SDK
+	range 1 4
+	default 1
+	help
+	  Number of call and RTP media slots reserved by the production service.
+
+config VOIP_SDK_EVENT_CAPACITY
+	int "Production SDK event capacity"
+	depends on VOIP_SDK
+	range 1 16
+	default 8
+	help
+	  Maximum copied events retained while the application work queue is busy.
+
 config VOIP_FAKE_BACKEND
 	bool "VoIP facade fake backend"
 	default n

@@ -1,7 +1,9 @@
 #include <voip/PjVoipBackend.hpp>
 
+#include "PjRuntime.hpp"
+
 #if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
-#include "PjHeadlessMedia.hpp"
+#include "RtpManager.hpp"
 #endif
 
 #include <pjlib-util.h>
@@ -106,7 +108,7 @@ public:
     bool pj_initialized;
     bool util_initialized;
     bool pool_initialized;
-    pj_caching_pool caching_pool;
+    PjRuntime runtime;
     pjsip_endpoint *sip_endpoint;
     bool transaction_layer_initialized{};
     pjmedia_endpt *media_endpoint;
@@ -155,7 +157,7 @@ public:
     pjsip_tp_state_callback previous_transport_callback;
     bool transport_callback_installed;
 #if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
-    PjHeadlessMedia *headless_media;
+    RtpManager *headless_media;
 #endif
     static Impl *active_instance;
     static Impl *resource_instance;
@@ -181,6 +183,16 @@ public:
         if (self == nullptr) return;
         atomic_sub(&self->pool_bytes, static_cast<atomic_val_t>(size));
         atomic_dec(&self->pool_blocks);
+    }
+
+    static Impl *ForInvite(pjsip_inv_session *invite) noexcept {
+        Impl *fallback = active_instance;
+        if (invite == nullptr || fallback == nullptr ||
+            fallback->call_module.id < 0)
+            return fallback;
+        Impl *owner = static_cast<Impl *>(
+            invite->mod_data[fallback->call_module.id]);
+        return owner == nullptr ? fallback : owner;
     }
 
     static pj_status_t ParseCallSdp(pj_pool_t *pool, unsigned rtp_port,
@@ -299,7 +311,7 @@ public:
 
     static void InviteStateChanged(pjsip_inv_session *invite,
                                    pjsip_event *event) noexcept {
-        Impl *self = active_instance;
+        Impl *self = ForInvite(invite);
         if (self == nullptr || invite != self->active_invite) return;
         std::uint16_t code = 0;
         if (event != nullptr && event->type == PJSIP_EVENT_TSX_STATE &&
@@ -335,6 +347,9 @@ public:
     static void TransportState(pjsip_transport *transport,
                                pjsip_transport_state state,
                                const pjsip_transport_state_info *info) noexcept {
+        // Transport callbacks do not carry an invite pointer.  Keep the
+        // compatibility backend's instance routing here; invite callbacks
+        // use per-dialog mod_data through ForInvite().
         Impl *self = active_instance;
         pjsip_tp_state_callback previous = self == nullptr
             ? nullptr : self->previous_transport_callback;
@@ -353,7 +368,7 @@ public:
 
     static void InviteMediaUpdate(pjsip_inv_session *invite,
                                   pj_status_t status) noexcept {
-        Impl *self = active_instance;
+        Impl *self = ForInvite(invite);
         if (self == nullptr || invite != self->active_invite) return;
         if (status != PJ_SUCCESS) {
             self->StopCallMedia();
@@ -439,7 +454,7 @@ public:
     static void InviteTransactionChanged(pjsip_inv_session *invite,
                                          pjsip_transaction *transaction,
                                          pjsip_event *) noexcept {
-        Impl *self = active_instance;
+        Impl *self = ForInvite(invite);
         if (self == nullptr || invite != self->active_invite ||
             !self->reinvite_pending || transaction == nullptr ||
             transaction->role != PJSIP_ROLE_UAC ||
@@ -541,6 +556,8 @@ public:
             self->StopCallMedia();
             return PJ_FALSE;
         }
+        if (self->call_module.id >= 0)
+            invite->mod_data[self->call_module.id] = self;
         self->active_invite = invite;
         self->negotiated_codec = Codec::pcmu;
         pj_ansi_strncpy(self->remote_uri, "<sip:peer@127.0.0.1>",
@@ -589,6 +606,8 @@ public:
 #endif
         if (status == PJ_SUCCESS)
             status = pjsip_inv_create_uac(dialog, offer, 0, &active_invite);
+        if (status == PJ_SUCCESS && call_module.id >= 0)
+            active_invite->mod_data[call_module.id] = this;
         pjsip_dlg_dec_lock(dialog);
         if (status == PJ_SUCCESS) status = pjsip_inv_invite(active_invite, &request);
         if (status == PJ_SUCCESS) status = pjsip_inv_send_msg(active_invite, request);
@@ -953,12 +972,12 @@ failure:
             sip_endpoint = nullptr;
         }
         if (pool_initialized) {
-            pj_caching_pool_destroy(&caching_pool);
+            runtime.ShutdownPool();
             pool_initialized = false;
             resource_instance = nullptr;
         }
         if (pj_initialized) {
-            pj_shutdown();
+            runtime.ShutdownPjlib();
             pj_initialized = false;
             util_initialized = false;
         }
@@ -1017,7 +1036,7 @@ Error PjVoipBackend::Initialize(Observer *observer) {
     atomic_set(&impl_->processed, 0);
     atomic_set(&impl_->last_value, 0);
 
-    pj_status_t status = pj_init();
+    pj_status_t status = impl_->runtime.InitializePjlib();
     if (status != PJ_SUCCESS) return TranslateStatus(status);
     impl_->pj_initialized = true;
     if (failure_ == RuntimeFailurePoint::after_pjlib) goto injected_failure;
@@ -1029,14 +1048,14 @@ Error PjVoipBackend::Initialize(Observer *observer) {
 
     // Bound released per-call transport/stream pools instead of retaining an
     // unbounded sequence across repeated calls.
-    pj_caching_pool_init(&impl_->caching_pool, nullptr, 1);
+    status = impl_->runtime.InitializePool(&Impl::PoolAllocated,
+                                           &Impl::PoolFreed);
+    if (status != PJ_SUCCESS) goto status_failure;
     Impl::resource_instance = impl_;
-    impl_->caching_pool.factory.on_block_alloc = &Impl::PoolAllocated;
-    impl_->caching_pool.factory.on_block_free = &Impl::PoolFreed;
     impl_->pool_initialized = true;
     if (failure_ == RuntimeFailurePoint::after_pool_factory) goto injected_failure;
 
-    status = pjsip_endpt_create(&impl_->caching_pool.factory, "voip", &impl_->sip_endpoint);
+    status = pjsip_endpt_create(impl_->runtime.Factory(), "voip", &impl_->sip_endpoint);
     if (status != PJ_SUCCESS) goto status_failure;
 #if defined(CONFIG_VOIP_PJ_REGISTRATION_NETWORK)
     status = pjsip_tsx_layer_init_module(impl_->sip_endpoint);
@@ -1068,13 +1087,13 @@ Error PjVoipBackend::Initialize(Observer *observer) {
 #endif
     if (failure_ == RuntimeFailurePoint::after_sip_endpoint) goto injected_failure;
 
-    status = pjmedia_endpt_create2(&impl_->caching_pool.factory,
+    status = pjmedia_endpt_create2(impl_->runtime.Factory(),
                                    pjsip_endpt_get_ioqueue(impl_->sip_endpoint),
                                    0, &impl_->media_endpoint);
     if (status != PJ_SUCCESS) goto status_failure;
 #if defined(CONFIG_VOIP_PJ_HEADLESS_MEDIA)
-    impl_->headless_media = new (std::nothrow) PjHeadlessMedia(
-        &impl_->caching_pool.factory, impl_->media_endpoint);
+    impl_->headless_media = new (std::nothrow) RtpManager(
+        impl_->runtime.Factory(), impl_->media_endpoint);
     if (impl_->headless_media == nullptr) {
         status = PJ_ENOMEM;
         goto status_failure;

@@ -25,6 +25,7 @@ enum class Error : std::uint8_t {
     authentication_failure,
     negotiation_failure,
     media_failure,
+    resource_exhausted,
     internal_failure,
 };
 
