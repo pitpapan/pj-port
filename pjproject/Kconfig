@@ -5,13 +5,20 @@ menuconfig PJPROJECT
 
 if PJPROJECT
 
+# Default PJPROJECT profile: SIP call control with SDP negotiation and the
+# G.711/RTP media path. Applications can explicitly disable individual gates
+# when validating a smaller boundary or building a reduced product image.
+
 config PJLIB
 	bool "PJLIB"
+	default y if PJPROJECT
 	help
-	  Enable the PJLIB base library.
+	  Enable the PJLIB base library. It is enabled automatically when
+	  PJPROJECT is selected, but remains visible for boundary-only tests.
 
 config PJLIB_UTIL
 	bool "PJLIB-UTIL"
+	default y if PJPROJECT
 	depends on PJLIB
 	help
 	  Enable the PJLIB-UTIL facilities selected for Zephyr. The source list is
@@ -27,17 +34,17 @@ config PJLIB_UTIL_DNS_RESOLVER
 
 menuconfig PJMEDIA
 	bool "PJMEDIA"
+	default y if PJSIP
 	depends on PJLIB_UTIL
 	help
-	  Enable the PJMEDIA configuration and public-header boundary. Production
-	  source families remain independently selectable and are introduced only
-	  after their port phase validates their complete link closure.
+	  Enable the PJMEDIA configuration and public-header boundary. The standard
+	  PJPROJECT profile enables this automatically for PJSIP call control.
 
 if PJMEDIA
 
 config PJMEDIA_SDP
 	bool "PJMEDIA SDP representation and parser"
-	depends on PJMEDIA
+	default y if PJMEDIA
 	help
 	  Select the SDP representation, parser, printer, and comparison boundary.
 	  The Zephyr profile also rejects malformed line endings, oversized input,
@@ -45,6 +52,7 @@ config PJMEDIA_SDP
 
 config PJMEDIA_SDP_NEG
 	bool "PJMEDIA SDP offer/answer negotiation"
+	default y if PJMEDIA
 	depends on PJMEDIA_SDP
 	help
 	  Select SDP negotiation and its audited codec/stream helper closure. This
@@ -53,6 +61,7 @@ config PJMEDIA_SDP_NEG
 
 config PJMEDIA_ENDPOINT
 	bool "PJMEDIA endpoint and codec manager"
+	default y if PJMEDIA
 	depends on PJMEDIA_SDP
 	help
 	  Select the PJMEDIA endpoint/runtime primitives. The initial runtime will
@@ -60,6 +69,7 @@ config PJMEDIA_ENDPOINT
 
 config PJMEDIA_G711
 	bool "PJMEDIA G.711 PCMU/PCMA codec"
+	default y if PJMEDIA_ENDPOINT
 	depends on PJMEDIA_ENDPOINT
 	help
 	  Select only the built-in PCMU/PCMA codec family. Other codec families
@@ -67,6 +77,7 @@ config PJMEDIA_G711
 
 config PJMEDIA_RTP_RTCP
 	bool "PJMEDIA RTP, RTCP, and jitter buffer primitives"
+	default y if PJMEDIA_ENDPOINT
 	depends on PJMEDIA_ENDPOINT
 	help
 	  Select the socket-free RTP/RTCP packet, feedback, session, and adaptive
@@ -75,6 +86,7 @@ config PJMEDIA_RTP_RTCP
 
 config PJMEDIA_LOOP_TRANSPORT
 	bool "PJMEDIA loop transport"
+	default y if PJMEDIA_RTP_RTCP
 	depends on PJMEDIA_RTP_RTCP
 	help
 	  Select the socket-free PJMEDIA loop transport used to validate media
@@ -83,6 +95,7 @@ config PJMEDIA_LOOP_TRANSPORT
 
 config PJMEDIA_UDP_TRANSPORT
 	bool "PJMEDIA IPv4 UDP transport"
+	default y if PJMEDIA_LOOP_TRANSPORT && NET_SOCKETS && NET_IPV4 && NET_UDP
 	depends on PJMEDIA_LOOP_TRANSPORT
 	depends on NET_SOCKETS && NET_IPV4 && NET_UDP
 	help
@@ -91,6 +104,7 @@ config PJMEDIA_UDP_TRANSPORT
 
 config PJMEDIA_STREAM
 	bool "PJMEDIA G.711 audio stream"
+	default y if PJMEDIA_ENDPOINT && PJMEDIA_G711 && PJMEDIA_RTP_RTCP && PJMEDIA_UDP_TRANSPORT
 	depends on PJMEDIA_ENDPOINT && PJMEDIA_G711
 	depends on PJMEDIA_RTP_RTCP && PJMEDIA_UDP_TRANSPORT
 	help
@@ -98,7 +112,7 @@ config PJMEDIA_STREAM
 
 config PJMEDIA_SRTP
 	bool "PJMEDIA bundled SRTP primitives"
-	depends on PJMEDIA && PJMEDIA_RTP_RTCP
+	depends on PJMEDIA_RTP_RTCP
 	help
 	  Compile the bundled libsrtp AES-CM/HMAC-SHA1 closure. This gate alone
 	  provides crypto primitives; transport wrapping and SDP keying remain
@@ -107,7 +121,6 @@ config PJMEDIA_SRTP
 config PJMEDIA_SRTP_TRANSPORT
 	bool "PJMEDIA SRTP media transport"
 	depends on PJMEDIA_SRTP && PJMEDIA_ENDPOINT && PJMEDIA_UDP_TRANSPORT
-	depends on PJLIB_UTIL
 	help
 	  Build PJMEDIA's SRTP adapter transport over the bundled libsrtp packet
 	  engine. This gate provides explicit-key transport operation; SDP key
@@ -145,6 +158,7 @@ endif # PJMEDIA
 
 config PJSIP
 	bool "PJSIP core"
+	default y if PJPROJECT
 	depends on PJLIB_UTIL
 	help
 	  Enable the PJSIP signaling core. PJLIB-UTIL and PJLIB must be enabled
@@ -152,12 +166,16 @@ config PJSIP
 
 config PJSIP_INVITE
 	bool "PJSIP INVITE sessions"
-	depends on PJSIP && PJMEDIA_SDP_NEG
+	default y if PJSIP
+	depends on PJMEDIA_SDP_NEG
 	help
 	  Select INVITE sessions, 100rel, and session timers after SDP negotiation
-	  has a validated link closure. This remains disabled during PJMEDIA Phase 1.
+	  has a validated link closure. The standard PJSIP profile enables this by
+	  default; phase-specific tests may explicitly disable it.
 
 if PJSIP
+
+menu "PJSIP resource limits"
 
 config PJSIP_MAX_TSX_COUNT
 	int "Maximum PJSIP transactions"
@@ -226,9 +244,10 @@ config PJSIP_MAX_TIMED_OUT_ENTRIES
 	help
 	  Maximum expired timer entries handled by one endpoint event poll.
 
+endmenu
+
 config PJSIP_REGC
 	bool "PJSIP registration client"
-	depends on PJSIP
 	help
 	  Compile the independently selectable SIP registration client. This adds
 	  pjsip-ua/sip_reg.c only; PJMEDIA, INVITE sessions, PJSUA-LIB, and the
@@ -238,14 +257,15 @@ endif # PJSIP
 
 config PJSIP_UDP_TRANSPORT
 	bool "PJSIP UDP transport"
-	depends on PJSIP && NET_SOCKETS && NET_IPV4 && NET_UDP
+	default y if PJSIP && NET_SOCKETS && NET_IPV4 && NET_UDP
+	depends on NET_SOCKETS && NET_IPV4 && NET_UDP
 	help
 	  Compile the IPv4 UDP SIP transport. Runtime validation belongs to a
 	  later porting phase.
 
 config PJSIP_TCP_TRANSPORT
 	bool "PJSIP TCP transport"
-	depends on PJSIP && NET_SOCKETS && NET_IPV4 && NET_TCP
+	depends on NET_SOCKETS && NET_IPV4 && NET_TCP
 	help
 	  Compile the IPv4 TCP SIP transport. Runtime validation belongs to a
 	  later porting phase.

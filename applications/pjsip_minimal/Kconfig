@@ -1,5 +1,6 @@
 source "Kconfig.zephyr"
 
+# Test-only selectors default to n; each phase overlay enables only its test.
 menu "PJSIP minimal application validation"
 
 config PJSIP_PHASE3_TEST

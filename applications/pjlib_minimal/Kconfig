@@ -1,5 +1,6 @@
 source "Kconfig.zephyr"
 
+# Test-only selectors default to n; each stage overlay enables only its test.
 menu "PJLIB minimal application tests"
 
 config PJLIB_STAGE5_PROBE

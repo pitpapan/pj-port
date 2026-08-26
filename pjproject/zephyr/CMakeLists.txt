@@ -17,6 +17,12 @@ endfunction()
 
 include(${CMAKE_CURRENT_LIST_DIR}/sources.cmake)
 
+# Keep feature-to-source wiring compact while leaving the audited source
+# manifests in sources.cmake as the single source of truth.
+macro(pj_zephyr_add_sources_ifdef config source_variable)
+  zephyr_library_sources_ifdef(${config} ${${source_variable}})
+endmacro()
+
 if(CONFIG_PJPROJECT AND CONFIG_PJLIB)
   message(STATUS "PJPROJECT Zephyr module: PJLIB enabled")
 
@@ -34,12 +40,10 @@ if(CONFIG_PJPROJECT AND CONFIG_PJLIB_UTIL)
 
   zephyr_library_named(pjlib-util)
   zephyr_library_sources(${PJLIB_UTIL_SOURCES})
-  zephyr_library_sources_ifdef(CONFIG_PJLIB_UTIL_DNS_RESOLVER
-    ${PJLIB_UTIL_DNS_RESOLVER_SOURCES}
-  )
-  zephyr_library_sources_ifdef(CONFIG_PJMEDIA_SRTP_TRANSPORT
-    ${PJLIB_UTIL_BASE64_SOURCES}
-  )
+  pj_zephyr_add_sources_ifdef(CONFIG_PJLIB_UTIL_DNS_RESOLVER
+    PJLIB_UTIL_DNS_RESOLVER_SOURCES)
+  pj_zephyr_add_sources_ifdef(CONFIG_PJMEDIA_SRTP_TRANSPORT
+    PJLIB_UTIL_BASE64_SOURCES)
   zephyr_library_include_directories(
     ${PJPROJECT_ROOT_DIR}/pjlib-util/include
     ${PJPROJECT_ROOT_DIR}/pjlib/include
@@ -64,27 +68,18 @@ if(CONFIG_PJPROJECT AND CONFIG_PJMEDIA)
       ${PJPROJECT_ROOT_DIR}/pjlib/include
     )
     target_link_libraries(pjmedia PUBLIC pjlib-util pjlib)
-    zephyr_library_sources_ifdef(CONFIG_PJMEDIA_SDP_NEG
-      ${PJMEDIA_SDP_NEG_SOURCES}
+    foreach(feature IN ITEMS
+      SDP_NEG
+      ENDPOINT
+      G711
+      RTP_RTCP
+      LOOP_TRANSPORT
+      UDP_TRANSPORT
+      STREAM
     )
-    zephyr_library_sources_ifdef(CONFIG_PJMEDIA_ENDPOINT
-      ${PJMEDIA_ENDPOINT_SOURCES}
-    )
-    zephyr_library_sources_ifdef(CONFIG_PJMEDIA_G711
-      ${PJMEDIA_G711_SOURCES}
-    )
-    zephyr_library_sources_ifdef(CONFIG_PJMEDIA_RTP_RTCP
-      ${PJMEDIA_RTP_RTCP_SOURCES}
-    )
-    zephyr_library_sources_ifdef(CONFIG_PJMEDIA_LOOP_TRANSPORT
-      ${PJMEDIA_LOOP_TRANSPORT_SOURCES}
-    )
-    zephyr_library_sources_ifdef(CONFIG_PJMEDIA_UDP_TRANSPORT
-      ${PJMEDIA_UDP_TRANSPORT_SOURCES}
-    )
-    zephyr_library_sources_ifdef(CONFIG_PJMEDIA_STREAM
-      ${PJMEDIA_STREAM_SOURCES}
-    )
+      pj_zephyr_add_sources_ifdef(CONFIG_PJMEDIA_${feature}
+        PJMEDIA_${feature}_SOURCES)
+    endforeach()
     if(CONFIG_PJMEDIA_SRTP)
       zephyr_library_named(srtp)
       zephyr_library_sources(${PJMEDIA_SRTP_SOURCES})
@@ -116,18 +111,10 @@ if(CONFIG_PJPROJECT AND CONFIG_PJSIP)
 
   zephyr_library_named(pjsip)
   zephyr_library_sources(${PJSIP_CORE_SOURCES})
-  zephyr_library_sources_ifdef(CONFIG_PJSIP_UDP_TRANSPORT
-    ${PJSIP_UDP_TRANSPORT_SOURCES}
-  )
-  zephyr_library_sources_ifdef(CONFIG_PJSIP_TCP_TRANSPORT
-    ${PJSIP_TCP_TRANSPORT_SOURCES}
-  )
-  zephyr_library_sources_ifdef(CONFIG_PJSIP_INVITE
-    ${PJSIP_INVITE_SOURCES}
-  )
-  zephyr_library_sources_ifdef(CONFIG_PJSIP_REGC
-    ${PJSIP_REGC_SOURCES}
-  )
+  foreach(feature IN ITEMS UDP_TRANSPORT TCP_TRANSPORT INVITE REGC)
+    pj_zephyr_add_sources_ifdef(CONFIG_PJSIP_${feature}
+      PJSIP_${feature}_SOURCES)
+  endforeach()
   zephyr_library_include_directories(
     ${PJPROJECT_ROOT_DIR}/pjsip/include
     ${PJPROJECT_ROOT_DIR}/pjlib-util/include

@@ -1,5 +1,6 @@
 source "Kconfig.zephyr"
 
+# Test-only selectors default to n; each phase overlay enables only its test.
 menu "PJMEDIA minimal application validation"
 
 config PJMEDIA_PHASE1_BOUNDARY_TEST
