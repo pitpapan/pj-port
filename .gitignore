@@ -60,3 +60,4 @@ build_phase7_regression
 build_phase8
 build_phase9
 build_srtp_transport
+.worktrees/
