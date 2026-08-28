@@ -176,7 +176,8 @@ Task 2: complete (commits 650b81d..ced994f, review clean)
 
 ## Task 3 review round 1
 
-- Status: review fixes implemented; focused commit pending.
+- Status: review fixes implemented in focused commit `c52645616`
+  (`fix(pjlib): harden bounded arena validation`).
 - Tests were strengthened before allocator edits with an installed-policy
   callback free of `payload + 1`, a compile-time arena-capacity alignment
   assertion, an exact interior-split recovery invariant, and pre-reset

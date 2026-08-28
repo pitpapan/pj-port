@@ -207,3 +207,7 @@ The allocator now walks validated aligned physical blocks to locate an exact
 payload before freeing, validates previous-tag size/alignment/bounds and
 reciprocal adjacency before backward coalescing, and rejects non-aligned
 arena capacities at compile time. `git diff --check` passed before commit.
+
+The focused review-fix commit is `c52645616`
+(`fix(pjlib): harden bounded arena validation`). The final worktree status
+leaves only the unrelated pre-existing `AGENTS.md` modification unstaged.
