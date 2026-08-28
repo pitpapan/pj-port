@@ -119,6 +119,17 @@
 #define PJSIP_HAS_TLS_TRANSPORT             0
 #define PJSIP_HAS_DIGEST_AKA_AUTH           0
 
+#if defined(CONFIG_PJSUA)
+/* Keep the PJSUA record pools bounded by the embedded Kconfig profile. */
+#define PJSUA_MAX_ACC                       CONFIG_PJSUA_MAX_ACCOUNTS
+#define PJSUA_MAX_CALLS                     CONFIG_PJSUA_MAX_CALLS
+#define PJSUA_MAX_CONF_PORTS                CONFIG_PJSUA_MAX_CONF_PORTS
+/* The upstream spelling is PJMEDIA_SRTP_DISABLED; retain the requested
+ * PJSUA policy alias while making the value explicit in this profile. */
+#define PJSUA_SRTP_DISABLED                 PJMEDIA_SRTP_DISABLED
+#define PJSUA_DEFAULT_USE_SRTP              PJSUA_SRTP_DISABLED
+#endif
+
 #if defined(CONFIG_PJLIB_UTIL_DNS_RESOLVER)
 #  define PJSIP_HAS_RESOLVER                1
 #else

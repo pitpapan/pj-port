@@ -301,4 +301,40 @@ config PJSUA
 	help
 	  Enable the PJSUA-LIB C API and its explicit SIP, media, and NAT closure.
 
+config PJSUA_MAX_ACCOUNTS
+	int "PJSUA maximum accounts"
+	depends on PJSUA
+	range 5 5
+	default 5
+	help
+	  Fixed compile-time account record capacity for the embedded PJSUA
+	  profile. Product account topology is enforced separately.
+
+config PJSUA_MAX_CALLS
+	int "PJSUA maximum calls"
+	depends on PJSUA
+	range 7 7
+	default 7
+	help
+	  Fixed compile-time call record capacity for the embedded PJSUA profile.
+	  Product admission policy is enforced separately.
+
+config PJSUA_MAX_CONF_PORTS
+	int "PJSUA maximum conference ports"
+	depends on PJSUA
+	range 12 12
+	default 12
+	help
+	  Fixed compile-time conference-port record capacity for the embedded
+	  PJSUA profile.
+
+config PJSUA_ARENA_BYTES
+	int "PJSUA pool arena capacity"
+	depends on PJSUA
+	range 65536 4194304
+	default 2097152
+	help
+	  Capacity reserved for the future fixed PJ pool arena. Task 3 owns the
+	  allocator implementation; this is a build-time sizing control only.
+
 endif # PJPROJECT

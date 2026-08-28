@@ -74,3 +74,47 @@
   its PASS marker before timeout 124; phase5 INVITE+REGC build exited 0 and
   runtime printed its lifecycle PASS marker and SIP 486 responses before its
   30-second timeout 124; SDK contract evidence remains above.
+
+## Task 1 controller acceptance
+
+- Accepted commits: `b8bb579f6`, `55a000a6d`, and comment-only cleanup
+  `650b81d75`.
+- Independent review verdict: ready to merge, with no remaining Critical,
+  Important, or Minor findings.
+- Controller verification after the review fixes: pristine PJSUA, phase3,
+  phase5, and SDK-contract builds all exited 0. PJSUA printed
+  `PJSUA LINK RESULT: PASSED`; phase3 printed its three-lifecycle PASS marker;
+  phase5 printed its lifecycle-1 PASS marker and SIP 486 busy responses; the
+  SDK contract printed its PASS marker. Bounded QEMU runs exited 124 after
+  their observed evidence.
+- Negative configuration check: an intentionally incomplete PJSUA profile
+  resolved `CONFIG_PJSUA=n`, named every missing PJMEDIA dependency, and
+  failed generation rather than reaching an unsafe PJSUA link.
+- A transient phase5 rerun failure was traced to an omitted writable
+  `CCACHE_TEMPDIR`; repeating with the documented environment reproduced the
+  expected harness output. It was not a product-code failure.
+
+## Task 2 start
+
+- Status: in progress.
+- Brief: `task-2-brief.md`.
+- Scope: freeze the PJSUA `5/7/12` compile-time limits, add the future arena
+  sizing control, keep TLS/SRTP disabled, and reject runtime/compile-time
+  capacity mismatches before `pjsua_init()`.
+
+## Task 2 completion
+
+- Status: complete in working tree; implementation/report committed as
+  `feat(pjsua): freeze embedded resource limits`.
+- RED: the assertion-first PJSUA build exited 1 against upstream defaults,
+  reporting `PJSUA_MAX_ACC` 8 versus 5, `PJSUA_MAX_CALLS` 4 versus 7, and
+  `PJSUA_MAX_CONF_PORTS` 254 versus 12. The SRTP/TLS assertions passed.
+- GREEN: clean PJSUA build exited 0; generated Kconfig contains 5/7/12 and
+  `CONFIG_PJSUA_ARENA_BYTES=2097152`. Runtime printed `No SIP worker threads
+  created` and `PJSUA LINK RESULT: PASSED`, then exited 124 after the marker.
+- Regression: phase3 and phase5 builds exited 0; phase3 runtime printed all
+  three lifecycle PASS markers and its final result before timeout 124. The
+  SDK build exited 0 and runtime printed `VOIP SDK CONTRACT RESULT: PASSED`
+  before timeout 124. No final phase5 runtime marker is claimed.
+- Scope: no arena implementation, PJSUA2, TLS/SRTP, source-manifest, or
+  worker-thread changes. Full evidence is in `task-2-report.md`.
