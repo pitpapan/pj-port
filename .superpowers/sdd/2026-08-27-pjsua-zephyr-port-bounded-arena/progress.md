@@ -159,7 +159,8 @@ Task 2: complete (commits 650b81d..ced994f, review clean)
 
 ## Task 3 completion
 
-- Status: implementation and standalone acceptance complete; commit follows.
+- Status: implementation and standalone acceptance complete; implementation
+  commit `6d3ed9125` (report SHA correction `6d2924789`).
 - GREEN build: `PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin CCACHE_DISABLE=1 CMAKE_BUILD_PARALLEL_LEVEL=4 west build -p always -b mps2/an385 /home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration -d /tmp/voip-plan1-task3-green -- -DEXTRA_CONF_FILE=pjsua_arena.conf` exited 0. The image reported FLASH 75724 B / 4 MiB and RAM 3527192 B / 4 MiB (84.09%).
 - Runtime: `PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin west build -d /tmp/voip-plan1-task3-green -t run` from `/home/pitpapan/zephyrproject` printed `PJSUA ARENA RESULT: PASSED (exhaustion, coalescing, 100 cycles)` and then idled in QEMU; the harness session ended after the marker.
 - Coverage: the test allocates varied-size PJ pools to deterministic exhaustion,
