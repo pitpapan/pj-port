@@ -145,4 +145,4 @@ above plus the progress ledger. The Task 3 implementation commit SHA is
 recorded below after commit creation.
 
 - Commit message: `feat(pjlib): add bounded Zephyr pool arena`
-- Commit SHA: pending
+- Commit SHA: `6d3ed9125`
