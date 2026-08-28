@@ -56,9 +56,9 @@ pj_zephyr_sources(PJLIB_PLATFORM_SOURCES pjlib/src/pj
   sock_select.c
 )
 
-# Phase 1 proved that this is the complete initial dependency set required by
-# PJSIP core. DNS, CLI, HTTP, XML, STUN, and extra cryptographic helpers remain
-# outside the base build until a selected feature requires them.
+# Phase 1 proved the unconditional PJLIB-UTIL prerequisites for the PJSIP and
+# PJSUA closure, including its HTTP/XML and crypto helpers. DNS resolvers,
+# legacy STUN helpers, and Base64 remain separately gated by their consumers.
 pj_zephyr_sources(PJLIB_UTIL_SOURCES pjlib-util/src/pjlib-util
   errno.c
   scanner.c
