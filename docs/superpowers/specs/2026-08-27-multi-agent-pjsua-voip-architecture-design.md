@@ -40,6 +40,16 @@ The following decisions are fixed for the first implementation:
 - A queued outgoing request does not create a PJSUA call until promotion.
 - The application may answer or reject an incoming call while it is queued.
 - `Answer()` on a queued call records an answer-on-promotion decision.
+- The public call lifecycle follows
+  `docs/superpowers/specs/state_machine.uml`: `idle`, `initiated`,
+  `established`, `hold`, and `terminated`.
+- Public business state is a projection of a separate internal call phase;
+  queue, SIP, media, and teardown phases are never collapsed into one enum.
+- `hold` carries a reason that distinguishes pre-establishment waiting from
+  negotiated media hold.
+- Terminal snapshots are copied into guaranteed events before cleanup. Cleanup
+  immediately invalidates the call handle and returns the slot to `idle`; there
+  is no terminal-state retention timer.
 - PJSUA-LIB is used through its C API. PJSUA2 is not used initially.
 - One actor thread owns PJSUA and all mutable signaling state.
 - PJSUA worker threads are disabled; the actor drives `pjsua_handle_events()`.
@@ -99,6 +109,22 @@ A public call identified by `CallHandle`. It may be queued without a PJSUA call
 ID, queued with a lightweight incoming PJSUA call ID, or promoted with signaling
 and optionally media resources.
 
+### Business call state
+
+The five-state application-facing projection defined by
+`docs/superpowers/specs/state_machine.uml`. It intentionally hides SIP and
+resource-cleanup phases. `hold` is accompanied by either `waiting` or `media`
+so pre-establishment wait is never mistaken for an established call on media
+hold.
+
+### Internal call phases
+
+The actor-owned `LogicalCallPhase` validates commands and owns domain resources:
+queued incoming/outgoing, promoting, incoming/outgoing, early, established,
+held, disconnecting, and terminal outcomes. `PjsuaCallPhase` separately tracks
+native callback progress inside the adapter. Neither is exposed as the public
+business state or duplicated into another owner.
+
 ### Promoted call
 
 A call occupying one of the two global call-processing slots. The slot is held
@@ -130,6 +156,7 @@ VoipRuntime actor thread
     +-- CallScheduler
     |     +-- PromotedCallPool[2]
     |     +-- PendingCallQueue[5]
+    |     +-- CallStateMachine[7]
     +-- OperationTable[16]
     +-- VoipEventQueue[32]
     +-- VoipResourceGuard
@@ -188,6 +215,10 @@ runtime. No PJPROJECT type appears in a public header.
 ### 7.4 CallScheduler
 
 - Owns the two-slot admission policy and five-entry strict FIFO.
+- Owns seven PJ-independent `CallStateMachine` records through the logical call
+  contexts; each validates exactly the transitions in `state_machine.uml`.
+- Is the single source of public `CallState` and `HoldReason`; PJ-specific
+  contexts report causes and never mirror mutable business state.
 - Enforces one promoted call per agent.
 - Allocates and invalidates logical call handles.
 - Applies queue cancellation and timeout behavior.
@@ -239,6 +270,9 @@ runtime. No PJPROJECT type appears in a public header.
 - Routes incoming-call, call-state, SDP, and media callbacks.
 - Executes scheduler decisions through PJSUA call APIs.
 - Translates PJSUA and SIP results into public status categories.
+- Translates internal call phases and causes into transition requests for the
+  core business-state machine without mirroring mutable public state or using
+  the projection to decide resource ownership.
 - Does not decide admission order.
 
 ### 7.10 PjsuaMediaManager
@@ -329,6 +363,32 @@ struct CallHandle {
 };
 
 using OperationId = std::uint32_t;
+
+enum class CallState : std::uint8_t {
+    idle,
+    initiated,
+    established,
+    hold,
+    terminated,
+};
+
+enum class HoldReason : std::uint8_t {
+    none,
+    waiting,
+    media,
+};
+
+enum class CallTransition : std::uint8_t {
+    initiation,
+    acceptance,
+    rejection,
+    wait,
+    timeout,
+    hold,
+    resume,
+    finish,
+    cleanup,
+};
 
 enum class SignalingSecurity : std::uint8_t {
     none,
@@ -514,6 +574,15 @@ Every event contains a monotonically increasing sequence number. When a
 coalescible event for the same handle is already pending, the newest full
 snapshot replaces it.
 
+Every call-state event carries the copied `CallSnapshot`, the transition
+cause, and the source and destination `CallState`. `HoldReason::waiting` means
+the logical call is waiting before establishment: it may still be in the FIFO
+or may be promoted and awaiting acceptance, but it owns no media bridge.
+`HoldReason::media` means an established promoted call has negotiated media
+hold. The private `LogicalCallPhase`, not `HoldReason`, determines FIFO
+membership and promoted-lease ownership. All other states use
+`HoldReason::none`.
+
 An operation is accepted only after reserving capacity for its terminal event.
 If an external incoming call cannot reserve its incoming-call notification, it
 is rejected with `486 Busy Here` rather than becoming invisible. Capacity for
@@ -571,6 +640,35 @@ outgoing request holds copied URI and dial options but no PJSUA call ID.
 
 ## 14. Call State Machines
 
+The normative application-facing state machine is
+`docs/superpowers/specs/state_machine.uml`:
+
+```text
+idle -> initiated                         initiation
+initiated -> established                  acceptance
+initiated -> terminated                   rejection
+initiated -> hold(waiting)                pre-establishment wait
+initiated -> idle                         initiation/answer timeout
+established -> hold(media)                negotiated hold
+hold(waiting) -> established              promotion and acceptance
+hold(media) -> established                negotiated resume
+established|hold -> terminated            finish/reject/cancel/timeout
+terminated -> idle                        cleanup after terminal publication
+```
+
+`idle` represents an unallocated logical slot and is never observable through
+a valid live `CallHandle`. A direct `initiated -> idle` timeout publishes one
+copied terminal event before invalidation. Entering `terminated` publishes one
+guaranteed terminal snapshot whose state remains `terminated`; the subsequent
+cleanup edge is internal and emits no second call-state event. Cleanup
+immediately invalidates the handle and returns the slot to `idle`. The copied
+event remains readable from `VoipEventQueue`, so no terminal-state retention
+timer or occupied call slot is required.
+
+The business state is not the command-validation or resource-ownership state.
+The following internal phases remain actor-owned and are projected onto the
+business states.
+
 Outgoing:
 
 ```text
@@ -594,13 +692,36 @@ queued_incoming
     -> disconnected | failed | cancelled | timed_out
 ```
 
+Projection rules are explicit:
+
+- Newly admitted calls enter `initiated` before the scheduler decision.
+- FIFO insertion projects to `hold(waiting)`; promotion alone keeps that
+  public state until acceptance, even though private phase/lease ownership
+  changes. It does not imply media hold.
+- Immediately promoted signaling remains `initiated` until remote/local
+  acceptance; a call that previously entered `hold(waiting)` remains there
+  through promotion until acceptance.
+- PJSUA confirmation projects to `established`.
+- Successful hold SDP projects to `hold(media)`; failed hold/resume preserves
+  the prior business state.
+- Rejection, cancellation, failure, or ordinary finish projects to
+  `terminated`, except an initiation/answer timeout may transition directly
+  to `idle` after its guaranteed terminal event is copied.
+- `disconnecting` and quiescent cleanup retain their prior public state until
+  the terminal transition can be published exactly once.
+
 The scheduler releases a promoted slot only after signaling teardown, media
 stop, callback quiescence, future security-context erasure, and resource
 accounting complete.
 
-The terminal event contains the complete final snapshot. The logical handle is
-then invalidated by generation increment. A delayed event may contain the old
-handle, but that handle cannot control a reused slot.
+The terminal event contains the complete final snapshot and transition cause.
+The logical handle is then invalidated by generation increment without a
+retention timer. A delayed event may contain the old handle, but that handle
+cannot control a reused slot.
+
+`CallTransition::cleanup` exists for exhaustive internal/diagnostic traces of
+the UML. It is not enqueued as a second public state event after the guaranteed
+terminal event.
 
 ## 15. Registration
 
@@ -872,6 +993,9 @@ Pure C++ tests cover:
 - Mixed incoming/outgoing ordering
 - Cancellation and timeout removal
 - Answer while queued
+- Exact business-state transitions from `state_machine.uml`
+- `hold(waiting)` versus `hold(media)` command and resource behavior
+- Terminal event publication before immediate handle invalidation/slot reuse
 - Operation completion exactly once
 - Guaranteed event reservation
 - Intermediate event coalescing
@@ -905,6 +1029,8 @@ The PJSUA port milestone must pass before production service integration.
 - Strict FIFO head-of-line behavior
 - Mixed incoming/outgoing FIFO
 - Queued answer, reject, cancel, timeout, and remote CANCEL
+- Public business-state traces for initiation, wait, acceptance, rejection,
+  media hold/resume, finish, timeout, and cleanup
 - BYE, remote rejection, transport loss, and malformed SDP
 - Hold/resume and remote direction changes
 - Correct per-agent audio routing with no cross-agent audio
@@ -941,6 +1067,7 @@ voip/
 |   |   |-- AgentContext.hpp
 |   |   |-- CallScheduler.hpp/.cpp
 |   |   |-- CallContext.hpp
+|   |   |-- CallStateMachine.hpp/.cpp
 |   |   |-- OperationTable.hpp/.cpp
 |   |   |-- VoipEventQueue.hpp/.cpp
 |   |   |-- HandlePool.hpp

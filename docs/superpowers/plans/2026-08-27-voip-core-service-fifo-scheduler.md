@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-27-multi-agent-pjsua-voip-architecture-design.md`
 
+**Business state machine:** `docs/superpowers/specs/state_machine.uml`
+
 ## Global Constraints
 
 - Never inspect, search, index, or modify `zephyr/`.
@@ -19,6 +21,12 @@
 - Allocate no C++ object from the heap after construction or initialization.
 - Preserve strict FIFO head-of-line blocking.
 - Replace callback delivery and `k_work_q` exposure with `TryGetEvent()` and `WaitForEvent()`.
+- Expose only the five business states `idle`, `initiated`, `established`,
+  `hold`, and `terminated`; keep scheduler/PJSUA phases private.
+- Distinguish pre-establishment `hold(waiting)` from negotiated
+  `hold(media)` with `HoldReason`; use private phase for FIFO/lease ownership.
+- Publish the copied terminal transition before immediately invalidating the
+  handle and returning the slot to `idle`; add no terminal-retention timer.
 
 ---
 
@@ -35,9 +43,16 @@
 **Interfaces:**
 
 - Consumes: approved public API in the architecture specification.
-- Produces: `AgentHandle`, `CallHandle`, `OperationId`, `AgentConfig`, `ServiceConfig`, `DialRequest`, snapshots, polling events, `PcmSource`, and `PcmSink`.
+- Produces: `AgentHandle`, `CallHandle`, `OperationId`, `CallState`,
+  `HoldReason`, `CallTransition`, `AgentConfig`, `ServiceConfig`, `DialRequest`,
+  snapshots, polling events, `PcmSource`, and `PcmSink`.
 
 - [ ] Write `PublicContractTest.cpp` first. It must compile a one-agent `ServiceConfig`, verify handles are trivially copyable, verify no public header includes `pjsua`, `pjsip`, or Zephyr workqueue types, and assert all public strings/snapshots have fixed maximum sizes.
+
+- [ ] Assert the public call-state contract contains exactly
+  `CallState::{idle,initiated,established,hold,terminated}` plus
+  `HoldReason::{none,waiting,media}` and the UML transition causes. Verify no
+  queued, SIP, media, or teardown phase is exposed in a public header.
 
 - [ ] Compile against the current headers and confirm failure because `AgentConfig`, `TryGetEvent()`, and `WaitForEvent()` do not exist:
 
@@ -66,6 +81,12 @@
 - [ ] Define `PcmSource::Format()`/`Read()` and `PcmSink::Format()`/`Write()`/`Flush()` as non-blocking `noexcept` methods using fixed `int16_t` frame buffers and timestamps. Document that objects are borrowed from successful initialization through completed shutdown. `Flush()` discards stale playout data without freeing storage.
 
 - [ ] Define `SignalingSecurity::{none,tls}` and `MediaSecurity::{none,srtp_sdes}` now, but accept only `{none,none}` until their build gates exist.
+
+- [ ] Define `CallState`, `HoldReason`, and `CallTransition` exactly as the
+  approved spec. Every `CallSnapshot` carries state and hold reason; every
+  call-state event carries source state, destination state, transition cause,
+  and a copied full snapshot. `cleanup` is recorded only by internal diagnostic
+  traces and does not enqueue a second event after terminal publication.
 
 - [ ] Define `AgentAudioBinding`, `SipAccountConfig`, `AgentConfig`, and `ServiceConfig` exactly as the approved spec, including `conference_format`, queue/answer timeouts, and `register_on_start`.
 
@@ -223,35 +244,92 @@
 **Files:**
 
 - Create: `voip/src/core/CallContext.hpp`
+- Create: `voip/src/core/CallStateMachine.hpp`
+- Create: `voip/src/core/CallStateMachine.cpp`
 - Create: `voip/src/core/CallScheduler.hpp`
 - Create: `voip/src/core/CallScheduler.cpp`
+- Create: `voip/tests/unit/CallStateMachineTest.cpp`
 - Create: `voip/tests/unit/CallSchedulerTest.cpp`
 
 **Interfaces:**
 
 - Consumes: admitted incoming/outgoing logical calls and agent busy state.
-- Produces: seven logical contexts, two promoted leases, one shared five-entry strict FIFO.
+- Produces: seven logical contexts, seven normative business-state machines,
+  two promoted leases, and one shared five-entry strict FIFO.
 
-- [ ] Write table-driven tests for immediate promotion, two different agents active, same-agent queueing, mixed incoming/outgoing order, FIFO full, cancel from middle/head, timeout removal, and repeated promotion after teardown.
+- [ ] Write `CallStateMachineTest.cpp` as a literal transition table covering
+  every edge in `state_machine.uml`, both `hold` reasons, and invalid edges.
+  Prove `acceptance` is valid from `initiated` and `hold(waiting)`, while
+  `resume` is valid only from `hold(media)`. Prove direct initiated timeout and
+  terminated cleanup both return `idle`, but only the former is terminal-event
+  bearing.
+
+- [ ] Write table-driven scheduler tests for immediate promotion, two different
+  agents active, same-agent queueing, mixed incoming/outgoing order, FIFO full,
+  cancel from middle/head, timeout removal, repeated promotion after teardown,
+  and the exact business-state traces from `state_machine.uml`.
 
 - [ ] Add the required head-of-line test: agent A is promoted; queue head targets A; a later entry targets idle B; one global slot is free. Verify B does not bypass A.
 
 - [ ] Confirm tests fail because the scheduler does not exist.
 
-- [ ] Define logical states `queued_outgoing`, `queued_incoming`, `promoting`, `outgoing`, `incoming`, `early`, `established`, `held`, `disconnecting`, and terminal categories. A queued outgoing context stores a copied URI but no native call ID; a queued incoming context may carry an opaque runtime call token.
+- [ ] Define private `LogicalCallPhase` values `queued_outgoing`, `queued_incoming`,
+  `promoting`, `outgoing`, `incoming`, `early`, `established`, `held`,
+  `disconnecting`, and terminal categories. Store one `CallStateMachine`
+  instance in each `CallContext`; do not mirror its `CallState` or
+  `HoldReason` in scheduler or adapter records. A queued outgoing context
+  stores a copied URI but no native call ID; a queued incoming context may
+  carry an opaque runtime call token.
+
+- [ ] Implement the PJ-independent state machine with this private core
+  contract; `Apply()` rejects edges not present in the UML without mutating the
+  previous projection:
+
+  ```cpp
+  struct CallProjection {
+      CallState state;
+      HoldReason hold_reason;
+  };
+
+  struct AppliedCallTransition {
+      CallProjection before;
+      CallProjection after;
+      CallTransition cause;
+      bool terminal_event_required;
+  };
+
+  class CallStateMachine final {
+  public:
+      CallProjection Snapshot() const noexcept;
+      Error Apply(CallTransition,
+                  AppliedCallTransition *) noexcept;
+  };
+  ```
+
+- [ ] Implement one exhaustive phase/cause projector. FIFO insertion produces
+  `hold(waiting)`; promotion alone retains it until acceptance; confirmed
+  signaling produces `established`; successful SDP hold produces
+  `hold(media)`. Never use the five-state projection to decide whether a
+  PJSUA ID, promoted lease, timer, or media bridge exists.
 
 - [ ] Implement `CanPromote(agent)` as `promoted_count < 2 && !agent.promoted_call.IsValid()`. New calls promote immediately only when the FIFO is empty; otherwise append.
 
 - [ ] Implement `OnCapacityChanged()` to inspect only the head and repeatedly promote while eligible. Never scan for another agent.
 
-- [ ] On logical release, remove the FIFO entry if present, release any promoted lease only after a runtime teardown-complete notification, invalidate the handle, then rerun promotion.
+- [ ] On logical release, remove the FIFO entry if present and release any
+  promoted lease only after a runtime teardown-complete notification. Reserve
+  and publish the copied terminal transition first, then invalidate the handle,
+  transition the slot to `idle` without a retention timer, and rerun promotion.
 
-- [ ] Run the unit test and require `CallSchedulerTest PASSED`.
+- [ ] Run both unit tests and require `CallStateMachineTest PASSED` and
+  `CallSchedulerTest PASSED`.
 
 - [ ] Commit:
 
   ```sh
-  git add voip/src/core/CallContext.hpp voip/src/core/CallScheduler.* voip/tests/unit/CallSchedulerTest.cpp
+  git add voip/src/core/CallContext.hpp voip/src/core/CallStateMachine.* \
+    voip/src/core/CallScheduler.* voip/tests/unit/CallStateMachineTest.cpp \
+    voip/tests/unit/CallSchedulerTest.cpp
   git commit -m "feat(voip): add strict shared FIFO scheduler"
   ```
 
@@ -282,6 +360,11 @@
 
 - [ ] Add tests proving one agent never owns two promoted calls and that event polling never invokes callbacks.
 
+- [ ] Add end-to-end trace assertions for initiation, FIFO wait, acceptance,
+  rejection, timeout, media hold/resume, finish, terminal publication, and
+  immediate stale-handle rejection after cleanup. Verify the terminal event
+  remains readable after the handle becomes invalid.
+
 - [ ] Confirm the new contract does not link against the current `VoipService.cpp`.
 
 - [ ] Define `RuntimeAdapter` methods for account initialization, promote outgoing, promote incoming, answer/reject/cancel/hangup/hold, poll native events, begin call teardown, and shutdown. Use opaque integer tokens only; no PJ type crosses into core headers.
@@ -306,9 +389,13 @@
 ## Plan 2 Exit Criteria
 
 - Public API exposes immutable agent/audio initialization, asynchronous control, snapshots, and polling events only.
+- `CallStateMachine` implements every UML edge, rejects every tested invalid
+  edge, and keeps `hold(waiting)` distinct from `hold(media)`.
 - Five agents and seven logical calls are generation safe.
 - Two global promoted slots and one five-entry strict FIFO behave exactly as specified.
 - Same-agent and FIFO head-of-line rules are tested.
 - Every accepted operation owns one terminal-event reservation.
 - `service_stopped` is always deliverable and final.
+- Terminal call events remain readable after immediate handle invalidation and
+  slot return to `idle`.
 - The core passes without linking PJPROJECT or allocating post-init heap objects.

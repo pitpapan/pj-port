@@ -5,14 +5,28 @@ IDLE --> INITIATED : Initiation
 
 INITIATED --> ESTABLISHED : Acceptance
 INITIATED --> TERMINATED : Rejection
-INITIATED --> HOLD : Wait
+INITIATED --> HOLD : Wait / waiting
 INITIATED --> IDLE : Timeout
 
-ESTABLISHED --> HOLD : Hold
-HOLD --> ESTABLISHED : Resume
+ESTABLISHED --> HOLD : Hold / media
+HOLD --> ESTABLISHED : Acceptance [waiting]
+HOLD --> ESTABLISHED : Resume [media]
 
 ESTABLISHED --> TERMINATED : Finish
-HOLD --> TERMINATED : Finish
+HOLD --> TERMINATED : Finish / Rejection / Timeout
 
-TERMINATED --> IDLE : Timeout
+TERMINATED --> IDLE : Cleanup / invalidate handle
+
+note right of HOLD
+  HOLD is a business state with a reason:
+  - waiting: pre-establishment wait
+    (FIFO or promoted pending acceptance)
+  - media: established call placed on hold
+end note
+
+note right of IDLE
+  A transition to IDLE publishes any required
+  terminal event first, then immediately releases
+  the logical slot. No terminal-retention timer.
+end note
 @enduml

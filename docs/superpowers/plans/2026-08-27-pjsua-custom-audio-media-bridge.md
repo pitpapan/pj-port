@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-27-multi-agent-pjsua-voip-architecture-design.md`
 
+**Business state machine:** `docs/superpowers/specs/state_machine.uml`
+
 ## Global Constraints
 
 - Never inspect, search, index, or modify `zephyr/`.
@@ -20,6 +22,9 @@
 - Support only the initialized signed-16 mono conference format in this increment.
 - Do not design codec priority/selection; use PJSUA's negotiated audio stream. Integration validation may use G.711.
 - Use plain RTP/RTCP UDP; keep SRTP disabled but preserve the policy boundary.
+- This plan may produce only `hold(media)` after negotiated hold. It must never
+  interpret or mutate pre-establishment `hold(waiting)`, which belongs to call
+  scheduling/control even after promotion and before acceptance.
 
 ---
 
@@ -189,11 +194,20 @@
 
 - [ ] Add hold tests proving the public hold operation remains pending until successful re-INVITE, failure preserves previous connections/state, and resume flushes the sink before reception reconnects.
 
+- [ ] Assert successful hold projects `established -> hold` with
+  `HoldReason::media`, and successful resume projects `hold -> established`.
+  A context with `HoldReason::waiting` must be rejected before any media or
+  re-INVITE API is invoked.
+
 - [ ] Confirm tests fail because current attach is always bidirectional and operation completion is early.
 
 - [ ] Translate PJSUA/PJMEDIA direction into a desired connection mask. Apply changes idempotently on the actor; tolerate duplicate media-state callbacks.
 
 - [ ] For local hold/resume, keep the operation record until the re-INVITE transaction/call media state confirms the requested direction. On failure publish one operation failure and restore the prior snapshot/connections.
+
+- [ ] Keep private media direction and bridge state independent of the public
+  five-state projection. Update the projection only after negotiated success;
+  failed hold/resume preserves both the prior business state and hold reason.
 
 - [ ] On resume, call `PcmSink::Flush()` before reconnecting `call_port -> custom_port` so held audio is not played late.
 
@@ -256,4 +270,6 @@
 - Both directions connect directly between one call and one custom port; there is no cross-call mixing.
 - Queued calls allocate no RTP/media/bridge resources.
 - Direction, hold/resume, underflow, overflow, failure rollback, and callback quiescence are tested.
+- Only negotiated media hold produces `hold(media)`; the bridge never consumes
+  or mutates pre-establishment `hold(waiting)`.
 - The active path is plain RTP/RTCP; SRTP remains a disabled policy seam.

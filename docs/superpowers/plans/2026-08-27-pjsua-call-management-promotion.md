@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-27-multi-agent-pjsua-voip-architecture-design.md`
 
+**Business state machine:** `docs/superpowers/specs/state_machine.uml`
+
 ## Global Constraints
 
 - Never inspect, search, index, or modify `zephyr/`.
@@ -20,6 +22,13 @@
 - Queued incoming calls receive 180 and retain a PJSUA call ID.
 - Full admission/PJSUA call-ID capacity rejects incoming with 486; queue timeout uses 480.
 - Custom agent audio attachment is deferred to Plan 5; call/media state must expose a clean hook.
+- Keep the five public business states separate from private scheduler/PJSUA
+  phases. `hold(waiting)` is pre-establishment wait, whether queued or promoted
+  pending acceptance; `hold(media)` is negotiated hold.
+- Apply public transitions only through the core `CallStateMachine`; PJSUA
+  callback translation must not duplicate its transition table.
+- Publish one copied terminal transition before immediate handle invalidation
+  and slot return to `idle`; do not retain terminal contexts on a timer.
 
 ---
 
@@ -43,7 +52,12 @@
 
 - [ ] Confirm tests fail because the call context manager is absent.
 
-- [ ] Define each context with fixed storage: logical handle, agent handle, optional PJSUA ID, scheduler state, incoming/outgoing direction, answer-on-promotion flag, local operation IDs, queue/answer deadlines, last copied call snapshot, and teardown/quiescence flags. Store no application-owned audio pointer here.
+- [ ] Define each context with fixed storage: logical handle, agent handle,
+  optional PJSUA ID, private `PjsuaCallPhase`, incoming/outgoing direction,
+  answer-on-promotion flag, local operation IDs, queue/answer deadlines,
+  copied native callback data, and teardown/quiescence flags. Store no public
+  `CallState`, `HoldReason`, application-owned audio pointer, or second business
+  state machine here; the core logical context is the single source.
 
 - [ ] Bind native calls with `pjsua_call_set_user_data(call_id, &stable_context)` only after the logical context is committed. Clear it before releasing the context; verify `pjsua_call_get_user_data()` in callbacks and reject mismatches.
 
@@ -87,6 +101,10 @@
 
 - [ ] Ask `CallScheduler` for immediate promotion or FIFO insertion. A queued entry retains its native ID but no media bridge. Populate the event with full agent/call snapshot and queue position.
 
+- [ ] Project admission through `initiated`; immediate acceptance may continue
+  to `established`, while FIFO insertion publishes `initiated -> hold` with
+  `HoldReason::waiting`. The waiting state must not allocate a media bridge.
+
 - [ ] When the scheduler/PJSUA capacity is full, respond `PJSIP_SC_BUSY_HERE` (486). Do not use 480 for capacity rejection.
 
 - [ ] Run `PjsuaIncomingAdmissionTest` and require all SIP-code and ownership assertions pass.
@@ -120,11 +138,18 @@
 
 - [ ] On `Dial`, validate agent registration, URI, logical capacity, FIFO capacity, operation reservation, and terminal-event reservation. Create the logical handle before returning. Copy the URI into `CallContext`.
 
-- [ ] If queued, complete the dial operation as locally admitted and publish queued state without calling PJSUA. Network establishment remains a later call event.
+- [ ] If queued, complete the dial operation as locally admitted and publish
+  `hold(waiting)` without calling PJSUA. Network establishment remains a later
+  call event.
 
 - [ ] On promotion, build `pjsua_call_setting` with one audio media line, video count zero, no SRTP requirement, and account-specific options; call `pjsua_call_make_call(account_id, &uri, &setting, context, ..., &call_id)` and bind the returned ID.
 
 - [ ] Treat promotion as a state transition, not a second public operation. Map immediate PJ errors to `signaling_failed`, `negotiation_failed`, or `resource_exhausted` without leaking PJ status text containing sensitive values.
+
+- [ ] On promotion, change only private phase and lease ownership; retain
+  `hold(waiting)` until acceptance/confirmation projects directly to
+  `established`. A promotion is not a public resume operation and must not
+  synthesize a `hold -> initiated` edge absent from the UML.
 
 - [ ] Run `PjsuaOutgoingPromotionTest` and require success.
 
@@ -150,6 +175,11 @@
 
 - [ ] Write a state/command matrix covering valid and invalid commands for queued outgoing, queued incoming, incoming, outgoing/early, established, held, disconnecting, and terminal contexts.
 
+- [ ] For every matrix row assert both the private phase and the public
+  projection. In particular, `Answer(hold(waiting))` is valid only for a
+  queued incoming phase, while `SetHeld(false)` is valid only for a promoted
+  held phase with `HoldReason::media`.
+
 - [ ] Add explicit tests: answer queued incoming sets a flag and sends no 200 until promotion; reject queued incoming sends selected 4xx/6xx and removes it; cancel queued outgoing sends no SIP; remote CANCEL wins over queued answer; queue timeout sends 480; promoted answer timeout rejects; hangup sends final PJSUA hangup; hold/unhold call the corresponding PJSUA APIs.
 
 - [ ] Confirm failures against unimplemented controls.
@@ -164,6 +194,10 @@
   - `SetHeld(true)`: `pjsua_call_set_hold2()`; false: `pjsua_call_reinvite2()` with unhold flags.
 
 - [ ] On queued-incoming promotion, send 200 immediately if `answer_on_promotion`; otherwise enter `incoming` and start `answer_timeout_ms`. Queue deadline starts at admission for both directions.
+
+- [ ] A queue or answer timeout publishes its guaranteed terminal transition
+  before cleanup. The context is then invalidated immediately and the copied
+  event remains readable; there is no terminated-context retention timer.
 
 - [ ] Each accepted public operation produces exactly one terminal operation event regardless of later network state. Stale/invalid commands are rejected before allocation.
 
@@ -189,7 +223,7 @@
 - Consumes: `on_call_state`, `on_call_media_state`, remote status/cause.
 - Produces: public snapshots/events and scheduler teardown-complete notification.
 
-- [ ] Write callback-sequence tests for outgoing calling/early/confirmed/disconnected, incoming confirmed, remote rejection, remote CANCEL, transport loss, duplicate callbacks, and a late callback after logical generation reuse.
+- [ ] Write callback-sequence tests for outgoing calling/early/confirmed/disconnected, incoming confirmed, remote rejection, remote CANCEL, transport loss, duplicate callbacks, and a late callback after logical generation reuse. Assert the exact public business-state and cause trace for each sequence.
 
 - [ ] Add the release-order test: disconnected callback arrives while media is not quiescent; the promoted slot remains held. Media stop/quiescence then arrives; native user data is cleared, context released, terminal event queued, and only then does the scheduler promote the FIFO head.
 
@@ -199,9 +233,19 @@
 
 - [ ] Map PJSUA states to product states; classify 3xx–6xx final responses as `remote_rejected`, local/remote cancellation as `cancelled`, timeout as `timed_out`, SDP failure as `negotiation_failed`, and transport failure as `signaling_failed`.
 
+- [ ] Keep PJSUA calling, incoming, early, disconnecting, and quiescence as
+  private phases. Submit confirmation, successful media hold, and successful
+  resume as transition causes to the core `CallStateMachine`. A failed hold or
+  resume submits no transition and preserves the prior public projection.
+
 - [ ] Make terminal publication idempotent. Do not release the promoted lease until signaling is disconnected, media reports stopped, callback counter is zero, and future security cleanup flag is complete.
 
-- [ ] Clear call user data before invalidating the logical handle. Publish one guaranteed terminal call event containing the complete final snapshot, then release/increment generation and invoke scheduler capacity handling.
+- [ ] Clear call user data before invalidating the logical handle. Publish one
+  guaranteed terminal transition containing source state, destination state,
+  cause, outcome, and complete final snapshot; then release/increment the
+  generation, return the slot to `idle` immediately, and invoke scheduler
+  capacity handling. Verify `GetCallSnapshot(old_handle)` already returns
+  `invalid_handle` while the copied event is still pollable.
 
 - [ ] Run `PjsuaCallStateTest` and require success.
 
@@ -238,6 +282,11 @@
 
 - [ ] Verify answer-on-promotion, reject while queued, cancel queued outgoing, remote CANCEL, hold/unhold, and per-agent one-promoted-call invariant.
 
+- [ ] Verify the network scenario produces the normative business trace:
+  initiation, `hold(waiting)` while queued, acceptance to `established`,
+  `hold(media)`/resume where requested, finish or rejection to `terminated`,
+  terminal publication, and immediate cleanup to `idle`.
+
 - [ ] Build and run:
 
   ```sh
@@ -262,7 +311,11 @@
 
 - Incoming calls map account ID to the correct agent and receive visible admission or a final rejection.
 - Queued incoming calls retain early PJSUA state; queued outgoing calls do not allocate/send.
+- PJSUA phases project through the core UML state machine without duplicating
+  or bypassing its transition rules.
 - Exactly two calls can be promoted globally and only one for each agent.
 - Strict shared FIFO and head-of-line blocking are proven at unit and SIP levels.
 - Answer/reject/cancel/hangup/hold and both timeouts behave as specified.
 - Terminal state is published once, and slot reuse waits for signaling/media/callback quiescence.
+- After terminal publication, the old handle is invalid immediately while its
+  copied terminal event remains pollable.

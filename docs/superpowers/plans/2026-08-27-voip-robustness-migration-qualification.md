@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-27-multi-agent-pjsua-voip-architecture-design.md`
 
+**Business state machine:** `docs/superpowers/specs/state_machine.uml`
+
 ## Global Constraints
 
 - Never inspect, search, index, or modify `zephyr/`.
@@ -20,6 +22,11 @@
 - Do not remove the uppercase/legacy product stack in this plan.
 - Remove the lowercase compatibility facade/backend only after replacement parity and acceptance commands pass.
 - No completion claim may rely only on an idle QEMU timeout; require explicit pass markers and measured cleanup.
+- Qualification must cover the exact five-state business projection while
+  independently checking private phase/resource invariants.
+- A terminal transition is copied to the guaranteed event queue before
+  immediate handle invalidation and slot reuse; no terminal-retention timer is
+  permitted.
 
 ---
 
@@ -182,6 +189,13 @@
 - Produces: rollback proof for every owned acquisition/state transition.
 
 - [ ] Enumerate named failure points for arena install, create/init/start, TCP transport, each of five account adds/registers, incoming 180, outgoing make-call, answer/reject/hangup/hold/re-INVITE, media transport, custom port add, each conference connect, disconnect/remove, unregister/delete, and PJSUA destroy.
+
+- [ ] For each call-control failure point record the private phase, projected
+  source/destination `CallState`, transition cause, `HoldReason`, terminal-event
+  reservation, and resource counts. Reject any impossible projection such as
+  `hold(waiting)` owning a media bridge or `hold(media)` lacking a promoted
+  lease; allow private promoted phases while the public state remains
+  `hold(waiting)` pending acceptance.
 
 - [ ] For each point, write expected public error/event, expected reverse cleanup trace, and final resource baseline. Include duplicate, missing, reordered, and late callback variants.
 
@@ -351,6 +365,11 @@
 
 - [ ] Verify worst-case invariants from diagnostics: 5 agents, 7 logical/native contexts, 2 promoted, 5 pending, 2 bridges, one promoted per agent, zero resource drift, and stopped event last.
 
+- [ ] Replay every edge in `state_machine.uml`. Verify FIFO wait and media hold
+  are distinguished, terminal events precede handle invalidation, old handles
+  fail immediately after cleanup, and the copied terminal event remains
+  readable without occupying a logical slot.
+
 - [ ] Mark release `GO` only if every required test passes, target arena remains within budget/thresholds, no post-init general heap use is observed, and plain-security deployment risk is explicitly accepted. Otherwise mark `NO-GO` with the exact failed criterion; do not weaken the architecture automatically.
 
 - [ ] Commit:
@@ -363,6 +382,8 @@
 ## Plan 6 Exit Criteria
 
 - Minimal resource invariants are always enforced without detailed-monitor overhead.
+- Every business-state UML edge and invalid transition is qualified against
+  independent private phase/resource invariants.
 - Detailed PJSUA/arena/stack monitoring is test/qualification-only and compiled out by default.
 - Pressure, concurrency, failures, timeouts, late callbacks, and shutdown are deterministic and bounded.
 - QEMU and approved target qualification meet the 75%/90% arena thresholds and return resources to baseline.
