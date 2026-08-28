@@ -4,6 +4,11 @@
 #include <zephyr/sys/printk.h>
 
 #include <stddef.h>
+#include <stdalign.h>
+#include <stdint.h>
+
+_Static_assert(CONFIG_PJSUA_ARENA_BYTES % alignof(max_align_t) == 0,
+	       "arena capacity must preserve max_align_t alignment");
 
 #define TEST_POOL_COUNT 64
 #define TEST_INCREMENT_BYTES 65536
@@ -47,6 +52,34 @@ static int run_arena_test(void)
 		goto fail_shutdown;
 
 	pj_caching_pool_init(&caching, NULL, 0);
+
+	/* An interior pointer is not a block: reject it without touching metadata. */
+	{
+		void *direct = pj_pool_factory_default_policy.block_alloc(
+			&caching.factory, 4096);
+		struct pj_zephyr_pool_arena_stats before;
+		struct pj_zephyr_pool_arena_stats after;
+
+		if (expect(direct != NULL, "direct callback allocation") != 0)
+			goto fail_caching;
+		pj_zephyr_pool_arena_get_stats(&before);
+		pj_pool_factory_default_policy.block_free(
+			&caching.factory, (uint8_t *)direct + 1, 4096);
+		pj_zephyr_pool_arena_get_stats(&after);
+		if (expect(after.used_bytes == before.used_bytes &&
+			   after.live_blocks == before.live_blocks,
+			   "invalid free leaves allocation live") != 0) {
+			pj_pool_factory_default_policy.block_free(
+				&caching.factory, direct, 4096);
+			goto fail_caching;
+		}
+		pj_pool_factory_default_policy.block_free(&caching.factory, direct,
+							  4096);
+		pj_zephyr_pool_arena_get_stats(&after);
+		if (expect(after.used_bytes == 0 && after.live_blocks == 0,
+			   "valid free recovers direct allocation") != 0)
+			goto fail_caching;
+	}
 
 	/* Deliberately fill the arena with independently sized pool blocks. */
 	while (pool_count < TEST_POOL_COUNT) {
@@ -113,17 +146,22 @@ static int run_arena_test(void)
 			   "split setup allocations") != 0)
 			goto fail_caching;
 		pj_pool_release(middle);
+		middle = NULL;
 		split = pj_pool_create(&caching.factory, "split", pool_sizes[0],
 						       TEST_INCREMENT_BYTES, NULL);
 		if (expect(split != NULL, "split allocation") != 0)
 			goto fail_caching;
 		pj_pool_release(last);
+		last = NULL;
 		pj_zephyr_pool_arena_get_stats(&stats);
-		if (expect(stats.largest_free_block >= pool_sizes[5],
+		if (expect(stats.largest_free_block ==
+				   stats.capacity_bytes - stats.used_bytes,
 			   "split remainder coalesces through following tag") != 0)
 			goto fail_caching;
 		pj_pool_release(split);
+		split = NULL;
 		pj_pool_release(first);
+		first = NULL;
 	}
 	status = pj_zephyr_pool_arena_reset();
 	if (expect(status == PJ_SUCCESS, "reset after split test") != 0)
@@ -148,6 +186,7 @@ static int run_arena_test(void)
 
 	for (i = 0; i < 100; ++i) {
 		unsigned cycle_count = 0;
+		unsigned release_order = i % 3;
 		pj_pool_t *cycle_pools[TEST_POOL_COUNT] = { 0 };
 
 		while (cycle_count < TEST_POOL_COUNT) {
@@ -162,10 +201,31 @@ static int run_arena_test(void)
 		if (expect(cycle_count > 0 && cycle_count < TEST_POOL_COUNT,
 			   "repeat cycle exhaustion") != 0)
 			goto fail_caching;
-		while (cycle_count > 0) {
-			--cycle_count;
-			pj_pool_release(cycle_pools[cycle_count]);
+		if (release_order == 0) {
+			for (unsigned index = 0; index < cycle_count; ++index) {
+				pj_pool_release(cycle_pools[index]);
+				cycle_pools[index] = NULL;
+			}
+		} else if (release_order == 1) {
+			for (unsigned index = cycle_count; index > 0; --index) {
+				pj_pool_release(cycle_pools[index - 1]);
+				cycle_pools[index - 1] = NULL;
+			}
+		} else {
+			for (unsigned index = 0; index < cycle_count; index += 2) {
+				pj_pool_release(cycle_pools[index]);
+				cycle_pools[index] = NULL;
+			}
+			for (unsigned index = 1; index < cycle_count; index += 2) {
+				pj_pool_release(cycle_pools[index]);
+				cycle_pools[index] = NULL;
+			}
 		}
+		pj_zephyr_pool_arena_get_stats(&stats);
+		if (expect(stats.used_bytes == 0 && stats.live_blocks == 0 &&
+			   stats.largest_free_block == stats.capacity_bytes,
+			   "repeat cycle complete recovery before reset") != 0)
+			goto fail_caching;
 		status = pj_zephyr_pool_arena_reset();
 		if (expect(status == PJ_SUCCESS, "repeat cycle reset") != 0)
 			goto fail_caching;

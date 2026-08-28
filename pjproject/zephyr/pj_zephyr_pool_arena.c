@@ -50,6 +50,9 @@ static uint32_t arena_callback_failures;
 #define ARENA_MIN_BLOCK \
 	(ARENA_HEADER_SIZE + ARENA_FOOTER_SIZE + ARENA_ALIGNMENT)
 
+_Static_assert(CONFIG_PJSUA_ARENA_BYTES % ARENA_ALIGNMENT == 0,
+	       "CONFIG_PJSUA_ARENA_BYTES must be max_align_t aligned");
+
 static size_t align_up_size(size_t value)
 {
 	const size_t mask = ARENA_ALIGNMENT - 1;
@@ -82,6 +85,30 @@ static bool valid_block(const struct arena_header *block)
 	return footer->magic == ARENA_MAGIC &&
 	       footer->total_size == block->total_size &&
 	       footer->free == block->free;
+}
+
+/* Find a block by walking only aligned, validated physical block headers. */
+static struct arena_header *find_payload_block(const void *memory)
+{
+	uintptr_t target = (uintptr_t)memory;
+	size_t offset = 0;
+
+	while (offset + ARENA_MIN_BLOCK <= sizeof(arena)) {
+		struct arena_header *block =
+			(struct arena_header *)(arena + offset);
+		uintptr_t payload;
+
+		if (!valid_block(block))
+			return NULL;
+		payload = (uintptr_t)block + ARENA_HEADER_SIZE;
+		if (target == payload)
+			return block;
+		if (target < payload)
+			return NULL;
+		offset += block->total_size;
+	}
+
+	return NULL;
 }
 
 static void write_footer(struct arena_header *block)
@@ -190,11 +217,13 @@ static void arena_block_free(pj_pool_factory *factory, void *memory,
 
 	key = k_spin_lock(&arena_lock);
 	if ((uintptr_t)memory < (uintptr_t)arena + ARENA_HEADER_SIZE ||
-	    (uintptr_t)memory >= (uintptr_t)arena + sizeof(arena))
+	    (uintptr_t)memory >= (uintptr_t)arena + sizeof(arena) -
+		    ARENA_FOOTER_SIZE ||
+	    ((uintptr_t)memory % ARENA_ALIGNMENT) != 0)
 		goto unlock;
 
-	block = (struct arena_header *)((uint8_t *)memory - ARENA_HEADER_SIZE);
-	if (!valid_block(block) || block->free)
+	block = find_payload_block(memory);
+	if (block == NULL || block->free)
 		goto unlock;
 
 	block->free = 1;
@@ -211,7 +240,8 @@ static void arena_block_free(pj_pool_factory *factory, void *memory,
 		struct arena_header *next = (struct arena_header *)
 			((uint8_t *)block + block->total_size);
 		if ((uintptr_t)next < (uintptr_t)arena + sizeof(arena) &&
-		    valid_block(next) && next->free) {
+		    valid_block(next) && next->prev_size == block->total_size &&
+		    next->free) {
 			block->total_size += next->total_size;
 			write_footer(block);
 			next = (struct arena_header *)
@@ -223,11 +253,18 @@ static void arena_block_free(pj_pool_factory *factory, void *memory,
 	}
 
 	/* Boundary tags make the preceding block available without a list. */
-	if (block->prev_size != 0) {
-		struct arena_header *previous = (struct arena_header *)
-			((uint8_t *)block - block->prev_size);
-		if ((uintptr_t)previous >= (uintptr_t)arena &&
-		    valid_block(previous) && previous->free) {
+	if (block->prev_size >= ARENA_MIN_BLOCK &&
+	    block->prev_size <= (uintptr_t)block - (uintptr_t)arena &&
+	    block->prev_size % ARENA_ALIGNMENT == 0) {
+		uintptr_t previous_address =
+			(uintptr_t)block - block->prev_size;
+		struct arena_header *previous =
+			(struct arena_header *)previous_address;
+		if (previous_address >= (uintptr_t)arena &&
+		    valid_block(previous) &&
+		    previous->total_size == block->prev_size &&
+		    previous_address + previous->total_size ==
+			    (uintptr_t)block && previous->free) {
 			previous->total_size += block->total_size;
 			write_footer(previous);
 			block = previous;

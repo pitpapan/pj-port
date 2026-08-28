@@ -173,3 +173,22 @@ Task 2: complete (commits 650b81d..ced994f, review clean)
   block's `prev_size`), adjacent coalescing, checked arithmetic, and a
   `k_spinlock`; all three PJ default-policy callbacks are installed by the
   arena API and allocation has no malloc fallback.
+
+## Task 3 review round 1
+
+- Status: review fixes implemented; focused commit pending.
+- Tests were strengthened before allocator edits with an installed-policy
+  callback free of `payload + 1`, a compile-time arena-capacity alignment
+  assertion, an exact interior-split recovery invariant, and pre-reset
+  `used_bytes == 0`, `live_blocks == 0`, and full-largest-free checks across
+  forward, reverse, and alternating release orders. Released slots are nulled.
+- RED: with the test profile temporarily set to `CONFIG_PJSUA_ARENA_BYTES=2097153`,
+  `PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin CCACHE_DISABLE=1 CMAKE_BUILD_PARALLEL_LEVEL=4 west build -p always -b mps2/an385 /home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration -d /tmp/voip-plan1-task3-align-red -- -DEXTRA_CONF_FILE=pjsua_arena.conf` exited 1 at test compilation with `static assertion failed: "arena capacity must preserve max_align_t alignment"`. The profile was restored to 2097152 before implementation.
+- The pre-fix invalid-offset runtime test completed on QEMU because that ARM
+  configuration tolerated the unaligned load; it verified unchanged stats.
+  The fix now rejects unaligned/non-exact payloads before metadata access.
+- GREEN: `PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin CCACHE_DISABLE=1 CMAKE_BUILD_PARALLEL_LEVEL=4 west build -p always -b mps2/an385 /home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration -d /tmp/voip-plan1-task3-review-green -- -DEXTRA_CONF_FILE=pjsua_arena.conf` exited 0. Runtime `PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin west build -d /tmp/voip-plan1-task3-review-green -t run` printed `PJSUA ARENA RESULT: PASSED (exhaustion, coalescing, 100 cycles)`.
+- Implementation hardens exact payload lookup by aligned validated-chain walk,
+  checks previous boundary-tag bounds/alignment/reciprocity, and rejects
+  non-aligned configured capacities at compile time. Full details are in
+  `task-3-report.md`.

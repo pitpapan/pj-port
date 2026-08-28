@@ -120,8 +120,9 @@ The test specifically covers:
 3. `PJ_EBUSY` reset with live allocations;
 4. alternating frees that preserve fragmentation, then complete adjacent
    coalescing and full recovery;
-5. an interior split followed by freeing the following allocation, proving the
-   repaired `prev_size` enables backward coalescing;
+5. an interior split followed by freeing the following allocation, requiring
+   the exact invariant `largest_free_block == capacity_bytes - used_bytes` and
+   therefore proving the repaired `prev_size` enables backward coalescing;
 6. successful scrub/reinitialize reset; and
 7. 100 cycles of varied-size exhaustion, release, reset, and complete recovery.
 
@@ -146,3 +147,63 @@ recorded below after commit creation.
 
 - Commit message: `feat(pjlib): add bounded Zephyr pool arena`
 - Commit SHA: `6d3ed9125`
+
+## Review round 1 fixes
+
+The review test changes were made before production changes. They add a direct
+installed-policy callback regression for `payload + 1`, a compile-time
+max-alignment contract, the exact interior-split recovery invariant, and
+pre-reset recovery checks with forward, reverse, and alternating release
+orders. Every released test slot is nulled.
+
+The alignment RED build intentionally set the test profile to
+`CONFIG_PJSUA_ARENA_BYTES=2097153`:
+
+```text
+PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin \
+CCACHE_DISABLE=1 CMAKE_BUILD_PARALLEL_LEVEL=4 west build -p always \
+  -b mps2/an385 \
+  /home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration \
+  -d /tmp/voip-plan1-task3-align-red -- -DEXTRA_CONF_FILE=pjsua_arena.conf
+```
+
+It exited 1 at test compilation with:
+
+```text
+error: static assertion failed: "arena capacity must preserve max_align_t alignment"
+```
+
+The profile was restored to the exact 2 MiB capacity before implementation.
+The pre-fix invalid-offset runtime test completed on QEMU because this ARM
+configuration tolerated the unaligned load; the test still verified unchanged
+stats, and the implementation now rejects unaligned/non-exact payloads before
+any candidate metadata is dereferenced.
+
+The review GREEN build was:
+
+```text
+PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin \
+CCACHE_DISABLE=1 CMAKE_BUILD_PARALLEL_LEVEL=4 west build -p always \
+  -b mps2/an385 \
+  /home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration \
+  -d /tmp/voip-plan1-task3-review-green -- -DEXTRA_CONF_FILE=pjsua_arena.conf
+```
+
+It exited 0 with FLASH 76280 B / 4 MiB (1.82%) and RAM 3527192 B / 4 MiB
+(84.09%). Runtime:
+
+```text
+PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin \
+west build -d /tmp/voip-plan1-task3-review-green -t run
+```
+
+printed:
+
+```text
+PJSUA ARENA RESULT: PASSED (exhaustion, coalescing, 100 cycles)
+```
+
+The allocator now walks validated aligned physical blocks to locate an exact
+payload before freeing, validates previous-tag size/alignment/bounds and
+reciprocal adjacency before backward coalescing, and rejects non-aligned
+arena capacities at compile time. `git diff --check` passed before commit.
