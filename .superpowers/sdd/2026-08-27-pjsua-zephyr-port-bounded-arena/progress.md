@@ -118,3 +118,26 @@
   before timeout 124. No final phase5 runtime marker is claimed.
 - Scope: no arena implementation, PJSUA2, TLS/SRTP, source-manifest, or
   worker-thread changes. Full evidence is in `task-2-report.md`.
+
+## Task 2 controller acceptance
+
+- Independent task review found the implementation spec-compliant and ready,
+  with no Critical, Important, or Minor findings.
+- Controller verification reused the unchanged Task 2 build directories rather
+  than performing redundant pristine rebuilds. PJSUA, phase3, phase5, and SDK
+  incremental builds each exited 0 with `ninja: no work to do`.
+- Generated PJSUA configuration contains exactly
+  `CONFIG_PJSUA_MAX_ACCOUNTS=5`, `CONFIG_PJSUA_MAX_CALLS=7`,
+  `CONFIG_PJSUA_MAX_CONF_PORTS=12`, and
+  `CONFIG_PJSUA_ARENA_BYTES=2097152`; SIP TLS, product SRTP, and PJMEDIA SRTP
+  remain unset.
+- Fresh bounded runs printed `No SIP worker threads created` and
+  `PJSUA LINK RESULT: PASSED`, the phase3 three-lifecycle PASS marker, and
+  `VOIP SDK CONTRACT RESULT: PASSED`. Each then exited 124 only when the
+  harness stopped idle QEMU after its required marker.
+- The assertion-first RED command and its expected 8/4/254 failures are
+  preserved in the committed Task 2 report. Replaying that historical RED
+  would require temporarily backing out the accepted mappings, so controller
+  acceptance relies on the recorded TDD evidence plus the fresh GREEN checks.
+
+Task 2: complete (commits 650b81d..ced994f, review clean)
