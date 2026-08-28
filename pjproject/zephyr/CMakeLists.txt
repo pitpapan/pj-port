@@ -37,6 +37,12 @@ if(CONFIG_PJPROJECT AND CONFIG_PJLIB)
   )
   zephyr_library_include_directories(${PJPROJECT_ROOT_DIR}/pjlib/include)
   zephyr_include_directories(${PJPROJECT_ROOT_DIR}/pjlib/include)
+  zephyr_include_directories(${CMAKE_CURRENT_LIST_DIR}/include)
+  if(CONFIG_PJSUA)
+    zephyr_library_sources(
+      ${CMAKE_CURRENT_LIST_DIR}/pj_zephyr_pool_arena.c
+    )
+  endif()
 endif()
 
 if(CONFIG_PJPROJECT AND CONFIG_PJLIB_UTIL)

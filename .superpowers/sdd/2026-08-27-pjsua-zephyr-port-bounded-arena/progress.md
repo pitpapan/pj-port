@@ -141,3 +141,34 @@
   acceptance relies on the recorded TDD evidence plus the fresh GREEN checks.
 
 Task 2: complete (commits 650b81d..ced994f, review clean)
+
+## Task 3 start
+
+- Status: in progress.
+- Scope: add the public bounded PJ pool arena contract, standalone
+  exhaustion/coalescing/reset test profile, and the Zephyr implementation;
+  Task 4 remains responsible for installing the arena from `pjsua_link.c`
+  before `pjsua_create()`.
+- TDD command (test/config only, before adding the allocator source):
+  `PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin CMAKE_BUILD_PARALLEL_LEVEL=4 CCACHE_DISABLE=1 west build -p always -b mps2/an385 /home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration -d /tmp/voip-plan1-task3-red -- -DEXTRA_CONF_FILE=pjsua_arena.conf`
+  run from `/home/pitpapan/zephyrproject`.
+- RED result: build exited 1 at final link with the expected missing symbols
+  `pj_zephyr_pool_arena_install`, `pj_zephyr_pool_arena_get_stats`, and
+  `pj_zephyr_pool_arena_reset` from `pjsua_arena_test.c`; no allocator source
+  existed at this checkpoint.
+
+## Task 3 completion
+
+- Status: implementation and standalone acceptance complete; commit follows.
+- GREEN build: `PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin CCACHE_DISABLE=1 CMAKE_BUILD_PARALLEL_LEVEL=4 west build -p always -b mps2/an385 /home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration -d /tmp/voip-plan1-task3-green -- -DEXTRA_CONF_FILE=pjsua_arena.conf` exited 0. The image reported FLASH 75724 B / 4 MiB and RAM 3527192 B / 4 MiB (84.09%).
+- Runtime: `PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin west build -d /tmp/voip-plan1-task3-green -t run` from `/home/pitpapan/zephyrproject` printed `PJSUA ARENA RESULT: PASSED (exhaustion, coalescing, 100 cycles)` and then idled in QEMU; the harness session ended after the marker.
+- Coverage: the test allocates varied-size PJ pools to deterministic exhaustion,
+  checks failed allocation accounting and `NULL` expansion OOM, rejects reset
+  with live blocks, checks alternating-free fragmentation and full coalescing,
+  exercises an interior split followed by backward coalescing, verifies reset
+  recovery, and repeats varied exhaustion/recovery for 100 cycles.
+- Design: a single aligned static byte arena uses aligned first-fit blocks,
+  header/footer boundary tags, split remainder repair (including the following
+  block's `prev_size`), adjacent coalescing, checked arithmetic, and a
+  `k_spinlock`; all three PJ default-policy callbacks are installed by the
+  arena API and allocation has no malloc fallback.
