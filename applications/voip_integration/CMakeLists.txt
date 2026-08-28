@@ -42,3 +42,6 @@ target_sources_ifdef(CONFIG_VOIP_SRTP_KEY_TEST app PRIVATE
 target_sources_ifdef(CONFIG_VOIP_SRTP_CALL_TEST app PRIVATE
   src/phase5_call.cpp
 )
+target_sources_ifdef(CONFIG_VOIP_PJSUA_LINK_TEST app PRIVATE
+  src/pjsua_link.c
+)

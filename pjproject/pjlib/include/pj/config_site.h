@@ -6,8 +6,7 @@
 
 /* Keep optional facilities outside the initial PJLIB-only scope disabled. */
 #define PJ_HAS_FLOATING_POINT               0
-#define PJ_HAS_SSL_SOCK                     1
-#define PJ_SSL_SOCK_IMP PJ_SSL_SOCK_IMP_MBEDTLS
+#define PJ_HAS_SSL_SOCK                     0
 
 /* These implementations correspond to the explicit Zephyr source set. */
 #define PJ_IOQUEUE_IMP                      PJ_IOQUEUE_IMP_SELECT

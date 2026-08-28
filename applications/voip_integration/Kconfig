@@ -50,4 +50,24 @@ config VOIP_SRTP_CALL_TEST
 	bool "SIP-controlled mandatory SRTP/SDES call validation"
 	depends on VOIP_PJ_SRTP_SIGNALING
 
+config VOIP_PJSUA_LINK_TEST
+	bool "PJSUA-LIB link closure validation"
+	depends on PJSUA
+
+config VOIP_SIP_TLS
+	bool "VoIP SIP TLS"
+	depends on PJSIP
+	default n
+	help
+	  Reserved signaling-security policy gate; TLS remains disabled in the
+	  initial PJSUA-LIB profile.
+
+config VOIP_SRTP
+	bool "VoIP SRTP media"
+	depends on PJMEDIA
+	default n
+	help
+	  Reserved media-security policy gate; SRTP remains disabled in the
+	  initial PJSUA-LIB profile.
+
 endmenu

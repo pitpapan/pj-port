@@ -134,9 +134,17 @@ pj_status_t pjsua_media_subsys_init(const pjsua_media_config *cfg)
         goto on_error;
 #endif
 
-    /* Create event manager */
+    /* Create event manager.  A zero-thread media endpoint shares the
+     * caller's event loop, so its manager must not start a worker either. */
     if (!pjmedia_event_mgr_instance()) {
-        status = pjmedia_event_mgr_create(pjsua_var.pool, 0, NULL);
+        unsigned event_mgr_options = 0;
+        if (pjsua_var.media_cfg.thread_cnt == 0 &&
+            !pjsua_var.media_cfg.has_ioqueue)
+        {
+            event_mgr_options = PJMEDIA_EVENT_MGR_NO_THREAD;
+        }
+        status = pjmedia_event_mgr_create(pjsua_var.pool,
+                                          event_mgr_options, NULL);
         if (status != PJ_SUCCESS) {
             pjsua_perror(THIS_FILE, "Error creating PJMEDIA event manager",
                          status);
@@ -4803,4 +4811,3 @@ pj_status_t pjsua_media_apply_xml_control(pjsua_call_id call_id,
 
     return PJ_ENOTSUP;
 }
-

@@ -64,6 +64,13 @@ pj_zephyr_sources(PJLIB_UTIL_SOURCES pjlib-util/src/pjlib-util
   scanner.c
   string.c
   md5.c
+  crc32.c
+  hmac_sha1.c
+  sha1.c
+  http_client.c
+  xml.c
+  stun_simple_client.c
+  stun_simple.c
 )
 
 pj_zephyr_sources(PJLIB_UTIL_DNS_RESOLVER_SOURCES pjlib-util/src/pjlib-util
@@ -198,3 +205,37 @@ pj_zephyr_sources(PJSIP_INVITE_SOURCES pjsip/src/pjsip-ua
 pj_zephyr_sources(PJSIP_REGC_SOURCES pjsip/src/pjsip-ua
   sip_reg.c
 )
+
+pj_zephyr_sources(PJNATH_SOURCES pjnath/src/pjnath
+  errno.c ice_session.c ice_strans.c nat_detect.c stun_auth.c
+  stun_msg.c stun_msg_dump.c stun_session.c stun_sock.c
+  stun_transaction.c turn_session.c turn_sock.c upnp.c)
+
+pj_zephyr_sources(PJSIP_UA_SOURCES pjsip/src/pjsip-ua
+  sip_inv.c sip_reg.c sip_replaces.c sip_xfer.c
+  sip_100rel.c sip_timer.c sip_siprec.c)
+
+pj_zephyr_sources(PJSIP_SIMPLE_SOURCES pjsip/src/pjsip-simple
+  errno.c evsub.c evsub_msg.c iscomposing.c mwi.c pidf.c
+  dialog_info.c presence.c dlg_event.c presence_body.c
+  publishc.c rpid.c xpidf.c)
+
+pj_zephyr_sources(PJSUA_SOURCES pjsip/src/pjsua-lib
+  pjsua_acc.c pjsua_aud.c pjsua_call.c pjsua_core.c pjsua_dump.c
+  pjsua_im.c pjsua_media.c pjsua_pres.c pjsua_txt.c pjsua_vid.c)
+
+pj_zephyr_sources(PJMEDIA_PJSUA_SOURCES pjmedia/src/pjmedia
+  audiodev.c bidirectional.c clock_thread.c conference.c converter.c
+  delaybuf.c echo_common.c echo_port.c echo_suppress.c master_port.c
+  mem_capture.c mem_player.c null_port.c resample_port.c session.c
+  sound_port.c splitcomb.c stereo_port.c tonegen.c transport_ice.c
+  txt_stream.c wav_player.c wav_playlist.c wav_writer.c wave.c)
+
+pj_zephyr_sources(PJMEDIA_PJSUA_RESAMPLE_SOURCES pjmedia/src/pjmedia
+  resample_resample.c)
+
+pj_zephyr_sources(PJMEDIA_PJSUA_CODEC_SOURCES pjmedia/src/pjmedia-codec
+  audio_codecs.c)
+
+pj_zephyr_sources(PJMEDIA_AUDIODEV_SOURCES pjmedia/src/pjmedia-audiodev
+  audiodev.c errno.c null_dev.c)

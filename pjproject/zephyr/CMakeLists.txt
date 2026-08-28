@@ -17,6 +17,10 @@ endfunction()
 
 include(${CMAKE_CURRENT_LIST_DIR}/sources.cmake)
 
+if(CONFIG_PJPROJECT AND CONFIG_PJNATH)
+  zephyr_include_directories(${PJPROJECT_ROOT_DIR}/pjnath/include)
+endif()
+
 # Keep feature-to-source wiring compact while leaving the audited source
 # manifests in sources.cmake as the single source of truth.
 macro(pj_zephyr_add_sources_ifdef config source_variable)
@@ -40,8 +44,9 @@ if(CONFIG_PJPROJECT AND CONFIG_PJLIB_UTIL)
 
   zephyr_library_named(pjlib-util)
   zephyr_library_sources(${PJLIB_UTIL_SOURCES})
-  pj_zephyr_add_sources_ifdef(CONFIG_PJLIB_UTIL_DNS_RESOLVER
-    PJLIB_UTIL_DNS_RESOLVER_SOURCES)
+  if(CONFIG_PJLIB_UTIL_DNS_RESOLVER OR CONFIG_PJSUA)
+    zephyr_library_sources(${PJLIB_UTIL_DNS_RESOLVER_SOURCES})
+  endif()
   pj_zephyr_add_sources_ifdef(CONFIG_PJMEDIA_SRTP_TRANSPORT
     PJLIB_UTIL_BASE64_SOURCES)
   zephyr_library_include_directories(
@@ -80,6 +85,14 @@ if(CONFIG_PJPROJECT AND CONFIG_PJMEDIA)
       pj_zephyr_add_sources_ifdef(CONFIG_PJMEDIA_${feature}
         PJMEDIA_${feature}_SOURCES)
     endforeach()
+    if(CONFIG_PJSUA)
+      zephyr_library_sources(${PJMEDIA_PJSUA_SOURCES})
+      zephyr_library_sources(${PJMEDIA_PJSUA_RESAMPLE_SOURCES})
+      zephyr_library_sources(${PJMEDIA_PJSUA_CODEC_SOURCES})
+    endif()
+    if(CONFIG_PJMEDIA_AUDIODEV)
+      zephyr_library_sources(${PJMEDIA_AUDIODEV_SOURCES})
+    endif()
     if(CONFIG_PJMEDIA_SRTP)
       zephyr_library_named(srtp)
       zephyr_library_sources(${PJMEDIA_SRTP_SOURCES})
@@ -111,10 +124,16 @@ if(CONFIG_PJPROJECT AND CONFIG_PJSIP)
 
   zephyr_library_named(pjsip)
   zephyr_library_sources(${PJSIP_CORE_SOURCES})
-  foreach(feature IN ITEMS UDP_TRANSPORT TCP_TRANSPORT INVITE REGC)
+  foreach(feature IN ITEMS UDP_TRANSPORT TCP_TRANSPORT)
     pj_zephyr_add_sources_ifdef(CONFIG_PJSIP_${feature}
       PJSIP_${feature}_SOURCES)
   endforeach()
+  if(NOT CONFIG_PJSIP_UA)
+    foreach(feature IN ITEMS INVITE REGC)
+      pj_zephyr_add_sources_ifdef(CONFIG_PJSIP_${feature}
+        PJSIP_${feature}_SOURCES)
+    endforeach()
+  endif()
   zephyr_library_include_directories(
     ${PJPROJECT_ROOT_DIR}/pjsip/include
     ${PJPROJECT_ROOT_DIR}/pjlib-util/include
@@ -128,4 +147,55 @@ if(CONFIG_PJPROJECT AND CONFIG_PJSIP)
     )
     target_link_libraries(pjsip PUBLIC pjmedia)
   endif()
+endif()
+
+if(CONFIG_PJPROJECT AND CONFIG_PJNATH)
+  message(STATUS "PJPROJECT Zephyr module: PJNATH enabled")
+  zephyr_library_named(pjnath)
+  zephyr_library_sources(${PJNATH_SOURCES})
+  zephyr_library_include_directories(
+    ${PJPROJECT_ROOT_DIR}/pjnath/include
+    ${PJPROJECT_ROOT_DIR}/pjlib-util/include
+    ${PJPROJECT_ROOT_DIR}/pjlib/include
+  )
+  target_link_libraries(pjnath PUBLIC pjlib-util pjlib)
+endif()
+
+if(CONFIG_PJPROJECT AND CONFIG_PJSIP_SIMPLE)
+  message(STATUS "PJPROJECT Zephyr module: PJSIP SIMPLE enabled")
+  zephyr_library_named(pjsip-simple)
+  zephyr_library_sources(${PJSIP_SIMPLE_SOURCES})
+  zephyr_library_include_directories(
+    ${PJPROJECT_ROOT_DIR}/pjsip/include
+    ${PJPROJECT_ROOT_DIR}/pjlib-util/include
+    ${PJPROJECT_ROOT_DIR}/pjlib/include
+  )
+  target_link_libraries(pjsip-simple PUBLIC pjsip pjlib-util pjlib)
+endif()
+
+if(CONFIG_PJPROJECT AND CONFIG_PJSIP_UA)
+  message(STATUS "PJPROJECT Zephyr module: PJSIP-UA enabled")
+  zephyr_library_named(pjsip-ua)
+  zephyr_library_sources(${PJSIP_UA_SOURCES})
+  zephyr_library_include_directories(
+    ${PJPROJECT_ROOT_DIR}/pjsip/include
+    ${PJPROJECT_ROOT_DIR}/pjmedia/include
+    ${PJPROJECT_ROOT_DIR}/pjlib-util/include
+    ${PJPROJECT_ROOT_DIR}/pjlib/include
+  )
+  target_link_libraries(pjsip-ua PUBLIC pjsip-simple pjsip pjmedia)
+endif()
+
+if(CONFIG_PJPROJECT AND CONFIG_PJSUA)
+  message(STATUS "PJPROJECT Zephyr module: PJSUA-LIB enabled")
+  zephyr_library_named(pjsua)
+  zephyr_library_sources(${PJSUA_SOURCES})
+  zephyr_library_include_directories(
+    ${PJPROJECT_ROOT_DIR}/pjsip/include
+    ${PJPROJECT_ROOT_DIR}/pjmedia/include
+    ${PJPROJECT_ROOT_DIR}/pjnath/include
+    ${PJPROJECT_ROOT_DIR}/pjlib-util/include
+    ${PJPROJECT_ROOT_DIR}/pjlib/include
+  )
+  target_link_libraries(pjsua PUBLIC pjsip-ua pjsip-simple pjsip pjmedia pjnath)
 endif()

@@ -270,4 +270,32 @@ config PJSIP_TCP_TRANSPORT
 	  Compile the IPv4 TCP SIP transport. Runtime validation belongs to a
 	  later porting phase.
 
+config PJNATH
+	bool "PJNATH"
+	depends on PJLIB_UTIL && PJLIB
+	default n
+	help
+	  Enable the explicit PJNATH/ICE/UPnP link closure used by PJSUA.
+
+config PJSIP_SIMPLE
+	bool "PJSIP SIMPLE"
+	depends on PJSIP && PJLIB_UTIL && PJLIB
+	default n
+	help
+	  Enable the explicit PJSIP SIMPLE event and presence link closure.
+
+config PJSIP_UA
+	bool "PJSIP user-agent extensions"
+	depends on PJSIP_SIMPLE && PJSIP && PJMEDIA
+	default n
+	help
+	  Enable the full PJSIP-UA extension boundary used by PJSUA-LIB.
+
+config PJSUA
+	bool "PJSUA-LIB"
+	depends on PJNATH && PJSIP_SIMPLE && PJSIP_UA && PJMEDIA
+	default n
+	help
+	  Enable the PJSUA-LIB C API and its explicit SIP, media, and NAT closure.
+
 endif # PJPROJECT
