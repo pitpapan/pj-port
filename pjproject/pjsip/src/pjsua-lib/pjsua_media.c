@@ -134,15 +134,17 @@ pj_status_t pjsua_media_subsys_init(const pjsua_media_config *cfg)
         goto on_error;
 #endif
 
-    /* Create event manager.  A zero-thread media endpoint shares the
+    /* Create event manager.  Zephyr's zero-thread media endpoint shares the
      * caller's event loop, so its manager must not start a worker either. */
     if (!pjmedia_event_mgr_instance()) {
         unsigned event_mgr_options = 0;
+#if defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0
         if (pjsua_var.media_cfg.thread_cnt == 0 &&
             !pjsua_var.media_cfg.has_ioqueue)
         {
             event_mgr_options = PJMEDIA_EVENT_MGR_NO_THREAD;
         }
+#endif
         status = pjmedia_event_mgr_create(pjsua_var.pool,
                                           event_mgr_options, NULL);
         if (status != PJ_SUCCESS) {

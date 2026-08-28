@@ -58,7 +58,7 @@ pj_zephyr_sources(PJLIB_PLATFORM_SOURCES pjlib/src/pj
 
 # Phase 1 proved that this is the complete initial dependency set required by
 # PJSIP core. DNS, CLI, HTTP, XML, STUN, and extra cryptographic helpers remain
-# outside the build until a selected feature requires them.
+# outside the base build until a selected feature requires them.
 pj_zephyr_sources(PJLIB_UTIL_SOURCES pjlib-util/src/pjlib-util
   errno.c
   scanner.c
@@ -69,6 +69,11 @@ pj_zephyr_sources(PJLIB_UTIL_SOURCES pjlib-util/src/pjlib-util
   sha1.c
   http_client.c
   xml.c
+)
+
+# PJSUA's media initialization uses the simple STUN client helpers even when
+# STUN is disabled at runtime. Keep them out of minimal PJLIB-UTIL profiles.
+pj_zephyr_sources(PJLIB_UTIL_PJSUA_SOURCES pjlib-util/src/pjlib-util
   stun_simple_client.c
   stun_simple.c
 )

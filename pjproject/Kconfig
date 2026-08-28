@@ -294,6 +294,9 @@ config PJSIP_UA
 config PJSUA
 	bool "PJSUA-LIB"
 	depends on PJNATH && PJSIP_SIMPLE && PJSIP_UA && PJMEDIA
+	depends on PJMEDIA_SDP && PJMEDIA_SDP_NEG && PJMEDIA_ENDPOINT
+	depends on PJMEDIA_G711 && PJMEDIA_RTP_RTCP && PJMEDIA_UDP_TRANSPORT
+	depends on PJMEDIA_STREAM && PJMEDIA_AUDIODEV
 	default n
 	help
 	  Enable the PJSUA-LIB C API and its explicit SIP, media, and NAT closure.

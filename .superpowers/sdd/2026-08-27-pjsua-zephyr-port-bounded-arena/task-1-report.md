@@ -5,9 +5,12 @@
 Task 1 is complete on `codex/pjsua-port-plan1`. The Zephyr PJPROJECT port now
 builds four distinct libraries (`pjnath`, `pjsip-simple`, `pjsip-ua`, and
 `pjsua`) with explicit source lists and links the C `<pjsua-lib/pjsua.h>`
-probe. The probe uses no SIP or media worker threads, disables STUN/TURN/ICE/
-UPnP at runtime, uses the null sound device, and prints the required pass
-marker. TLS, SRTP, video, and host audio backends remain disabled.
+probe. The probe uses no SIP worker threads, selects the Zephyr no-thread
+PJMEDIA event-manager path, disables STUN/TURN/ICE/UPnP at runtime, uses the
+null sound device, and prints the required pass marker. TLS, SRTP, video, and
+host audio backends remain disabled. PJSUA now declares its mandatory PJMEDIA
+closure in Kconfig, while the two PJSUA-only STUN helper sources remain out of
+minimal PJLIB-UTIL profiles.
 
 ## Exact files
 
@@ -59,7 +62,9 @@ references to `pjmedia_resample_create`, `pjmedia_resample_destroy`,
 `pjmedia_resample_run`, `pjmedia_audio_codec_config_default`, and
 `pjmedia_codec_register_audio_codecs`; those two files are retained as
 explicit PJSUA media closure dependencies. No glob or broad source expansion
-was added.
+was added. The STUN helpers now live in the PJSUA-gated
+`PJLIB_UTIL_PJSUA_SOURCES` family rather than the unconditional PJLIB-UTIL
+list.
 
 ## GREEN evidence
 
@@ -100,6 +105,88 @@ the default MWI module path aborted an empty-account lifecycle during
 `pjsua_start()`; disabling it is appropriate for this account-free link
 probe and leaves presence APIs in the linked closure.
 
+## Review-fix GREEN and regressions
+
+The valid `pjsua_link.conf` was rebuilt after the review fixes with the same
+absolute application/config pattern above (build directory
+`/tmp/voip-plan1-pjsua-review`): it exited 0, generated the four PJSUA-related
+libraries, and reported FLASH 525280 B / RAM 3746104 B. Its bounded QEMU run
+exited 124 after idle QEMU, after printing both `No SIP worker threads
+created` and `PJSUA LINK RESULT: PASSED`. This is a Zephyr compile/runtime
+check of the gated `pjsua_media.c` path. The code-path check is intentionally
+limited: it does not enumerate PJMEDIA threads; Task 4 owns explicit thread
+enumeration/qualification.
+
+The non-Zephyr behavior is preserved by the preprocessor guard
+`defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0`; non-Zephyr builds retain the upstream
+zero event-manager options. No non-Zephyr build was required for this Zephyr
+port review.
+
+The PJSUA helper relocation was checked against the minimal profiles below:
+their PJLIB-UTIL build output contains no `stun_simple_client.c` or
+`stun_simple.c`, while the full PJSUA build compiles both from the gated
+family. The full PJSUA build also compiled the helper and linked successfully.
+
+Minimal-profile commands and results:
+
+```sh
+env PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin \
+  CCACHE_DIR=/tmp/voip-plan1-ccache \
+  CCACHE_TEMPDIR=/tmp/voip-plan1-ccache-tmp \
+  /home/pitpapan/zephyrproject/.venv/bin/west build -p always -b mps2/an385 \
+  /home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration \
+  -d /tmp/voip-plan1-phase3-clean -- \
+  -DEXTRA_CONF_FILE=/home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration/phase3_account.conf
+
+env PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin \
+  CCACHE_DIR=/tmp/voip-plan1-ccache \
+  CCACHE_TEMPDIR=/tmp/voip-plan1-ccache-tmp \
+  /home/pitpapan/zephyrproject/.venv/bin/west build -p always -b mps2/an385 \
+  /home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration \
+  -d /tmp/voip-plan1-phase5-call -- \
+  -DEXTRA_CONF_FILE=/home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration/phase5_call.conf
+```
+
+Both builds exited 0. Phase 3 generated FLASH 170196 B / RAM 560240 B and
+its bounded run emitted `VOIP INTEGRATION PHASE 3 RESULT: PASSED (3 account
+lifecycles)`, then exited 124 after idle QEMU. Phase 5 generated FLASH
+257948 B / RAM 642088 B. Its bounded 30-second run emitted
+`[Phase 5] lifecycle 1 TCP call-control matrix: PASSED`, showed SIP 486
+responses for the busy-call path, and exited 124 while the harness continued
+its later lifecycle; this existing harness does not reach its final marker
+within the 30-second bound.
+
+The generated minimal-profile ownership evidence has no duplicate translation
+units: phase 3's `pjsip` archive contains `sip_reg.c`; phase 5's `pjsip`
+archive contains `sip_inv.c` and `sip_reg.c`. With `CONFIG_PJSIP_UA=y`, the
+PJSIP CMake branch omits both feature families from `pjsip` and the full build
+places them only in `pjsip-ua` (the review build output showed
+`CMakeFiles/pjsip-ua.dir/.../sip_inv.c.obj` and `sip_reg.c.obj`).
+
+No `PJSUA2`, TLS, SRTP, or source glob was introduced.
+
+The Kconfig contract RED used `/tmp/voip-plan1-incomplete.conf`, setting
+`CONFIG_PJSUA=y` while disabling SDP negotiation, endpoint, G.711, RTP/RTCP,
+UDP transport, stream, and audio-device gates. Before the dependency fix, the
+same profile reached final link and exited 1 on missing PJMEDIA symbols. With
+the fix, it exited 1 during Kconfig/CMake generation: Kconfig reported
+`PJSUA` assigned `y` but resolved `n`, naming each missing mandatory gate, and
+the application target had no sources. This is the expected configuration
+failure rather than an unsafe link attempt.
+
+The exact post-fix guard command was:
+
+```sh
+env PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin \
+  CCACHE_DIR=/tmp/voip-plan1-ccache \
+  CCACHE_TEMPDIR=/tmp/voip-plan1-ccache-tmp \
+  /home/pitpapan/zephyrproject/.venv/bin/west build -p always \
+  -b mps2/an385 \
+  /home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration \
+  -d /tmp/voip-plan1-incomplete-green -- \
+  -DEXTRA_CONF_FILE=/tmp/voip-plan1-incomplete.conf
+```
+
 ## Regression evidence
 
 Pristine SDK contract build:
@@ -111,7 +198,7 @@ env PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin \
   /home/pitpapan/zephyrproject/.venv/bin/west build -p always \
   -b mps2/an385 \
   /home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration \
-  -d /tmp/voip-plan1-sdk-contract -- \
+  -d /tmp/voip-plan1-sdk-clean -- \
   -DEXTRA_CONF_FILE=/home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration/sdk_contract.conf
 ```
 
@@ -122,7 +209,7 @@ env PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin \
   CCACHE_DIR=/tmp/voip-plan1-ccache \
   CCACHE_TEMPDIR=/tmp/voip-plan1-ccache-tmp \
   timeout 30s /home/pitpapan/zephyrproject/.venv/bin/west build \
-  -d /tmp/voip-plan1-sdk-contract -t run
+  -d /tmp/voip-plan1-sdk-clean -t run
 ```
 
 Result: `VOIP SDK CONTRACT RESULT: PASSED`; QEMU idled afterward and the
@@ -133,11 +220,15 @@ bounded command returned 124.
 - INVITE/REGC sources remain available to minimal profiles, but ownership
   moves to `pjsip-ua` whenever that full boundary is selected, preventing
   duplicate translation units.
-- The `pjsua_media.c` change is minimal and necessary: with
+- The `pjsua_media.c` change is minimal and Zephyr-only: with
   `thread_cnt == 0` and no media ioqueue it passes
   `PJMEDIA_EVENT_MGR_NO_THREAD`, avoiding an otherwise-created PJMEDIA event
-  worker. The final runtime confirms the lifecycle reaches RUNNING without
-  worker-thread creation.
+  worker. The successful Zephyr lifecycle and `No SIP worker threads created`
+  log prove the selected code path and lifecycle; they do not enumerate
+  PJMEDIA workers. Task 4 owns that explicit thread proof.
+- `CONFIG_PJSUA` now depends on every PJMEDIA gate required by the linked
+  PJSUA closure, instead of permitting an incomplete configuration to reach
+  link. The required closure is expressed with `depends on`, not `select`.
 - `config_site.h` keeps `PJMEDIA_HAS_VIDEO=0`, `PJMEDIA_HAS_SRTP=0`,
   `PJSIP_HAS_TLS_TRANSPORT=0`, and all host audio backends at zero. Runtime
   STUN/TURN/ICE/UPnP settings are disabled in `pjsua_link.c`.

@@ -47,6 +47,7 @@ if(CONFIG_PJPROJECT AND CONFIG_PJLIB_UTIL)
   if(CONFIG_PJLIB_UTIL_DNS_RESOLVER OR CONFIG_PJSUA)
     zephyr_library_sources(${PJLIB_UTIL_DNS_RESOLVER_SOURCES})
   endif()
+  pj_zephyr_add_sources_ifdef(CONFIG_PJSUA PJLIB_UTIL_PJSUA_SOURCES)
   pj_zephyr_add_sources_ifdef(CONFIG_PJMEDIA_SRTP_TRANSPORT
     PJLIB_UTIL_BASE64_SOURCES)
   zephyr_library_include_directories(

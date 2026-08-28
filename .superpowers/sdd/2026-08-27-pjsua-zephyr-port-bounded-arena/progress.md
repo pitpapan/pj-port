@@ -54,3 +54,23 @@
 - Runtime: PJSUA lifecycle printed `PJSUA LINK RESULT: PASSED` and `No SIP worker threads created`; the bounded 30-second QEMU run exited 124 after the marker while idle.
 - Regression: pristine `sdk_contract.conf` build exited 0 and its bounded run printed `VOIP SDK CONTRACT RESULT: PASSED`, then exited 124 on the idle-QEMU timeout.
 - Scope note: Task 2 limits/assertions, Task 3 arena, and later lifecycle/capacity tests remain intentionally untouched.
+
+## Task 1 review-fix ledger
+
+- Status: review fixes complete on `codex/pjsua-port-plan1`; original commit
+  `b8bb579f6` is preserved and the focused fix is committed separately.
+- `pjsua_media.c` now selects `PJMEDIA_EVENT_MGR_NO_THREAD` only under
+  `defined(PJ_ZEPHYR) && PJ_ZEPHYR!=0`; the Zephyr build/runtime lifecycle
+  passed, while the report limits the evidence to code-path plus lifecycle
+  proof pending Task 4's explicit PJMEDIA thread enumeration.
+- `CONFIG_PJSUA` now depends on PJMEDIA SDP, SDP negotiation, endpoint, G.711,
+  RTP/RTCP, UDP transport, stream, and audio-device gates. An incomplete
+  profile first reproduced link RED, then was rejected during Kconfig/CMake
+  generation after the fix.
+- Moved `stun_simple_client.c` and `stun_simple.c` into the explicit
+  `PJLIB_UTIL_PJSUA_SOURCES` family; minimal phase3/phase5 profiles built
+  without those files and the full PJSUA profile built with them.
+- Expanded regressions: phase3 account/regc build exited 0 and runtime printed
+  its PASS marker before timeout 124; phase5 INVITE+REGC build exited 0 and
+  runtime printed its lifecycle PASS marker and SIP 486 responses before its
+  30-second timeout 124; SDK contract evidence remains above.
