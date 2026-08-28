@@ -193,3 +193,23 @@ Task 2: complete (commits 650b81d..ced994f, review clean)
   checks previous boundary-tag bounds/alignment/reciprocity, and rejects
   non-aligned configured capacities at compile time. Full details are in
   `task-3-report.md`.
+
+## Task 3 controller acceptance
+
+- Independent review round 1 identified four Important findings: unsafe
+  interpretation of invalid free pointers, missing configured-capacity
+  alignment enforcement, and two false-positive recovery assertions. Focused
+  commit `c52645616` resolves all four; re-review found no remaining Critical,
+  Important, or Minor issues and declared Task 3 compliant and ready.
+- Controller incremental build of `/tmp/voip-plan1-task3-green` exited 0 after
+  rebuilding the allocator and test. The image used 76280 B FLASH and
+  3527192 B RAM.
+- Controller QEMU replay printed
+  `PJSUA ARENA RESULT: PASSED (exhaustion, coalescing, 100 cycles)` before the
+  bounded harness stopped the idle emulator.
+- Generated configuration retained the exact 5/7/12 limits and 2097152-byte
+  arena; SIP TLS, product SRTP, and PJMEDIA SRTP remained unset. Source review
+  found no `malloc()`/`free()` fallback, and the accepted range passed
+  `git diff --check`.
+
+Task 3: complete (commits 6d3ed9125..6babe9f5e, review clean)
