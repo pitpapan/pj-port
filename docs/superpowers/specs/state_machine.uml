@@ -1,0 +1,18 @@
+@startuml
+[*] --> IDLE
+
+IDLE --> INITIATED : Initiation
+
+INITIATED --> ESTABLISHED : Acceptance
+INITIATED --> TERMINATED : Rejection
+INITIATED --> HOLD : Wait
+INITIATED --> IDLE : Timeout
+
+ESTABLISHED --> HOLD : Hold
+HOLD --> ESTABLISHED : Resume
+
+ESTABLISHED --> TERMINATED : Finish
+HOLD --> TERMINATED : Finish
+
+TERMINATED --> IDLE : Timeout
+@enduml
