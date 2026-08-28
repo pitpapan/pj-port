@@ -28,3 +28,18 @@ If resolving a problem genuinely requires inspecting Zephyr implementation
 source, stop and report why it is necessary instead of reading it automatically.
 
 Reading any file under zephyr/ is prohibited unless I explicitly authorize that specific inspection.
+
+## Pre-approved Operations
+
+Do not ask for permission before performing these operations; they are allowed
+by default:
+
+- removing build output files and temporary files
+- `git add`
+- `git commit`
+
+Never request command permission specifically for `git add` or for removing
+explicitly named temporary/build artifacts.
+
+When removing build or temporary files, use explicit targets and preserve
+source files and uncommitted work.
