@@ -272,3 +272,52 @@ Task 4: fix round 1/5 (5 addressed, 0 open; commit 57ce0712a)
 - `git diff --check` passed for the complete Task 4 implementation range.
 
 Task 4: complete (commits 703deb212..57ce0712a, review clean)
+
+## Task 5 start
+
+- Status: Luna-high implementation started from base `cc74c9b3f`.
+- Scope: add a dedicated PJSUA capacity profile that proves all five accounts
+  and seven held calls coexist, the native PJSUA limit rejects an eighth
+  incoming INVITE with SIP 486, caller-owned objects remain unchanged, and
+  cleanup returns the bounded arena to its post-start baseline.
+- The accepted Task 2 compile-time limit assertion is the historical RED for
+  the previous four-call default. Task 5 does not replay that RED by weakening
+  the frozen 5/7/12 production limits.
+
+## Task 5 review round 1
+
+- Independent review identified three Important test-validity issues in
+  initial commit `33748be68`: a saturated callback counter made the eighth-call
+  callback assertion vacuous, receive waits used ten seconds instead of ten
+  milliseconds, and the TCP response parser neither retained fragments nor
+  bound the 486 to the eighth INVITE.
+- Focused fix commit `d51ec45ce` adds an unconditional callback total and
+  post-response invariants, uses 10 ms select waits, and accumulates a bounded
+  response while matching status, Call-ID, and CSeq. A negative mutation of
+  the expected Call-ID failed as intended.
+- Scoped re-review found all three findings addressed, no new breakage, and no
+  remaining Critical, Important, or Minor issue.
+
+Task 5: fix round 1/5 (3 addressed, 0 open; commit d51ec45ce)
+
+## Task 5 controller acceptance
+
+- Fresh controller pristine build of `pjsua_capacity.conf` exited 0. The image
+  used 551872 B FLASH and 3734968 B RAM (89.05% of the 4 MiB QEMU region).
+- Fresh controller QEMU replay logged `No SIP worker threads created`, created
+  all five accounts, held seven incoming calls, and received native
+  `SIP/2.0 486 Busy Here` for the eighth INVITE. It then printed
+  `PJSUA CAPACITY CLEANUP: baseline used=90192 live=32 cleanup used=90192 live=32`,
+  destroyed PJSUA with arena usage `0` and live blocks `0` (peak 274528), and
+  printed `PJSUA CAPACITY RESULT: PASSED (5 accounts, 7 calls, eighth 486)`.
+  The harness exited 124 only after stopping idle QEMU following the marker.
+- Generated configuration contains exactly five accounts, seven calls, twelve
+  conference ports, and a 2097152-byte PJ arena. SIP TLS, product SRTP, and
+  PJMEDIA SRTP remain unset.
+- Source checks confirmed compile-time 5/7/12 and TLS/SRTP guards, the
+  unconditional callback total, exact eighth Call-ID/CSeq response matching,
+  and 10 ms bounded receive polling. The implementation range is limited to
+  the capacity test/profile integration and its report, and passes
+  `git diff --check`.
+
+Task 5: complete (commits 33748be68..d51ec45ce, review clean)
