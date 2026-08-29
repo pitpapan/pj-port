@@ -212,13 +212,30 @@ static_assert(!has_disconnected_phase<voip::CallState>::value,
               "disconnected is an internal phase");
 static_assert(!has_failed_phase<voip::CallState>::value,
               "failed is an internal phase");
+template <typename T, typename = void>
+struct has_legacy_initialize : std::false_type {};
+
+template <typename T>
+struct has_legacy_initialize<
+    T, std::void_t<decltype(static_cast<voip::Error (T::*)(
+        const voip::ServiceConfig &, voip::EventHandler *) noexcept>(
+        &T::Initialize))>> : std::true_type {};
+
+template <typename T, typename = void>
+struct has_event_queue_member : std::false_type {};
+
+template <typename T>
+struct has_event_queue_member<T, std::void_t<decltype(&T::event_queue)>>
+    : std::true_type {};
+
 static_assert(std::is_default_constructible<voip::VoipService>::value,
               "service uses the fixed-storage default constructor");
-static_assert(!std::is_constructible<voip::VoipService, voip::Backend &,
-                                     k_work_q *, voip::EventHandler *>::value,
-              "the legacy backend/workqueue/event-handler constructor must remain removed");
-static_assert(!std::is_constructible<voip::VoipService, k_work_q *>::value,
-              "workqueue constructor surface must remain removed");
+static_assert(!std::is_constructible<voip::VoipService, voip::Backend &>::value,
+              "the legacy backend constructor must remain removed");
+static_assert(!has_legacy_initialize<voip::VoipService>::value,
+              "the legacy callback Initialize overload must remain removed");
+static_assert(!has_event_queue_member<voip::ServiceConfig>::value,
+              "the service config must not expose a workqueue");
 
 class Source final : public voip::PcmSource {
 public:
