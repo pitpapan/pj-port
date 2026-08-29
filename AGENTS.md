@@ -35,11 +35,12 @@ Do not ask for permission before performing these operations; they are allowed
 by default:
 
 - removing build output files and temporary files
+- removing files or directories under `/tmp/` (that is, `/tmp/*`)
 - `git add`
 - `git commit`
 
-Never request command permission specifically for `git add` or for removing
-explicitly named temporary/build artifacts.
+Never request command permission specifically for `git add`, `git commit`,
+or for removing files or directories under `/tmp/`.
 
 When removing build or temporary files, use explicit targets and preserve
 source files and uncommitted work.
