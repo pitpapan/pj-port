@@ -96,6 +96,122 @@ polls again. Thus callback count cannot pass vacuously, and every observed
 callback passes the captured actor-thread check. The installed callback-table
 trampoline routes through the same affinity guard.
 
+## Fix round 1: review findings and TDD evidence
+
+The review fixes are confined to `applications/voip_integration/src/pjsua_link.c`.
+`poll_until_callback()` now has a compile-time-overridable limit of 100 polls,
+with each poll bounded to 10 ms. Exhaustion prints the callback timeout failure,
+sets `PJ_ETIMEDOUT`, and continues through the common destroy/audit path. Callback
+count and affinity are `atomic_t`, so a prohibited foreign-thread callback cannot
+race the actor's observations. `destroy_and_audit()` is used for normal teardown,
+the configuration-error edge, and a failed `pjsua_create()`; it always collects
+post-destroy arena statistics and requires zero live blocks/used bytes. The
+normal path performs a second affinity check after destruction, covering late
+callbacks during `pjsua_destroy()`.
+
+The timeout behavior was tested first with a focused compile-time seam, before
+the final normal build:
+
+```text
+PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin \\
+CCACHE_DISABLE=1 CMAKE_BUILD_PARALLEL_LEVEL=4 west build -p always \\
+  -b mps2/an385 \\
+  /home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration \\
+  -d /tmp/voip-plan1-task4-fix-timeout-red -- \\
+  -DEXTRA_CONF_FILE=/home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration/pjsua_link.conf \\
+  -DCMAKE_C_FLAGS=-DPJSUA_EVENT_POLL_LIMIT=0
+PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin \\
+timeout 15s west build -d /tmp/voip-plan1-task4-fix-timeout-red -t run
+```
+
+The build exited 0. The intentionally failing probe run exited 124 only when
+the bounded QEMU harness stopped the idle emulator, and printed
+`PJSUA LINK CHECK FAILED: callback dispatch timeout`, followed by the complete
+PJSUA destroy log and `PJSUA LINK RESULT: FAILED`. This is the expected RED
+behavior for a zero poll budget: it demonstrates that timeout does not hang and
+reaches cleanup. The temporary red directory was removed before the acceptance
+build.
+
+The allocation-failure cleanup edge was then exercised with the dedicated arena
+temporarily set to `CONFIG_PJSUA_ARENA_BYTES=65536` in the same application
+profile. The exact build/run commands were:
+
+```text
+PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin \\
+CCACHE_DISABLE=1 CMAKE_BUILD_PARALLEL_LEVEL=4 west build -p always \\
+  -b mps2/an385 \\
+  /home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration \\
+  -d /tmp/voip-plan1-task4-fix -- \\
+  -DEXTRA_CONF_FILE=/home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration/pjsua_link.conf
+PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin \\
+timeout 15s west build -d /tmp/voip-plan1-task4-fix -t run
+```
+
+That build exited 0 and the intentionally undersized run reached
+`pjsua_aud.c ..Error registering codecs: Not enough memory (PJ_ENOMEM)`, then
+completed PJSUA shutdown/destroy and printed `PJSUA LINK RESULT: FAILED` before
+the harness timeout (exit 124). This is expected RED allocation failure and
+proves the common cleanup/audit path on partial initialization. The profile was
+restored to `CONFIG_PJSUA_ARENA_BYTES=2097152` before the final GREEN build.
+
+The final focused Task 4 build exited 0 (FLASH 527260 B / 12.57%, RAM 3734744 B
+/ 89.04%):
+
+```text
+PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin \\
+CCACHE_DISABLE=1 CMAKE_BUILD_PARALLEL_LEVEL=4 west build -p always \\
+  -b mps2/an385 \\
+  /home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration \\
+  -d /tmp/voip-plan1-task4-fix -- \\
+  -DEXTRA_CONF_FILE=/home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration/pjsua_link.conf
+PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin \\
+timeout 30s west build -d /tmp/voip-plan1-task4-fix -t run
+```
+
+The run exited 124 only when the bounded harness stopped QEMU and printed all
+required evidence:
+
+```text
+PJSUA LINK lifecycle 1: callbacks=1 actor-affine
+PJSUA LINK lifecycle 2: callbacks=1 actor-affine
+PJSUA LINK lifecycle 3: callbacks=1 actor-affine
+PJSUA LINK lifecycle 4: callbacks=1 actor-affine
+PJSUA LINK lifecycle 5: callbacks=1 actor-affine
+PJSUA LINK RESULT: PASSED (5 lifecycles, arena clean)
+```
+
+Every lifecycle also logged `No SIP worker threads created`. The first event
+poll is the caller loop; the timer fallback is only scheduled when that poll is
+quiet, so each `callbacks=1` is non-vacuous. Both registered callback-table
+trampolines use the atomic actor-affinity guard, and the post-destroy check
+ensures a late callback cannot make the probe report success incorrectly.
+
+For regression, the same fresh build directory was reconfigured with the
+documented phase-3 profile and built successfully, then run with:
+
+```text
+PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin \\
+CCACHE_DISABLE=1 CMAKE_BUILD_PARALLEL_LEVEL=4 west build -p always \\
+  -b mps2/an385 \\
+  /home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration \\
+  -d /tmp/voip-plan1-task4-fix -- \\
+  -DEXTRA_CONF_FILE=/home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration/phase3_account.conf
+PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin \\
+timeout 20s west build -d /tmp/voip-plan1-task4-fix -t run
+```
+
+The build exited 0 (FLASH 170196 B / 4.06%, RAM 560240 B / 13.36%). QEMU
+printed all three phase-3 lifecycle passes and
+`VOIP INTEGRATION PHASE 3 RESULT: PASSED (3 account lifecycles)` before the
+bounded harness timeout (exit 124).
+
+Self-review: `git diff --check` passes; the source uses only documented PJSUA
+and Zephyr atomics/event-loop APIs, preserves Task 2 compile-time/runtime
+limits and the Task 1 lifecycle contract, and introduces no PJSUA2, TLS, SRTP,
+worker thread, dynamic/general-heap fallback, or source glob. Existing PJ
+unused-code warnings remain unchanged; no warning points at the modified probe.
+The expected RAM utilization remains high but below the configured 4 MiB limit.
+
 ## Lifecycle and arena assertions
 
 The probe captures `before` after a successful install/reset and before
