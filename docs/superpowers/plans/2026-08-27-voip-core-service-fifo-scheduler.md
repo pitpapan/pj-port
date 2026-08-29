@@ -78,7 +78,12 @@ paths.  No task may place build output in `voip/` or inspect `zephyr/`.
   `HoldReason`, `CallTransition`, `AgentConfig`, `ServiceConfig`, `DialRequest`,
   snapshots, polling events, `PcmSource`, and `PcmSink`.
 
-- [ ] Write `PublicContractTest.cpp` first. It must compile a one-agent `ServiceConfig`, verify handles are trivially copyable, verify no public header includes `pjsua`, `pjsip`, or Zephyr workqueue types, and assert all public strings/snapshots have fixed maximum sizes.
+- [ ] Write `PublicContractTest.cpp` first. It must compile a one-agent
+  `ServiceConfig`, verify handles are trivially copyable, verify no public
+  header includes `pjsua`, `pjsip`, or Zephyr workqueue types, and assert the
+  retained embedded maxima: URI 255 characters, username 63, password 127,
+  sanitized reason 95, and address 63, each plus one terminator in owned
+  arrays.
 
 - [ ] Assert the public call-state contract contains exactly
   `CallState::{idle,initiated,established,hold,terminated}` plus
@@ -93,6 +98,13 @@ paths.  No task may place build output in `voip/` or inspect `zephyr/`.
   ```
 
 - [ ] Define `Error` with exactly these product categories: `ok`, `invalid_argument`, `invalid_handle`, `invalid_state`, `unsupported_configuration`, `agent_unavailable`, `busy`, `queue_full`, `resource_exhausted`, `authentication_failed`, `signaling_failed`, `remote_rejected`, `negotiation_failed`, `media_failed`, `cancelled`, `timed_out`, `shutting_down`, `shutdown_timeout`, and `internal_failure`.
+
+- [ ] Define `RegistrationState` with exactly `disabled`, `registering`,
+  `registered`, `refreshing`, `retry_wait`, `unregistering`,
+  `authentication_failed`, and `transport_failed`.  Public events distinguish
+  agent snapshots, incoming admission, call transitions, operation terminal,
+  media/resource snapshots, and `service_stopped`; they never expose a PJ
+  pointer or borrowed callback string.
 
 - [ ] Define fixed handles and format-aware audio:
 
