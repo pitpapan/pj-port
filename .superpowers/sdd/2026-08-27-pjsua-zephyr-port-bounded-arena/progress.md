@@ -321,3 +321,63 @@ Task 5: fix round 1/5 (3 addressed, 0 open; commit d51ec45ce)
   `git diff --check`.
 
 Task 5: complete (commits 33748be68..d51ec45ce, review clean)
+
+## Task 6 start
+
+- Status: Luna-high implementation starting from base `10f5f200f`.
+- Scope: create the measured Plan 1 port acceptance record and perform fresh,
+  pristine build/runtime acceptance for the link, arena, and capacity profiles.
+- Measurement detail: the three unmodified profiles provide the acceptance
+  footprints and pass markers. A separate pristine link-profile diagnostic
+  build may enable Zephyr's documented thread analyzer through command-line
+  Kconfig overrides to measure a real stack high-water mark without changing
+  source files or inspecting Zephyr implementation source.
+- Existing preflight ruling applies: Plan 1's QEMU main thread is only the
+  future actor surrogate. Record its measured stack use as QEMU port evidence
+  and defer the production actor threshold and target-board acceptance to
+  Plan 6.
+
+## Task 6 review round 1
+
+- Initial documentation commit `905f66353` recorded all measured profiles,
+  source families, disabled features, arena ownership, and the Plan 6
+  qualification boundary.
+- Independent review found two Important reproducibility gaps: the record used
+  prose rather than the exact Kconfig limit names, and it omitted concrete run
+  commands for the three profiles and diagnostic stack build.
+- Focused fix commit `5354f84d0` adds the exact Kconfig assignments/effective
+  PJSUA macro mappings and executable link, arena, capacity, and diagnostic
+  run commands. Scoped re-review found both findings addressed with no new
+  Critical, Important, or Minor breakage.
+
+Task 6: fix round 1/5 (2 addressed, 0 open; commit 5354f84d0)
+
+## Task 6 controller acceptance
+
+- Controller checks against the retained implementer artifacts confirmed all
+  three generated configurations contain the exact 5/7/12 limits and
+  2097152-byte arena, with no TLS or SRTP enablement. The explicit manifest,
+  runtime markers, map symbols, and main-thread address agree with the record.
+- Fresh controller pristine `pjsua_link.conf` build exited 0 at 527260 B FLASH
+  and 3734744 B RAM. Its bounded run printed five actor-affine callback lines,
+  `No SIP worker threads created` for every lifecycle, and
+  `PJSUA LINK RESULT: PASSED (5 lifecycles, arena clean)` before timeout 124
+  stopped idle QEMU.
+- Fresh controller pristine `pjsua_arena.conf` build exited 0 at 76280 B FLASH
+  and 3527192 B RAM. Its bounded run printed
+  `PJSUA ARENA RESULT: PASSED (exhaustion, coalescing, 100 cycles)` before the
+  expected idle-QEMU timeout.
+- Fresh controller pristine `pjsua_capacity.conf` build exited 0 at 551872 B
+  FLASH and 3734968 B RAM. Its bounded run printed exact baseline recovery,
+  `destroyed used=0 live=0 peak=274528`, and
+  `PJSUA CAPACITY RESULT: PASSED (5 accounts, 7 calls, eighth 486)`.
+- A separate pristine diagnostic link build exited 0 at 528336 B FLASH and
+  2818432 B RAM with the documented diagnostic-only heap overrides. Generated
+  configuration retained the 2 MiB PJ arena and enabled the documented thread
+  analyzer. Runtime reported address `0x2022f4c8` at
+  `usage 9240 / 49152 (18 %)`, and the generated map resolves that address to
+  `z_main_thread`; this remains QEMU actor-surrogate evidence only.
+- The complete Task 6 implementation range passes `git diff --check` and is
+  limited to `docs/voip/pjsua-zephyr-port.md`.
+
+Task 6: complete (commits 905f66353..5354f84d0, review clean)
