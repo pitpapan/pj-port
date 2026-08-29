@@ -143,3 +143,55 @@ The application remains alive after printing PASS, so the documented run uses
 an external timeout and returns 124 after the proof. Also, the PJSIP UDP
 configuration symbol must remain enabled for the current PJSUA link closure,
 although this test never creates or uses a UDP transport.
+
+## Fix round 1
+
+Review findings were addressed in the capacity harness:
+
+- A separate unconditional callback counter now proves exactly seven incoming
+  callback invocations. The eighth response is fully processed first, then the
+  harness asserts that callback count, call count, enumeration, call IDs,
+  active state, sentinels, and no-media state are unchanged.
+- All TCP response polling uses bounded 10 ms select waits.
+- The 486 response parser accumulates bounded TCP fragments, handles multiple
+  complete zero-body SIP messages, and accepts only a complete response with
+  status 486, Call-ID
+  pjsua-capacity-8@127.0.0.1, and CSeq: 8 INVITE.
+
+Focused verification command:
+
+~~~
+PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin CCACHE_DIR=/tmp/voip-ccache CCACHE_TEMPDIR=/tmp/voip-ccache-tmp /home/pitpapan/zephyrproject/.venv/bin/west build -d /tmp/voip-plan1-task5-green
+~~~
+
+The build exited 0 with FLASH 551872 B and RAM 3734968 B. The corresponding
+runtime command was:
+
+~~~
+PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin CCACHE_DIR=/tmp/voip-ccache CCACHE_TEMPDIR=/tmp/voip-ccache-tmp timeout 40s /home/pitpapan/zephyrproject/.venv/bin/west build -d /tmp/voip-plan1-task5-green -t run
+~~~
+
+The run emitted:
+
+~~~
+PJSUA CAPACITY CLEANUP: baseline used=90192 live=32 cleanup used=90192 live=32
+PJSUA CAPACITY ARENA: destroyed used=0 live=0 peak=274528
+PJSUA CAPACITY RESULT: PASSED (5 accounts, 7 calls, eighth 486)
+~~~
+
+The external timeout returned 124 after the PASS marker because the
+application intentionally remains alive.
+
+For a focused negative proof, the expected eighth Call-ID string was
+temporarily mutated to pjsua-capacity-mutated@127.0.0.1 and the same fixed
+profile was run. The harness rejected the actual 486 rather than accepting an
+unrelated response, emitting:
+
+~~~
+PJSUA CAPACITY CHECK FAILED: warm up busy response
+PJSUA CAPACITY CHECK FAILED: warm-up leaves zero calls
+PJSUA CAPACITY CHECK FAILED: warm-up SIP state quiesces
+~~~
+
+The mutation was restored before the passing build and runtime verification;
+no production PJPROJECT source was changed.

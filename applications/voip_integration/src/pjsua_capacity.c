@@ -30,6 +30,7 @@ static pjsua_call_id held_call_ids[HELD_CALL_COUNT];
 static int account_sentinels[ACCOUNT_COUNT];
 static int call_sentinels[HELD_CALL_COUNT];
 static atomic_t incoming_count;
+static atomic_t callback_total;
 static int failures;
 
 #define CHECK(condition, message) do { \
@@ -44,6 +45,7 @@ static void on_incoming_call(pjsua_acc_id acc_id, pjsua_call_id call_id,
 {
 	PJ_UNUSED_ARG(acc_id);
 	PJ_UNUSED_ARG(rdata);
+	atomic_inc(&callback_total);
 	if (atomic_get(&incoming_count) < HELD_CALL_COUNT) {
 		held_call_ids[atomic_get(&incoming_count)] = call_id;
 		atomic_inc(&incoming_count);
@@ -125,33 +127,87 @@ static int poll_incoming(unsigned expected)
 	return (unsigned)atomic_get(&incoming_count) == expected ? 0 : -1;
 }
 
+static void verify_held_calls(bool assign_sentinels)
+{
+	pjsua_call_id enumerated[HELD_CALL_COUNT];
+	unsigned count = HELD_CALL_COUNT;
+	pj_status_t status;
+	unsigned i;
+
+	status = pjsua_enum_calls(enumerated, &count);
+	CHECK(status == PJ_SUCCESS && count == HELD_CALL_COUNT,
+	      "enumerate seven calls");
+	for (i = 0; i < HELD_CALL_COUNT; ++i) {
+		pjsua_call_info info;
+
+		if (assign_sentinels)
+			call_sentinels[i] = (int)(0x7100 + i);
+		if (assign_sentinels)
+			CHECK(pjsua_call_set_user_data(held_call_ids[i],
+					       &call_sentinels[i]) == PJ_SUCCESS,
+			      "call user-data assignment");
+		CHECK(pjsua_call_is_active(held_call_ids[i]) == PJ_TRUE,
+		      "call remains independently addressable");
+		CHECK(pjsua_call_get_user_data(held_call_ids[i]) ==
+			      &call_sentinels[i], "call user-data sentinel");
+		CHECK(pjsua_call_get_info(held_call_ids[i], &info) == PJ_SUCCESS &&
+		      info.media_cnt == 0 && info.prov_media_cnt == 0,
+		      "held call has no media");
+		CHECK(enumerated[i] == held_call_ids[i],
+		      "call ID remains enumerable");
+	}
+}
+
 static int response_is_busy(pj_sock_t sock)
 {
 	pj_fd_set_t read_set;
-	pj_time_val timeout;
-	char response[1024];
+	pj_time_val timeout = { 0, 10 };
+	char response[2048];
+	pj_size_t buffered = 0;
 	int result;
 	unsigned polls;
 
 	for (polls = 0; polls < RESPONSE_POLL_MS / 10; ++polls) {
-		pj_ssize_t length = sizeof(response) - 1;
-
 		if (pjsua_handle_events(10) < 0)
 			return -1;
 		PJ_FD_ZERO(&read_set);
 		PJ_FD_SET(sock, &read_set);
 		timeout.sec = 0;
-		timeout.msec = 10000;
+		timeout.msec = 10;
 		result = pj_sock_select((int)sock + 1, &read_set, NULL, NULL,
 					&timeout);
 		if (result <= 0 || !PJ_FD_ISSET(sock, &read_set))
 			continue;
-		if (pj_sock_recv(sock, response, &length, 0) != PJ_SUCCESS ||
-		    length <= 0)
+		if (buffered == sizeof(response) - 1)
 			return -1;
-		response[length] = '\0';
-		if (pj_ansi_strstr(response, "SIP/2.0 486 Busy Here") != NULL)
-			return 0;
+		{
+			pj_ssize_t length = sizeof(response) - 1 - buffered;
+
+			if (pj_sock_recv(sock, response + buffered, &length, 0) !=
+			    PJ_SUCCESS || length <= 0)
+				return -1;
+			buffered += (pj_size_t)length;
+			response[buffered] = '\0';
+		}
+		for (;;) {
+			char *end = strstr(response, "\r\n\r\n");
+			pj_size_t consumed;
+
+			if (end == NULL)
+				break;
+			*end = '\0';
+			if (strncmp(response, "SIP/2.0 486 Busy Here\r\n",
+				    sizeof("SIP/2.0 486 Busy Here\r\n") - 1) == 0 &&
+			    strstr(response,
+				   "Call-ID: pjsua-capacity-8@127.0.0.1\r\n") !=
+				    NULL &&
+			    strstr(response, "CSeq: 8 INVITE\r\n") != NULL)
+				return 0;
+			consumed = (pj_size_t)(end - response) + 4;
+			memmove(response, response + consumed, buffered - consumed);
+			buffered -= consumed;
+			response[buffered] = '\0';
+		}
 	}
 	return -1;
 }
@@ -166,7 +222,7 @@ static int acknowledge_declines(pj_sock_t sock, unsigned port)
 	for (polls = 0; polls < EVENT_POLL_LIMIT &&
 		     acknowledged < HELD_CALL_COUNT; ++polls) {
 		pj_fd_set_t read_set;
-		pj_time_val timeout = { 0, 10000 };
+		pj_time_val timeout = { 0, 10 };
 		int result;
 
 		(void)pjsua_handle_events(10);
@@ -272,6 +328,7 @@ static int warmup_busy(pj_sock_t *sock, unsigned port)
 	unsigned i;
 
 	atomic_set(&incoming_count, 0);
+	atomic_set(&callback_total, 0);
 	if (connect_peer(sock, port, 0) != PJ_SUCCESS)
 		return -1;
 	for (i = 0; i < HELD_CALL_COUNT; ++i) {
@@ -325,6 +382,7 @@ static int run_capacity_test(void)
 	for (i = 0; i < ACCOUNT_COUNT; ++i)
 		account_ids[i] = PJSUA_INVALID_ID;
 	atomic_set(&incoming_count, 0);
+	atomic_set(&callback_total, 0);
 
 	status = pj_zephyr_pool_arena_install();
 	CHECK(status == PJ_SUCCESS, "arena install");
@@ -401,6 +459,7 @@ static int run_capacity_test(void)
 	      "warm-up account delete");
 	account_ids[0] = PJSUA_INVALID_ID;
 	atomic_set(&incoming_count, 0);
+	atomic_set(&callback_total, 0);
 	CHECK(pjsua_call_get_count() == 0, "warm-up leaves zero calls");
 	CHECK(wait_for_cleanup_quiescence(transport_baseline) == 0,
 	      "warm-up SIP state quiesces");
@@ -458,37 +517,17 @@ static int run_capacity_test(void)
 
 	CHECK((unsigned)pjsua_call_get_count() == HELD_CALL_COUNT,
 	      "seven calls held");
-	{
-		pjsua_call_id enumerated[HELD_CALL_COUNT];
-		count = HELD_CALL_COUNT;
-		status = pjsua_enum_calls(enumerated, &count);
-		CHECK(status == PJ_SUCCESS && count == HELD_CALL_COUNT,
-		      "enumerate seven calls");
-		for (i = 0; i < HELD_CALL_COUNT; ++i) {
-			pjsua_call_info info;
-			call_sentinels[i] = (int)(0x7100 + i);
-			CHECK(pjsua_call_set_user_data(held_call_ids[i],
-					       &call_sentinels[i]) == PJ_SUCCESS,
-				      "call user-data assignment");
-			CHECK(pjsua_call_is_active(held_call_ids[i]) == PJ_TRUE,
-				      "call remains independently addressable");
-			CHECK(pjsua_call_get_user_data(held_call_ids[i]) ==
-				      &call_sentinels[i], "call user-data sentinel");
-			CHECK(pjsua_call_get_info(held_call_ids[i], &info) == PJ_SUCCESS &&
-				      info.media_cnt == 0 && info.prov_media_cnt == 0,
-				      "held call has no media");
-			CHECK(enumerated[i] == held_call_ids[i],
-				      "call ID remains enumerable");
-		}
-	}
+	verify_held_calls(true);
 
 	CHECK(send_invite(peers[0], transport_info.local_name.port,
 			  HELD_CALL_COUNT + 1) == PJ_SUCCESS, "eighth TCP INVITE");
-	CHECK(poll_incoming(HELD_CALL_COUNT) == 0, "process eighth INVITE");
-	CHECK((unsigned)atomic_get(&incoming_count) == HELD_CALL_COUNT,
-	      "eighth INVITE does not allocate a record");
 	CHECK(response_is_busy(peers[0]) == 0,
 	      "eighth INVITE receives SIP 486 Busy Here");
+	CHECK((unsigned)atomic_get(&callback_total) == HELD_CALL_COUNT,
+	      "eighth INVITE does not invoke incoming callback");
+	CHECK((unsigned)pjsua_call_get_count() == HELD_CALL_COUNT,
+	      "eighth INVITE leaves seven calls held");
+	verify_held_calls(false);
 
 	for (i = 0; i < HELD_CALL_COUNT; ++i) {
 		status = pjsua_call_hangup(held_call_ids[i], PJSIP_SC_DECLINE,
