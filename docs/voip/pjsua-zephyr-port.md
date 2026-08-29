@@ -28,9 +28,21 @@ STUN is disabled at runtime.  INVITE/REGC ownership remains in the selected
 PJSIP-UA boundary when that boundary is enabled, avoiding duplicate objects.
 
 The fixed embedded limits are five accounts, seven native PJSUA call records,
-and twelve conference ports, with `CONFIG_PJSUA_ARENA_BYTES=2097152` (2 MiB).
-Seven records are required for the product topology's two promoted calls plus
-five queued incoming calls.  The Plan 1 capacity harness holds seven incoming
+and twelve conference ports, with these exact Kconfig settings:
+
+```text
+CONFIG_PJSUA_MAX_ACCOUNTS=5
+CONFIG_PJSUA_MAX_CALLS=7
+CONFIG_PJSUA_MAX_CONF_PORTS=12
+CONFIG_PJSUA_ARENA_BYTES=2097152
+```
+
+`config_site.h` maps them directly to the effective PJPROJECT macros
+`PJSUA_MAX_ACC=CONFIG_PJSUA_MAX_ACCOUNTS`,
+`PJSUA_MAX_CALLS=CONFIG_PJSUA_MAX_CALLS`, and
+`PJSUA_MAX_CONF_PORTS=CONFIG_PJSUA_MAX_CONF_PORTS`.  Seven records are
+required for the product topology's two promoted calls plus five queued
+incoming calls.  The Plan 1 capacity harness holds seven incoming
 records and verifies that the eighth receives SIP 486 Busy Here; scheduling and
 promotion policy remain later-plan work.
 
@@ -133,6 +145,17 @@ This is QEMU port evidence for the main thread that currently calls
 qualification are explicitly deferred to Plan 6.  Analyzer output and its
 extra thread are diagnostic overhead, not PJSUA worker threads.
 
+The exact diagnostic run command was:
+
+```sh
+env PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin \
+  CMAKE_BUILD_PARALLEL_LEVEL=4 CCACHE_DISABLE=1 \
+  CCACHE_DIR=/tmp/voip-plan1-task6-diag-ccache \
+  CCACHE_TEMPDIR=/tmp/voip-plan1-task6-diag-ccache-tmp \
+  timeout 30s /home/pitpapan/zephyrproject/.venv/bin/west build \
+  -d /tmp/voip-plan1-task6-diag -t run
+```
+
 ## Reproduction commands
 
 The exact pristine commands used for the accepted profiles were:
@@ -163,9 +186,16 @@ env PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin CMAKE_BUILD_PARALL
   -DEXTRA_CONF_FILE=/home/pitpapan/zephyrproject/.worktrees/voip-pjsua-plan1/applications/voip_integration/pjsua_capacity.conf
 ```
 
-For each build directory, the run command was `west build -d <dir> -t run`
-under the same environment, wrapped in `timeout 30s` for link/arena and
-`timeout 40s` for capacity.
+The exact acceptance run commands (all returned 124 after their PASS marker)
+were:
+
+```sh
+env PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin CMAKE_BUILD_PARALLEL_LEVEL=4 CCACHE_DIR=/tmp/voip-plan1-task6-ccache CCACHE_TEMPDIR=/tmp/voip-plan1-task6-ccache-tmp timeout 30s /home/pitpapan/zephyrproject/.venv/bin/west build -d /tmp/voip-plan1-task6-link -t run
+
+env PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin CMAKE_BUILD_PARALLEL_LEVEL=4 CCACHE_DIR=/tmp/voip-plan1-task6-ccache CCACHE_TEMPDIR=/tmp/voip-plan1-task6-ccache-tmp timeout 30s /home/pitpapan/zephyrproject/.venv/bin/west build -d /tmp/voip-plan1-task6-arena -t run
+
+env PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin CMAKE_BUILD_PARALLEL_LEVEL=4 CCACHE_DIR=/tmp/voip-plan1-task6-ccache CCACHE_TEMPDIR=/tmp/voip-plan1-task6-ccache-tmp timeout 40s /home/pitpapan/zephyrproject/.venv/bin/west build -d /tmp/voip-plan1-task6-capacity -t run
+```
 
 Acceptance is measured evidence only: Plan 6 owns production actor-stack
 thresholds and target-board qualification.
