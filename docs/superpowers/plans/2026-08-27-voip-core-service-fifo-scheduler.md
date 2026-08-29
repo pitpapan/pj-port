@@ -30,6 +30,37 @@
 
 ---
 
+## Execution Order and Review Gates
+
+Execute tasks strictly in numeric order.  The dependency chain is:
+
+```text
+public contract
+    -> generation-safe handles
+    -> immutable agent registry
+    -> event reservations and polling queue
+    -> operations and command mailbox
+    -> call state machine and FIFO scheduler
+    -> core runtime and fake adapter
+    -> Zephyr integration image
+```
+
+For every task:
+
+1. Record the task base commit.
+2. Add the smallest behavior test that fails for the expected missing behavior.
+3. Run that focused test and record its RED failure in the task report.
+4. Add only the production code needed for GREEN.
+5. Run the focused test, every earlier Plan 2 host test, and `git diff --check`.
+6. Commit the task and write its report in the Plan 2 SDD workspace.
+7. Pass the complete base-to-head diff through independent specification and
+   code-quality review before starting the next task.
+
+Host binaries and generated objects must be written under explicit `/tmp/`
+paths.  No task may place build output in `voip/` or inspect `zephyr/`.
+
+---
+
 ## Task 1: Publish the breaking, PJ-independent contract
 
 **Files:**
@@ -90,7 +121,14 @@
 
 - [ ] Define `AgentAudioBinding`, `SipAccountConfig`, `AgentConfig`, and `ServiceConfig` exactly as the approved spec, including `conference_format`, queue/answer timeouts, and `register_on_start`.
 
-- [ ] Define `VoipService` with the approved control/snapshot/event methods. Remove the `Backend` constructor, `EventHandler`, and workqueue parameter. Use a private aligned byte-storage member and placement construction in `VoipService.cpp`; add a `static_assert(sizeof(Impl) <= sizeof(storage_))` so no `new` is required.
+- [ ] Define `VoipService` with the approved control/snapshot/event methods.
+  Remove the `Backend` constructor, `EventHandler`, and workqueue parameter.
+  Reserve `131072` bytes of private `alignas(std::max_align_t)` implementation
+  storage and retain only an `Impl*` pointing inside it.  Task 7 owns placement
+  construction and the `static_assert(sizeof(Impl) <= sizeof(storage_))` once
+  `Impl` is complete.  Construction, initialization, and shutdown must never
+  call `new` for the implementation object.  Plan 6 may reduce this initial
+  storage budget only after target measurement.
 
 - [ ] Re-run the compile-only contract test and require success.
 
@@ -152,7 +190,10 @@
 - Consumes: `ServiceConfig`, `AgentConfig`, borrowed `PcmSource*`/`PcmSink*`.
 - Produces: `AgentRegistry`, `AgentContext`, owned SIP strings, stable config-index handles.
 
-- [ ] Write tests for zero/six agents, null configuration, null/oversized SIP strings, duplicate identity URI, null audio endpoint, invalid PCM format, unsupported TLS/SRTP, copied caller strings, and stable config-index handle mapping.
+- [ ] Write tests for zero/six agents, null configuration, null/oversized SIP
+  strings, duplicate identity URI, duplicate source or sink binding, null audio
+  endpoint, invalid PCM format, unsupported TLS/SRTP, copied caller strings,
+  and stable config-index handle mapping.
 
 - [ ] Confirm tests fail because `AgentRegistry` is absent.
 
@@ -171,7 +212,54 @@
   git commit -m "feat(voip): add immutable agent registry"
   ```
 
-## Task 4: Add the operation table and command mailbox
+## Task 4: Implement synchronization and the polling event queue
+
+**Files:**
+
+- Create: `voip/src/core/CoreSynchronization.hpp`
+- Create: `voip/src/core/VoipEventQueue.hpp`
+- Create: `voip/src/core/VoipEventQueue.cpp`
+- Create: `voip/tests/unit/VoipEventQueueTest.cpp`
+
+**Interfaces:**
+
+- Consumes: complete copied `Event` records and the public timeout contract.
+- Produces: 32-record queue, reservation tokens, monotonic sequence numbers, `TryPop()` and timed `WaitPop()`.
+
+- [ ] Write tests for FIFO delivery, empty nonblocking return, zero/nonzero
+  timeout, one polling consumer, guaranteed-event reservations, reservation
+  commit/cancel exactly once, coalescing replacement by handle/type, sequence
+  monotonicity, and the permanently reserved `service_stopped` slot.
+
+- [ ] Add a pressure test filling all ordinary capacity. Verify a new guaranteed incoming event cannot be reserved, but `service_stopped` can still be enqueued and remains the final produced event.
+
+- [ ] Confirm tests fail due to the missing queue.
+
+- [ ] Define `CoreMutex`, `CoreLockGuard`, and `CoreEventSignal` in one private
+  header.  The host branch uses `std::mutex` plus `std::condition_variable`;
+  the `__ZEPHYR__` branch uses documented kernel mutex/semaphore APIs.  The
+  wrapper owns all synchronization storage directly, exposes no native type,
+  and performs no allocation after construction.  Do not read Zephyr source.
+
+- [ ] Implement an array ring plus reservation counters. Coalescible insertion scans the at-most-32 pending records and replaces the matching event snapshot without changing its queue position; it assigns the replacement a new sequence number.
+
+- [ ] Signal one private semaphore after publishing an event. `TryPop()` never blocks. `WaitPop()` waits at most `timeout_ms`, then rechecks under the queue lock. Neither path invokes application code or PJPROJECT.
+
+- [ ] Define guaranteed types as incoming admission, operation terminal, call terminal, registration failure, and service stopped; reserve the stopped slot for the full initialized lifecycle.
+
+- [ ] Run the host test with `-pthread` and require
+  `VoipEventQueueTest PASSED`.  Repeat timeout and producer/consumer tests at
+  least 100 times inside the binary so a lost wakeup fails deterministically.
+
+- [ ] Commit:
+
+  ```sh
+  git add voip/src/core/CoreSynchronization.hpp \
+    voip/src/core/VoipEventQueue.* voip/tests/unit/VoipEventQueueTest.cpp
+  git commit -m "feat(voip): add fixed polling event queue"
+  ```
+
+## Task 5: Add the operation table and command mailbox
 
 **Files:**
 
@@ -183,60 +271,44 @@
 
 **Interfaces:**
 
-- Consumes: public command arguments and handles.
-- Produces: copied 16-record mailbox, 16-record operation table, nonzero monotonic operation IDs.
+- Consumes: public command arguments, handles, `CoreMutex`, and
+  `VoipEventQueue::Reservation`.
+- Produces: copied 16-record mailbox, 16-record operation table, nonzero
+  monotonic operation IDs, and exactly one owned terminal-event reservation
+  for every accepted operation.
 
-- [ ] Write tests that fill both capacities, verify rejection does not consume an operation ID, verify copied dial URIs survive caller-buffer mutation, reject stale handles before enqueue, and wrap operation ID from `UINT32_MAX` to 1 without collision.
+- [ ] Write tests that fill both capacities, verify rejection does not consume
+  an operation ID, verify copied dial URIs survive caller-buffer mutation,
+  reject stale handles before enqueue, and wrap operation ID from `UINT32_MAX`
+  to 1 without collision.
+
+- [ ] Add rollback tests for operation-table full, event-reservation failure,
+  and mailbox full.  After each failure, assert all earlier reservations are
+  restored and the next accepted command receives exactly one terminal event.
 
 - [ ] Confirm compilation fails because the types are absent.
 
-- [ ] Define a tagged `VoipCommand` union with no owning pointer to caller stack: `dial`, `answer`, `reject`, `cancel`, `hangup`, `set_held`, and `shutdown`. Store URI/reason data in fixed arrays.
+- [ ] Define a tagged `VoipCommand` union with no owning pointer to caller
+  stack: `dial`, `answer`, `reject`, `cancel`, `hangup`, `set_held`, and
+  `shutdown`. Store URI/reason data in fixed arrays.
 
-- [ ] Implement a multi-producer/single-consumer fixed ring behind a small synchronization adapter. Admission order is: validate arguments/handle, reserve operation record, reserve terminal event, copy command, publish command. Roll back reservations in reverse order on failure.
+- [ ] Implement a `CoreMutex`-protected multi-producer/single-consumer fixed
+  ring. Admission order is: validate arguments/handle, reserve operation
+  record, reserve terminal event, copy command, publish command. Roll back
+  reservations in reverse order on failure.
 
-- [ ] Store shutdown completion synchronization inside the service implementation, never inside a caller stack frame, preventing the current `RunSync()` timeout use-after-return class.
+- [ ] Store shutdown completion synchronization inside the service
+  implementation, never inside a caller stack frame, preventing the current
+  `RunSync()` timeout use-after-return class.
 
-- [ ] Run the unit test and require `OperationMailboxTest PASSED`.
+- [ ] Run the unit test with `-pthread` and require
+  `OperationMailboxTest PASSED`.
 
 - [ ] Commit:
 
   ```sh
   git add voip/src/core voip/tests/unit/OperationMailboxTest.cpp
   git commit -m "feat(voip): add bounded commands and operations"
-  ```
-
-## Task 5: Implement the polling event queue
-
-**Files:**
-
-- Create: `voip/src/core/VoipEventQueue.hpp`
-- Create: `voip/src/core/VoipEventQueue.cpp`
-- Create: `voip/tests/unit/VoipEventQueueTest.cpp`
-
-**Interfaces:**
-
-- Consumes: complete copied `Event` records.
-- Produces: 32-record queue, reservation tokens, monotonic sequence numbers, `TryPop()` and timed `WaitPop()`.
-
-- [ ] Write tests for FIFO delivery, empty nonblocking return, timeout, one polling consumer, guaranteed-event reservations, coalescing replacement by handle/type, sequence monotonicity, and the permanently reserved `service_stopped` slot.
-
-- [ ] Add a pressure test filling all ordinary capacity. Verify a new guaranteed incoming event cannot be reserved, but `service_stopped` can still be enqueued and remains the final produced event.
-
-- [ ] Confirm tests fail due to the missing queue.
-
-- [ ] Implement an array ring plus reservation counters. Coalescible insertion scans the at-most-32 pending records and replaces the matching event snapshot without changing its queue position; it assigns the replacement a new sequence number.
-
-- [ ] Signal one private semaphore after publishing an event. `TryPop()` never blocks. `WaitPop()` waits at most `timeout_ms`, then rechecks under the queue lock. Neither path invokes application code or PJPROJECT.
-
-- [ ] Define guaranteed types as incoming admission, operation terminal, call terminal, registration failure, and service stopped; reserve the stopped slot for the full initialized lifecycle.
-
-- [ ] Run the unit test and require `VoipEventQueueTest PASSED`.
-
-- [ ] Commit:
-
-  ```sh
-  git add voip/src/core/VoipEventQueue.* voip/tests/unit/VoipEventQueueTest.cpp
-  git commit -m "feat(voip): add fixed polling event queue"
   ```
 
 ## Task 6: Implement strict FIFO scheduling and logical call contexts
@@ -338,52 +410,170 @@
 **Files:**
 
 - Create: `voip/src/core/RuntimeAdapter.hpp`
+- Create: `voip/src/core/FakeRuntimeAdapter.hpp`
+- Create: `voip/src/core/FakeRuntimeAdapter.cpp`
+- Create: `voip/src/core/CoreActor.hpp`
+- Create: `voip/src/core/CoreActor.cpp`
+- Create: `voip/src/core/VoipResourceGuard.hpp`
+- Create: `voip/src/core/VoipResourceGuard.cpp`
 - Create: `voip/src/core/VoipRuntime.hpp`
 - Create: `voip/src/core/VoipRuntime.cpp`
 - Replace: `voip/src/VoipService.cpp`
-- Create: `voip/tests/unit/FakeRuntimeAdapter.hpp`
 - Create: `voip/tests/unit/VoipServiceCoreTest.cpp`
 - Create: `voip/tests/run_host_tests.sh`
-- Create: `applications/voip_integration/src/core_service.cpp`
-- Create: `applications/voip_integration/core_service.conf`
-- Modify: `applications/voip_integration/Kconfig`
-- Modify: `applications/voip_integration/CMakeLists.txt`
-- Modify: `voip/zephyr/Kconfig`
-- Modify: `voip/zephyr/CMakeLists.txt`
 
 **Interfaces:**
 
 - Consumes: registry, mailbox, operations, event queue, scheduler.
-- Produces: functional public service without PJPROJECT; private adapter seam for Plans 3–5.
+- Produces: functional public service without PJPROJECT, a private runtime
+  adapter seam for Plans 3–5, and a build-selectable deterministic fake used
+  only by host and Plan 2 integration configurations.
 
 - [ ] Write end-to-end host tests initializing five agents, retrieving handles by config index, dialing seven logical calls, observing two promotions/five FIFO positions, cancelling entries, consuming terminal operation events, rejecting unsupported security, and shutting down twice safely.
 
 - [ ] Add tests proving one agent never owns two promoted calls and that event polling never invokes callbacks.
+
+- [ ] Add pressure/accounting tests proving `GetResourceSnapshot()` reports
+  exact available command, operation, event, FIFO, logical-call, and promoted
+  capacities after initialization, after admission, after cancellation, and
+  after cleanup.  Counters must return to their initialized baseline without a
+  diagnostics thread or timer.
 
 - [ ] Add end-to-end trace assertions for initiation, FIFO wait, acceptance,
   rejection, timeout, media hold/resume, finish, terminal publication, and
   immediate stale-handle rejection after cleanup. Verify the terminal event
   remains readable after the handle becomes invalid.
 
-- [ ] Confirm the new contract does not link against the current `VoipService.cpp`.
+- [ ] Compile the host test before replacing `VoipService.cpp` and confirm the
+  link fails on the new service methods rather than on a test syntax error.
 
-- [ ] Define `RuntimeAdapter` methods for account initialization, promote outgoing, promote incoming, answer/reject/cancel/hangup/hold, poll native events, begin call teardown, and shutdown. Use opaque integer tokens only; no PJ type crosses into core headers.
+- [ ] Define `RuntimeAdapter` methods for account initialization, promote
+  outgoing, promote incoming, answer/reject/cancel/hangup/hold, poll native
+  events, begin call teardown, and shutdown. Use opaque integer tokens and
+  copied notification records only; no PJ type crosses into core headers.
+
+- [ ] Implement `FakeRuntimeAdapter` in `voip/src/core`, not under tests.  It
+  records bounded requests and emits scripted copied notifications; it must
+  not bypass `CallScheduler` or mutate public snapshots.  Compile it only for
+  host tests or `CONFIG_VOIP_SERVICE_FAKE_ADAPTER=y`.  Plan 3 replaces the
+  selected adapter with `PjsuaRuntimeAdapter` without changing core headers.
+
+- [ ] Implement always-enabled `VoipResourceGuard` as actor-owned correctness
+  counters only.  It has no thread, timer, queue, or dynamic storage and copies
+  the public `ResourceSnapshot`; detailed peaks and PJ statistics remain
+  outside Plan 2 diagnostics.
 
 - [ ] Implement `VoipRuntime::Step(now_ms)` to drain bounded commands, apply timers, run strict promotion, poll the adapter, update snapshots, and publish events. The Zephyr actor repeatedly calls `Step()`; host tests call it deterministically.
 
-- [ ] Implement public APIs as validation/copy/admission only. They must not synchronously wait for operation completion. Implement synchronous `Shutdown()` with service-owned completion state and bounded timeout.
+- [ ] Implement `CoreActor` with statically owned thread/stack/completion
+  storage.  Its host branch uses `std::thread`; its `__ZEPHYR__` branch uses
+  documented kernel thread APIs and a fixed stack configured at build time.
+  It repeatedly calls `VoipRuntime::Step()`.  No public header exposes either
+  platform's native thread type.
 
-- [ ] Add fixed Kconfig constants with compile-time checks: 5/7/2/5/16/16/32. Add `CONFIG_VOIP_SERVICE`, retain `CONFIG_VOIP_PJSUA` for the production adapter, and make old/new lower-case backends mutually exclusive.
+- [ ] Implement public APIs as validation/copy/admission only. They must not
+  synchronously wait for operation completion. Implement synchronous
+  `Shutdown()` with service-owned completion state and bounded timeout.  A
+  timeout leaves the actor and all reachable storage alive in
+  `shutting_down`; it never detaches or destroys reachable state.
 
-- [ ] Run all Plan 2 host tests with one command documented in `voip/tests/run_host_tests.sh`; the script may compile into `/tmp` and must not write generated artifacts into the source tree.
+- [ ] Replace `VoipService.cpp` by placement-constructing `Impl` in the public
+  header's aligned storage.  Prove construction/destruction and five repeated
+  initialize/shutdown cycles with a host test.  Do not retain the old
+  `Backend`, callback, or workqueue compatibility path.  Add
+  `static_assert(sizeof(Impl) <= 131072)` and an alignment assertion before the
+  placement construction.
 
-- [ ] Build the fake-only integration image with `west build`; run it and require `VOIP CORE SERVICE RESULT: PASSED`.
+- [ ] During shutdown reject new commands, complete or cancel every accepted
+  operation exactly once, enqueue `service_stopped` last, and forbid every
+  later producer path.  Prove previously queued events remain readable and a
+  second `Shutdown()` emits no duplicate stopped event.
+
+- [ ] Create `voip/tests/run_host_tests.sh` with one explicit compile/run entry
+  for every Plan 2 unit binary.  Use `-std=c++17 -Wall -Wextra -Werror
+  -pthread`, write all output under a unique `/tmp/voip-plan2-host-*`
+  directory, stop on the first failure, and remove only that explicit output
+  directory on success.
+
+- [ ] Run `voip/tests/run_host_tests.sh` and require every Task 1–7 marker,
+  ending with `VoipServiceCoreTest PASSED`.
 
 - [ ] Commit:
 
   ```sh
-  git add voip applications/voip_integration
+  git add voip
   git commit -m "feat(voip): compose bounded multi-agent core service"
+  ```
+
+## Task 8: Wire and validate the fake-only Zephyr integration image
+
+**Files:**
+
+- Create: `applications/voip_integration/src/core_service.cpp`
+- Create: `applications/voip_integration/core_service.conf`
+- Modify: `applications/voip_integration/Kconfig`
+- Modify: `applications/voip_integration/CMakeLists.txt`
+- Modify: `voip/zephyr/Kconfig`
+- Modify: `voip/zephyr/CMakeLists.txt`
+- Create: `voip/tests/unit/NoHeapAfterInitTest.cpp`
+- Modify: `voip/tests/run_host_tests.sh`
+
+**Interfaces:**
+
+- Consumes: Task 7 `VoipService`, `CoreActor`, and `FakeRuntimeAdapter`.
+- Produces: a Zephyr-selectable PJ-independent service, fixed capacity Kconfig
+  contract, QEMU behavior proof, and host proof that steady-state core paths do
+  not allocate.
+
+- [ ] Add `NoHeapAfterInitTest.cpp` first.  Override host allocation counters,
+  permit construction/`Initialize()`, reset the counter after successful
+  initialization, then exercise command admission, two promotions, five FIFO
+  entries, event polling/coalescing, cancellation, timeout processing, and
+  shutdown.  Require zero allocations between the reset and completed
+  shutdown.  Run it against Task 7 and capture the expected RED result before
+  changing implementation or build wiring.
+
+- [ ] Add fixed Kconfig constants with compile-time checks: agents 5, logical
+  calls 7, promoted calls 2, pending FIFO 5, commands 16, operations 16, and
+  events 32. Add `CONFIG_VOIP_SERVICE` and
+  `CONFIG_VOIP_SERVICE_FAKE_ADAPTER`; retain `CONFIG_VOIP_PJSUA` for Plan 3 and
+  make fake, PJSUA, and the old lower-case backend mutually exclusive.
+
+- [ ] Wire only the focused public/core sources into the VoIP module when
+  `CONFIG_VOIP_SERVICE=y`.  Select `FakeRuntimeAdapter.cpp` only when its test
+  gate is enabled.  Do not use source globs and do not compile legacy
+  `PjVoipBackend.cpp` into the new service target.
+
+- [ ] Implement `core_service.cpp` through the public polling API. Initialize
+  five distinct agents and audio sentinels, admit seven mixed logical calls,
+  prove two promoted and five FIFO with same-agent exclusion and strict
+  head-of-line blocking, consume terminal events, and shut down twice.  Emit
+  only this success terminator after all assertions pass:
+
+  ```text
+  VOIP CORE SERVICE RESULT: PASSED
+  ```
+
+- [ ] Run the complete host suite and require `NoHeapAfterInitTest PASSED`.
+
+- [ ] Build from the workspace parent without inspecting Zephyr source:
+
+  ```sh
+  west build -p always -b mps2/an385 applications/voip_integration \
+    -d /tmp/voip-plan2-core-service -- \
+    -DEXTRA_CONF_FILE=core_service.conf
+  ```
+
+- [ ] Run `west build -d /tmp/voip-plan2-core-service -t run` under a bounded
+  timeout and require `VOIP CORE SERVICE RESULT: PASSED` before the emulator is
+  stopped. Record FLASH/RAM and actor-stack evidence in the task report; do not
+  claim target-board qualification.
+
+- [ ] Run `git diff --check`, then commit:
+
+  ```sh
+  git add voip applications/voip_integration
+  git commit -m "test(voip): validate bounded core service"
   ```
 
 ## Plan 2 Exit Criteria
