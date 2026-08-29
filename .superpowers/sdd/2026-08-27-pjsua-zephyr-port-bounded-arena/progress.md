@@ -381,3 +381,29 @@ Task 6: fix round 1/5 (2 addressed, 0 open; commit 5354f84d0)
   limited to `docs/voip/pjsua-zephyr-port.md`.
 
 Task 6: complete (commits 905f66353..5354f84d0, review clean)
+
+## Plan 1 final review
+
+- Independent whole-branch review of `fd70c933e..b477f883e` found all six
+  Plan 1 exit criteria satisfied, every recorded ruling acceptable, and the
+  three deferred Task 4 Minor findings non-blocking. It reported no Critical
+  or Important issue and judged the branch ready to merge.
+- The reviewer reported two Minor wording issues: the acceptance record
+  blurred standalone INVITE/UDP Kconfig gates with PJSIP-UA source ownership,
+  and the arena-size Kconfig help still called the implemented arena
+  "future". Commit `e4a231989` corrects both descriptions without changing
+  code, configuration values, manifests, or runtime behavior.
+- Scoped re-review of `b477f883e..e4a231989` found both original Minor
+  findings addressed and no new breakage. The range passes
+  `git diff --check`.
+- Fresh branch-head pristine builds exited 0 with the accepted footprints:
+  link 527260 B FLASH / 3734744 B RAM, arena 76280 B FLASH / 3527192 B RAM,
+  and capacity 551872 B FLASH / 3734968 B RAM.
+- Fresh branch-head QEMU runs emitted
+  `PJSUA LINK RESULT: PASSED (5 lifecycles, arena clean)`,
+  `PJSUA ARENA RESULT: PASSED (exhaustion, coalescing, 100 cycles)`, and
+  `PJSUA CAPACITY RESULT: PASSED (5 accounts, 7 calls, eighth 486)`. Capacity
+  also reproduced baseline cleanup `used=90192 live=32` and destroyed-arena
+  `used=0 live=0 peak=274528`.
+
+Plan 1: complete (`fd70c933e..e4a231989`, final review clean)
