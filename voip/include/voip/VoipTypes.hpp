@@ -101,9 +101,15 @@ struct AgentAudioBinding {
     PcmSink *sink;
 };
 
+// These pointers are borrowed only for the duration of Initialize(). Inputs
+// must be non-null, NUL-terminated, and no longer than their corresponding
+// fixed bound; initialization copies every string before it returns.
 struct SipAccountConfig {
+    // identity_uri and registrar_uri are each limited to max_uri_length.
     const char *identity_uri;
     const char *registrar_uri;
+    // auth_username and auth_password are limited to max_username_length and
+    // max_password_length respectively and are copied into private storage.
     const char *auth_username;
     const char *auth_password;
 };
@@ -114,6 +120,10 @@ struct Status {
     char reason[max_reason_length + 1];
 };
 
+// remote_uri is borrowed synchronously by Dial(). It must be non-null,
+// NUL-terminated, and no longer than max_uri_length. An accepted request is
+// copied into service-owned storage before Dial() returns, including queued
+// requests; callers need not retain the input afterwards.
 struct DialRequest {
     const char *remote_uri;
 };
@@ -122,7 +132,6 @@ struct AgentSnapshot {
     AgentHandle handle;
     RegistrationState registration;
     char identity_uri[max_uri_length + 1];
-    char username[max_username_length + 1];
 };
 
 struct CallSnapshot {
@@ -140,8 +149,15 @@ struct ResourceSnapshot {
     std::uint8_t active_calls;
     std::uint8_t promoted_calls;
     std::uint8_t queued_calls;
+    std::uint16_t available_commands;
+    std::uint16_t available_operations;
+    std::uint16_t available_events;
+    std::uint16_t available_fifo_entries;
+    std::uint16_t available_logical_calls;
+    std::uint16_t available_promoted_calls;
     std::uint16_t available_media_bridges;
     std::uint16_t available_call_slots;
+    std::uint32_t audio_callback_failures;
 };
 
 } // namespace voip
