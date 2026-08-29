@@ -48,3 +48,6 @@ target_sources_ifdef(CONFIG_VOIP_PJSUA_LINK_TEST app PRIVATE
 target_sources_ifdef(CONFIG_VOIP_PJSUA_ARENA_TEST app PRIVATE
   src/pjsua_arena_test.c
 )
+target_sources_ifdef(CONFIG_VOIP_PJSUA_CAPACITY_TEST app PRIVATE
+  src/pjsua_capacity.c
+)

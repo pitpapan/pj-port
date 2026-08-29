@@ -58,6 +58,10 @@ config VOIP_PJSUA_ARENA_TEST
 	bool "PJSUA bounded pool arena validation"
 	depends on PJSUA
 
+config VOIP_PJSUA_CAPACITY_TEST
+	bool "PJSUA account and call capacity validation"
+	depends on PJSUA && PJSIP_INVITE && PJSIP_TCP_TRANSPORT
+
 config VOIP_SIP_TLS
 	bool "VoIP SIP TLS"
 	depends on PJSIP
