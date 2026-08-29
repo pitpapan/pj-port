@@ -1,3 +1,9 @@
+namespace voip {
+class Backend;
+class EventHandler;
+} // namespace voip
+struct k_work_q;
+
 #include <voip/VoipService.hpp>
 #include <voip/VoipEvents.hpp>
 #include <voip/PcmAudio.hpp>
@@ -65,10 +71,6 @@ DEFINE_PHASE_TRAIT(disconnecting);
 DEFINE_PHASE_TRAIT(disconnected);
 DEFINE_PHASE_TRAIT(failed);
 #undef DEFINE_PHASE_TRAIT
-
-struct CompatibilityBackend {};
-struct CompatibilityEventHandler {};
-struct k_work_q {};
 
 static_assert(std::is_trivially_copyable<voip::AgentHandle>::value,
               "agent handles must be safe to copy");
@@ -212,13 +214,9 @@ static_assert(!has_failed_phase<voip::CallState>::value,
               "failed is an internal phase");
 static_assert(std::is_default_constructible<voip::VoipService>::value,
               "service uses the fixed-storage default constructor");
-static_assert(!std::is_constructible<voip::VoipService,
-                                     CompatibilityBackend &>::value,
-              "compatibility backend constructor must remain removed");
-static_assert(!std::is_constructible<voip::VoipService,
-                                     CompatibilityBackend &,
-                                     CompatibilityEventHandler *>::value,
-              "callback compatibility constructor must remain removed");
+static_assert(!std::is_constructible<voip::VoipService, voip::Backend &,
+                                     k_work_q *, voip::EventHandler *>::value,
+              "the legacy backend/workqueue/event-handler constructor must remain removed");
 static_assert(!std::is_constructible<voip::VoipService, k_work_q *>::value,
               "workqueue constructor surface must remain removed");
 
