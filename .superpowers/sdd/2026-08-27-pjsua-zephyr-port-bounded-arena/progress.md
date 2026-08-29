@@ -213,3 +213,62 @@ Task 2: complete (commits 650b81d..ced994f, review clean)
   `git diff --check`.
 
 Task 3: complete (commits 6d3ed9125..6babe9f5e, review clean)
+
+## Task 4 start
+
+- Status: Luna-high implementation in progress from base `c5ecf4b92`.
+- Scope: extend the existing PJSUA link probe to install the bounded arena,
+  prove five caller-driven lifecycles return all arena blocks, and produce a
+  non-vacuous same-thread callback observation with no PJSUA/PJMEDIA workers.
+- Existing preflight ruling applies: a scheduled timer callback may provide
+  the required event-loop observation when the bare lifecycle has no natural
+  callback, while every installed PJSUA callback trampoline is separately
+  guarded by the captured actor thread identity.
+
+## Task 4 review round 1
+
+- Status: five Important findings entered fix round 1: bounded callback
+  polling, post-destroy affinity recheck, synchronized callback evidence,
+  create-failure cleanup/audit, and unified post-create failure cleanup/audit.
+- Task 4: minor (deferred): the max-call/media-port check compares fields
+  immediately after assigning them; later final review should decide whether
+  compile-time assertions plus successful initialization are sufficient.
+- Task 4: minor (deferred): the lifecycle probe does not require
+  `failed_allocations == 0`; final review should decide whether clean bounded
+  lifecycle evidence must reject any transient arena allocation failure.
+- Fix round 1 commit `57ce0712a` bounds polling, rechecks affinity after
+  destroy, uses atomic callback state, and unifies create/configuration failure
+  cleanup with arena auditing. Scoped re-review found all five Important
+  findings addressed with no new Critical or Important breakage.
+- Task 4: minor (deferred): a negative `pjsua_handle_events()` result is
+  diagnosed as callback timeout; preserve a distinct event-processing error if
+  final review deems diagnostic precision merge-blocking.
+
+Task 4: fix round 1/5 (5 addressed, 0 open; commit 57ce0712a)
+
+## Task 4 controller acceptance
+
+- Independent task review found five Important issues in the initial commit
+  `703deb212`: unbounded event polling, an early-only affinity check, racy
+  callback evidence, and two incomplete cleanup/audit edges. Fix commit
+  `57ce0712a` addresses all five. Scoped re-review found no remaining Critical
+  or Important issue and no Important breakage in the fix diff.
+- Fresh controller pristine build of `pjsua_link.conf` exited 0. The image used
+  527260 B FLASH and 3734744 B RAM (89.04% of the 4 MiB QEMU region).
+- Fresh controller QEMU replay printed five lifecycle lines with
+  `callbacks=1 actor-affine`, logged `No SIP worker threads created` in every
+  lifecycle, destroyed PJSUA after each cycle, and printed
+  `PJSUA LINK RESULT: PASSED (5 lifecycles, arena clean)` before the bounded
+  harness stopped the idle emulator.
+- Generated configuration retained the exact 5/7/12 limits and 2097152-byte PJ
+  arena. SIP TLS, product SRTP, and PJMEDIA SRTP remained unset. The profile's
+  general libc arena is 1048576 bytes so the dedicated PJ arena fits QEMU.
+- Controller source audit found no direct `malloc()`/`calloc()`/`realloc()` or
+  `free()` call in PJSUA-LIB, PJSIP, enabled PJMEDIA, or the Task 4 probe. The
+  compiled PJNATH UPnP source contains an external-library `free()` path, but
+  the probe sets `enable_upnp = PJ_FALSE`, so it is unreachable in this
+  lifecycle. PJ pools dispatch through their factory policy, and the arena
+  installs its allocate/free callbacks before `pjsua_create()`.
+- `git diff --check` passed for the complete Task 4 implementation range.
+
+Task 4: complete (commits 703deb212..57ce0712a, review clean)
