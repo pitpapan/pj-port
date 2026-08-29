@@ -334,7 +334,8 @@ config PJSUA_ARENA_BYTES
 	range 65536 4194304
 	default 2097152
 	help
-	  Capacity reserved for the future fixed PJ pool arena. Task 3 owns the
-	  allocator implementation; this is a build-time sizing control only.
+	  Capacity in bytes of the implemented fixed PJ pool arena. This build-time
+	  setting sizes the aligned static arena used by PJSUA PJ pool blocks;
+	  allocations do not fall back to the general heap.
 
 endif # PJPROJECT

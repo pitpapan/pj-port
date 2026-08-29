@@ -55,12 +55,15 @@ distinct from the Zephyr system heap and the general libc malloc arena.
 Compile-time disabled features are TLS (`PJSIP_HAS_TLS_TRANSPORT=0`), SRTP
 (`PJMEDIA_HAS_SRTP=0`, SRTP transport and SDES gates off), video
 (`PJMEDIA_HAS_VIDEO=0`), and host audio backends; the null audio device is the
-only selected backend.  Link and arena profiles compile TCP signaling and do
-not compile PJSIP UDP or INVITE; the capacity profile additionally selects
-those two families for its TCP INVITE proof.  Runtime configuration disables
-STUN, TURN, ICE, and UPnP, uses no sound device, and sets PJSUA and PJMEDIA
-thread counts to zero.  PJSUA creates no worker thread; the caller drives
-`pjsua_handle_events()`.
+only selected backend.  Link and arena profiles compile TCP signaling while
+leaving the standalone `CONFIG_PJSIP_INVITE=n` and
+`CONFIG_PJSIP_UDP_TRANSPORT=n` gates unset; their enabled PJSIP-UA family
+still owns `sip_inv.c` and `sip_reg.c` without duplicate translation units.
+The capacity profile enables its INVITE and UDP gates for the TCP INVITE
+harness, with INVITE/REGC ownership still held by PJSIP-UA.  Runtime
+configuration disables STUN, TURN, ICE, and UPnP, uses no sound device, and
+sets PJSUA and PJMEDIA thread counts to zero.  PJSUA creates no worker thread;
+the caller drives `pjsua_handle_events()`.
 
 ## Footprint and runtime evidence
 
