@@ -67,6 +67,10 @@ config VOIP_PJSUA_CAPACITY_TEST
 	bool "PJSUA account and call capacity validation"
 	depends on PJSUA && PJSIP_INVITE && PJSIP_TCP_TRANSPORT
 
+config VOIP_PJSUA_PLAN3_COMPONENT_TEST
+	bool "PJSUA Plan 3 native runtime component validation"
+	depends on PJSUA && PJSIP_TCP_TRANSPORT
+
 config VOIP_SIP_TLS
 	bool "VoIP SIP TLS"
 	depends on PJSIP

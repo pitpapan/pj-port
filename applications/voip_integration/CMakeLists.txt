@@ -8,6 +8,8 @@ list(APPEND ZEPHYR_EXTRA_MODULES
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(voip_integration)
 
+target_include_directories(app PRIVATE ../../voip/include)
+
 target_sources_ifdef(CONFIG_VOIP_SDK_CONTRACT_TEST app PRIVATE
   src/sdk_contract.cpp
 )
@@ -50,6 +52,15 @@ target_sources_ifdef(CONFIG_VOIP_PJSUA_ARENA_TEST app PRIVATE
 )
 target_sources_ifdef(CONFIG_VOIP_PJSUA_CAPACITY_TEST app PRIVATE
   src/pjsua_capacity.c
+)
+target_sources_ifdef(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST app PRIVATE
+  ../../voip/tests/pjsua/PjsuaPlan3TestMain.cpp
+  ../../voip/tests/pjsua/PjsuaRuntimeTest.cpp
+  ../../voip/tests/pjsua/PjsuaCallbackRouterTest.cpp
+  ../../voip/src/pjsua/PjsuaApi.cpp
+  ../../voip/src/pjsua/PjsuaRuntime.cpp
+  ../../voip/src/pjsua/PjsuaTransportManager.cpp
+  ../../voip/src/pjsua/PjsuaCallbackRouter.cpp
 )
 target_sources_ifdef(CONFIG_VOIP_CORE_SERVICE_TEST app PRIVATE
   src/core_service.cpp

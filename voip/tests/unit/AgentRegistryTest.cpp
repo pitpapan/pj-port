@@ -287,6 +287,16 @@ void test_rejects_null_endpoint_bad_format_and_security() {
            voip::Error::unsupported_configuration);
 }
 
+void test_rejects_non_integral_audio_frame_duration() {
+    Fixtures fixtures;
+    fixtures.service.conference_format.samples_per_frame = 161;
+    Source source{fixtures.service.conference_format};
+    Sink sink{fixtures.service.conference_format};
+    fixtures.agent.audio = {&source, &sink};
+    voip::AgentRegistry registry;
+    assert(registry.Initialize(fixtures.service) == voip::Error::invalid_argument);
+}
+
 void test_copies_strings_and_maps_configuration_indexes_to_handles() {
     Fixtures fixtures;
     char caller_identity[] = "sip:a@example.test";
@@ -350,6 +360,7 @@ int main() {
     test_copies_all_four_sip_fields_independently();
     test_owned_credentials_can_be_erased_explicitly();
     test_rejects_null_endpoint_bad_format_and_security();
+    test_rejects_non_integral_audio_frame_duration();
     test_copies_strings_and_maps_configuration_indexes_to_handles();
     test_failed_reinitialize_resets_and_invalidates_old_handle();
     test_rejects_more_than_five_agents();

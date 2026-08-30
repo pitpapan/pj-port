@@ -50,7 +50,9 @@ bool AgentRegistry::SameFormat(const PcmFormat &left,
 bool AgentRegistry::IsSupportedFormat(const PcmFormat &format) noexcept {
     return format.sample_rate_hz != 0 && format.samples_per_frame != 0 &&
            format.channels == 1 &&
-           format.sample_format == SampleFormat::signed_16;
+           format.sample_format == SampleFormat::signed_16 &&
+           (static_cast<std::uint32_t>(format.samples_per_frame) * 1000U) %
+                   format.sample_rate_hz == 0;
 }
 
 Error AgentRegistry::Validate(const ServiceConfig &config) noexcept {
