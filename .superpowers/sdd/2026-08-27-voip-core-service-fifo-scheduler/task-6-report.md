@@ -1,7 +1,8 @@
 # Task 6 report — strict FIFO scheduler and logical call contexts
 
 Base: `70793c22b`
-Commit: to be filled after verification
+Initial commit: `a01af0325`
+Follow-up commit: `85eb6c3d0` (`fix(voip): keep scheduler phases private`)
 
 ## Scope
 
