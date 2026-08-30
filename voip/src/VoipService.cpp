@@ -13,7 +13,7 @@ VoipService::~VoipService() noexcept { if (impl_ != nullptr) { (void)impl_->runt
 Error VoipService::Initialize(const ServiceConfig &c) noexcept { return impl_ ? impl_->runtime.Initialize(c) : Error::internal_failure; }
 Error VoipService::Shutdown() noexcept { return impl_ ? impl_->runtime.Shutdown() : Error::internal_failure; }
 Error VoipService::GetAgentHandle(std::uint8_t i, AgentHandle *h) const noexcept { return impl_ ? impl_->runtime.GetAgentHandle(i, h) : Error::internal_failure; }
-Error VoipService::Dial(AgentHandle a, const DialRequest &r, CallHandle *c, OperationId *o) noexcept { return impl_ ? impl_->runtime.Dial(a, r, c, o) : Error::internal_failure; }
+Error VoipService::Dial(AgentHandle a, const DialRequest &r, OperationId *o) noexcept { return impl_ ? impl_->runtime.Dial(a, r, o) : Error::internal_failure; }
 Error VoipService::Answer(CallHandle c, OperationId *o) noexcept { return impl_ ? impl_->runtime.Answer(c, o) : Error::internal_failure; }
 Error VoipService::Reject(CallHandle c, std::uint16_t s, OperationId *o) noexcept { return impl_ ? impl_->runtime.Reject(c, s, o) : Error::internal_failure; }
 Error VoipService::Cancel(CallHandle c, OperationId *o) noexcept { return impl_ ? impl_->runtime.Cancel(c, o) : Error::internal_failure; }

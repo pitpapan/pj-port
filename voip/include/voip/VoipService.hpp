@@ -38,8 +38,7 @@ public:
     Error GetAgentHandle(std::uint8_t config_index,
                          AgentHandle *) const noexcept;
 
-    Error Dial(AgentHandle, const DialRequest &, CallHandle *,
-               OperationId *) noexcept;
+    Error Dial(AgentHandle, const DialRequest &, OperationId *) noexcept;
     Error Answer(CallHandle, OperationId *) noexcept;
     Error Reject(CallHandle, std::uint16_t sip_status,
                  OperationId *) noexcept;

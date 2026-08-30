@@ -30,6 +30,17 @@ struct has_password_member<T, std::void_t<decltype(&T::password)>>
     : std::true_type {};
 
 template <typename T, typename = void>
+struct has_legacy_dial : std::false_type {};
+
+template <typename T>
+struct has_legacy_dial<T, std::void_t<decltype(static_cast<voip::Error
+    (T::*)(voip::AgentHandle, const voip::DialRequest &, voip::CallHandle *,
+           voip::OperationId *) noexcept>(&T::Dial))>> : std::true_type {};
+
+static_assert(!has_legacy_dial<voip::VoipService>::value,
+              "legacy synchronous CallHandle Dial must remain absent");
+
+template <typename T, typename = void>
 struct has_queued_phase : std::false_type {};
 
 template <typename T>
@@ -303,6 +314,6 @@ int main() {
     (void)service.WaitForEvent(&event, 0);
     (void)service.GetAgentSnapshot(agent_handle, &agent_snapshot);
     (void)service.GetCallSnapshot(call_handle, &call_snapshot);
-    (void)service.Dial(agent_handle, request, &call_handle, &operation);
+    (void)service.Dial(agent_handle, request, &operation);
     return 0;
 }

@@ -23,6 +23,7 @@ struct PromotionEffect {
     CallDirection direction = CallDirection::outgoing;
     std::uint32_t runtime_token = 0;
     bool acceptance_applied = false;
+    bool answer_on_promotion = false;
     ScheduledTransition acceptance{};
 };
 

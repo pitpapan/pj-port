@@ -209,7 +209,8 @@ void test_automatic_promotions_are_returned_as_bounded_effects() {
            voip::Error::ok);
     assert(effects.count == 2);
     assert(effects.entries[0].handle.slot == queued_a.slot);
-    assert(effects.entries[0].acceptance_applied);
+    assert(effects.entries[0].answer_on_promotion);
+    assert(!effects.entries[0].acceptance_applied);
     assert(effects.entries[1].handle.slot == queued_b.slot);
 }
 

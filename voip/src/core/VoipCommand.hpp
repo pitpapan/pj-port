@@ -20,7 +20,6 @@ enum class CommandType : std::uint8_t {
 
 struct DialCommand {
     AgentHandle agent{};
-    CallHandle call{};
     char remote_uri[max_uri_length + 1]{};
 };
 

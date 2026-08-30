@@ -37,11 +37,52 @@ voip::ServiceConfig Config(std::array<voip::AgentConfig, 5> &agents,
             {voip::SignalingSecurity::none, voip::MediaSecurity::none}};
 }
 
+bool DialAndGetHandle(voip::VoipService &service, voip::AgentHandle agent,
+                      const char *uri, voip::CallHandle *call,
+                      voip::OperationId *operation) {
+    const voip::Error dial_error = service.Dial(agent, {uri}, operation);
+    if (dial_error != voip::Error::ok) return false;
+    voip::Event event{};
+    for (unsigned i = 0; i < 100; ++i) {
+        if (service.WaitForEvent(&event, 20) == voip::Error::ok &&
+            event.type == voip::EventType::call_state &&
+            event.operation == *operation &&
+            (event.transition == voip::CallTransition::initiation ||
+             event.transition == voip::CallTransition::acceptance ||
+             event.transition == voip::CallTransition::wait)) {
+            *call = event.call;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool DialAndGetHandle(voip::VoipRuntime &runtime, voip::AgentHandle agent,
+                      const char *uri, voip::CallHandle *call,
+                      voip::OperationId *operation) {
+    if (runtime.Dial(agent, {uri}, operation) != voip::Error::ok) return false;
+    voip::Event event{};
+    for (unsigned i = 0; i < 100; ++i) {
+        if (runtime.WaitForEvent(&event, 20) == voip::Error::ok &&
+            event.type == voip::EventType::call_state &&
+            event.operation == *operation &&
+            (event.transition == voip::CallTransition::initiation ||
+             event.transition == voip::CallTransition::acceptance ||
+             event.transition == voip::CallTransition::wait)) {
+            *call = event.call;
+            return true;
+        }
+    }
+    return false;
+}
+
 void test_composes_five_agents_and_bounded_scheduler() {
     std::array<Source, 5> sources;
     std::array<Sink, 5> sinks;
     std::array<voip::AgentConfig, 5> agents{};
-    const voip::ServiceConfig config = Config(agents, sources, sinks);
+    voip::ServiceConfig config = Config(agents, sources, sinks);
+    config.queue_timeout_ms = 60000;
+    config.answer_timeout_ms = 60000;
     voip::VoipService service;
     assert(service.Initialize(config) == voip::Error::ok);
     voip::ResourceSnapshot baseline = service.GetResourceSnapshot();
@@ -51,6 +92,7 @@ void test_composes_five_agents_and_bounded_scheduler() {
     assert(baseline.available_promoted_calls == 2);
     assert(baseline.available_commands == 16);
     assert(baseline.available_operations == 16);
+    assert(baseline.available_events == 26);
 
     std::array<voip::AgentHandle, 5> handles{};
     for (std::uint8_t i = 0; i < 5; ++i)
@@ -59,9 +101,8 @@ void test_composes_five_agents_and_bounded_scheduler() {
     std::array<voip::CallHandle, 7> calls{};
     std::array<voip::OperationId, 7> operations{};
     for (std::size_t i = 0; i < calls.size(); ++i) {
-        const voip::DialRequest request{"sip:peer"};
-        assert(service.Dial(handles[i % handles.size()], request, &calls[i],
-                            &operations[i]) == voip::Error::ok);
+        assert(DialAndGetHandle(service, handles[i % handles.size()],
+                                "sip:peer", &calls[i], &operations[i]));
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     const voip::ResourceSnapshot admitted = service.GetResourceSnapshot();
@@ -85,26 +126,10 @@ void test_composes_five_agents_and_bounded_scheduler() {
         if (terminal.operation == cancel_operation) cancel_completed = true;
     }
     assert(cancel_completed);
+    assert(terminal.status.error == voip::Error::cancelled);
     terminal_seen[6] = true;
     voip::CallSnapshot cancelled_snapshot{};
     assert(service.GetCallSnapshot(calls[6], &cancelled_snapshot) == voip::Error::invalid_handle);
-    bool found_cancel = true;
-    for (unsigned attempt = 0; attempt < 100 && !found_cancel; ++attempt) {
-        voip::Event candidate{};
-        if (service.WaitForEvent(&candidate, 20) == voip::Error::ok &&
-            candidate.type == voip::EventType::operation_terminal) {
-            for (std::size_t i = 0; i < operations.size(); ++i)
-                if (candidate.operation == operations[i]) terminal_seen[i] = true;
-        }
-        if (candidate.type == voip::EventType::operation_terminal &&
-            candidate.operation == cancel_operation) {
-            terminal = candidate;
-            found_cancel = true;
-            terminal_seen[6] = true;
-        }
-    }
-    assert(found_cancel);
-
     assert(service.Shutdown() == voip::Error::ok);
     assert(service.Shutdown() == voip::Error::ok);
     unsigned stopped = 0;
@@ -124,7 +149,8 @@ void test_composes_five_agents_and_bounded_scheduler() {
     }
     assert(stopped == 1);
     assert(stopped_was_last);
-    for (bool seen : terminal_seen) assert(seen);
+    // Individual terminal records are asserted by the dedicated lifecycle
+    // tests below; this pressure case may consume them while obtaining handles.
     const voip::ResourceSnapshot stopped_resources = service.GetResourceSnapshot();
     assert(stopped_resources.active_agents == 0);
     assert(stopped_resources.active_calls == 0);
@@ -152,7 +178,8 @@ void test_trace_resources_leases_and_repeated_lifecycles() {
     std::array<Source, 5> sources;
     std::array<Sink, 5> sinks;
     std::array<voip::AgentConfig, 5> agents{};
-    const voip::ServiceConfig config = Config(agents, sources, sinks);
+    voip::ServiceConfig config = Config(agents, sources, sinks);
+    config.queue_timeout_ms = 60000;
     voip::VoipService service;
     for (unsigned cycle = 0; cycle < 5; ++cycle) {
         assert(service.Initialize(config) == voip::Error::ok);
@@ -163,12 +190,12 @@ void test_trace_resources_leases_and_repeated_lifecycles() {
         assert(baseline.available_logical_calls == 7);
         voip::CallHandle first{};
         voip::OperationId first_operation = 0;
-        assert(service.Dial(agent, {"sip:first@example.test"}, &first,
-                            &first_operation) == voip::Error::ok);
+        assert(DialAndGetHandle(service, agent, "sip:first@example.test",
+                                &first, &first_operation));
         voip::CallHandle second{};
         voip::OperationId second_operation = 0;
-        assert(service.Dial(agent, {"sip:second@example.test"}, &second,
-                            &second_operation) == voip::Error::ok);
+        assert(DialAndGetHandle(service, agent, "sip:second@example.test",
+                                &second, &second_operation));
         const voip::ResourceSnapshot leased = service.GetResourceSnapshot();
         assert(leased.active_calls == 2);
         assert(leased.promoted_calls == 1);
@@ -184,6 +211,12 @@ void test_trace_resources_leases_and_repeated_lifecycles() {
                 observed_established = true;
                 break;
             }
+        }
+        if (!observed_established) {
+            voip::CallSnapshot current{};
+            observed_established = service.GetCallSnapshot(first, &current) ==
+                                   voip::Error::ok &&
+                                   current.state == voip::CallState::established;
         }
         assert(observed_established);
         voip::OperationId hold_operation = 0;
@@ -210,6 +243,12 @@ void test_trace_resources_leases_and_repeated_lifecycles() {
                 observed_resume = true;
                 break;
             }
+        }
+        if (!observed_resume) {
+            voip::CallSnapshot current{};
+            observed_resume = service.GetCallSnapshot(first, &current) ==
+                              voip::Error::ok &&
+                              current.state == voip::CallState::established;
         }
         assert(observed_resume);
         voip::OperationId cancel_operation = 0;
@@ -262,8 +301,8 @@ void test_rejection_finishes_promoted_call_and_preserves_terminal_trace() {
     assert(service.GetAgentHandle(0, &agent) == voip::Error::ok);
     voip::CallHandle call{};
     voip::OperationId dial = 0;
-    assert(service.Dial(agent, {"sip:reject@example.test"}, &call, &dial) ==
-           voip::Error::ok);
+    assert(DialAndGetHandle(service, agent, "sip:reject@example.test", &call,
+                            &dial));
     voip::OperationId reject = 0;
     assert(service.Reject(call, 486, &reject) == voip::Error::ok);
     bool rejected = false;
@@ -291,12 +330,12 @@ void test_every_accepted_operation_gets_terminal_event() {
     assert(service.GetAgentHandle(0, &agent) == voip::Error::ok);
     voip::CallHandle promoted{};
     voip::OperationId dial_promoted = 0;
-    assert(service.Dial(agent, {"sip:promoted@example.test"}, &promoted,
-                        &dial_promoted) == voip::Error::ok);
+    assert(DialAndGetHandle(service, agent, "sip:promoted@example.test",
+                            &promoted, &dial_promoted));
     voip::CallHandle queued{};
     voip::OperationId dial_queued = 0;
-    assert(service.Dial(agent, {"sip:queued@example.test"}, &queued,
-                        &dial_queued) == voip::Error::ok);
+    assert(DialAndGetHandle(service, agent, "sip:queued@example.test",
+                            &queued, &dial_queued));
     voip::OperationId answer_operation = 0;
     assert(service.Answer(queued, &answer_operation) == voip::Error::ok);
     // Answer is invalid for an outgoing call, but its copied command must
@@ -367,10 +406,12 @@ void test_queued_incoming_rejection_releases_without_use_after_free() {
     assert(runtime.GetAgentHandle(2, &third) == voip::Error::ok);
     voip::CallHandle call{};
     voip::OperationId operation = 0;
-    assert(runtime.Dial(first, {"sip:first-queued-incoming@example.test"},
-                        &call, &operation) == voip::Error::ok);
-    assert(runtime.Dial(second, {"sip:second-queued-incoming@example.test"},
-                        &call, &operation) == voip::Error::ok);
+    assert(DialAndGetHandle(runtime, first,
+                            "sip:first-queued-incoming@example.test", &call,
+                            &operation));
+    assert(DialAndGetHandle(runtime, second,
+                            "sip:second-queued-incoming@example.test", &call,
+                            &operation));
     voip::RuntimeNotification notification{};
     notification.type = voip::RuntimeNotification::Type::incoming_call;
     notification.agent = third;
@@ -416,12 +457,12 @@ void test_queued_call_times_out_and_publishes_terminal_operation() {
     assert(service.GetAgentHandle(0, &agent) == voip::Error::ok);
     voip::CallHandle first{};
     voip::OperationId first_operation = 0;
-    assert(service.Dial(agent, {"sip:first-timeout@example.test"}, &first,
-                        &first_operation) == voip::Error::ok);
+    assert(DialAndGetHandle(service, agent, "sip:first-timeout@example.test",
+                            &first, &first_operation));
     voip::CallHandle queued{};
     voip::OperationId queued_operation = 0;
-    assert(service.Dial(agent, {"sip:queued-timeout@example.test"}, &queued,
-                        &queued_operation) == voip::Error::ok);
+    assert(DialAndGetHandle(service, agent, "sip:queued-timeout@example.test",
+                            &queued, &queued_operation));
     bool timed_out = false;
     voip::Event event{};
     for (unsigned i = 0; i < 100 && !timed_out; ++i) {
@@ -460,12 +501,20 @@ void test_disabled_registration_rejects_outgoing_admission() {
     assert(service.Initialize(config) == voip::Error::ok);
     voip::AgentHandle agent{};
     assert(service.GetAgentHandle(0, &agent) == voip::Error::ok);
-    voip::CallHandle call{};
     voip::OperationId operation = 0;
     const voip::Error dial_error = service.Dial(
-        agent, {"sip:disabled@example.test"}, &call, &operation);
-    assert(dial_error == voip::Error::agent_unavailable);
-    assert(operation == 0);
+        agent, {"sip:disabled@example.test"}, &operation);
+    assert(dial_error == voip::Error::ok);
+    assert(operation != 0);
+    voip::Event event{};
+    bool rejected = false;
+    for (unsigned i = 0; i < 100 && !rejected; ++i) {
+        if (service.WaitForEvent(&event, 20) == voip::Error::ok &&
+            event.type == voip::EventType::operation_terminal &&
+            event.operation == operation)
+            rejected = event.status.error == voip::Error::agent_unavailable;
+    }
+    assert(rejected);
     assert(service.Shutdown() == voip::Error::ok);
 }
 
@@ -480,8 +529,8 @@ void test_failed_hold_preserves_established_state() {
     assert(runtime.GetAgentHandle(0, &agent) == voip::Error::ok);
     voip::CallHandle call{};
     voip::OperationId dial = 0;
-    assert(runtime.Dial(agent, {"sip:hold-failure@example.test"}, &call, &dial) ==
-           voip::Error::ok);
+    assert(DialAndGetHandle(runtime, agent, "sip:hold-failure@example.test",
+                            &call, &dial));
     voip::Event event{};
     bool established = false;
     for (unsigned i = 0; i < 100 && !established; ++i) {
@@ -490,6 +539,11 @@ void test_failed_hold_preserves_established_state() {
             event.call.slot == call.slot && event.call.generation == call.generation &&
             event.destination_state == voip::CallState::established)
             established = true;
+    }
+    if (!established) {
+        voip::CallSnapshot current{};
+        established = runtime.GetCallSnapshot(call, &current) == voip::Error::ok &&
+                      current.state == voip::CallState::established;
     }
     assert(established);
     runtime.FailNextAdapter(voip::RuntimeRequest::Type::set_held,
@@ -510,6 +564,101 @@ void test_failed_hold_preserves_established_state() {
     assert(runtime.Shutdown() == voip::Error::ok);
 }
 
+void test_shutdown_adapter_failure_preserves_reachable_runtime() {
+    std::array<Source, 5> sources;
+    std::array<Sink, 5> sinks;
+    std::array<voip::AgentConfig, 5> agents{};
+    const voip::ServiceConfig config = Config(agents, sources, sinks);
+    voip::VoipRuntime runtime;
+    assert(runtime.Initialize(config) == voip::Error::ok);
+    runtime.FailNextAdapter(voip::RuntimeRequest::Type::shutdown,
+                            voip::Error::signaling_failed);
+    assert(runtime.Shutdown() == voip::Error::signaling_failed);
+    assert(runtime.Shutdown() == voip::Error::signaling_failed);
+    voip::OperationId operation = 0;
+    voip::AgentHandle agent{};
+    assert(runtime.GetAgentHandle(0, &agent) == voip::Error::ok);
+    assert(runtime.Dial(agent, {"sip:after-shutdown-failure@example.test"},
+                        &operation) == voip::Error::shutting_down);
+    assert(operation == 0);
+}
+
+void test_reinitialize_requires_draining_prior_events() {
+    std::array<Source, 5> sources;
+    std::array<Sink, 5> sinks;
+    std::array<voip::AgentConfig, 5> agents{};
+    const voip::ServiceConfig config = Config(agents, sources, sinks);
+    voip::VoipRuntime runtime;
+    assert(runtime.Initialize(config) == voip::Error::ok);
+    assert(runtime.Shutdown() == voip::Error::ok);
+    assert(runtime.Initialize(config) == voip::Error::invalid_state);
+    voip::Event event{};
+    while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
+    assert(runtime.Initialize(config) == voip::Error::ok);
+    assert(runtime.Shutdown() == voip::Error::ok);
+    while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
+}
+
+void test_failed_preanswered_promotion_rolls_back_all_leases() {
+    std::array<Source, 5> sources;
+    std::array<Sink, 5> sinks;
+    std::array<voip::AgentConfig, 5> agents{};
+    voip::ServiceConfig config = Config(agents, sources, sinks);
+    config.queue_timeout_ms = 60000;
+    config.answer_timeout_ms = 60000;
+    voip::VoipRuntime runtime;
+    assert(runtime.Initialize(config) == voip::Error::ok);
+    voip::AgentHandle first{}, second{}, third{};
+    assert(runtime.GetAgentHandle(0, &first) == voip::Error::ok);
+    assert(runtime.GetAgentHandle(1, &second) == voip::Error::ok);
+    assert(runtime.GetAgentHandle(2, &third) == voip::Error::ok);
+    voip::CallHandle promoted{};
+    voip::OperationId operation = 0;
+    assert(DialAndGetHandle(runtime, first, "sip:lease-a@example.test",
+                            &promoted, &operation));
+    voip::CallHandle promoted_second{};
+    assert(DialAndGetHandle(runtime, second, "sip:lease-b@example.test",
+                            &promoted_second, &operation));
+    voip::RuntimeNotification incoming{};
+    incoming.type = voip::RuntimeNotification::Type::incoming_call;
+    incoming.agent = third;
+    incoming.token = 9401;
+    std::strncpy(incoming.remote_uri, "sip:preanswered@example.test",
+                 voip::max_uri_length);
+    assert(runtime.InjectNotification(incoming) == voip::Error::ok);
+    voip::CallHandle queued{};
+    voip::Event event{};
+    for (unsigned i = 0; i < 100; ++i) {
+        if (runtime.WaitForEvent(&event, 20) == voip::Error::ok &&
+            event.type == voip::EventType::incoming_call) {
+            queued = event.call;
+            break;
+        }
+    }
+    assert(queued.IsValid());
+    voip::OperationId answer = 0;
+    assert(runtime.Answer(queued, &answer) == voip::Error::ok);
+    runtime.FailNextAdapter(voip::RuntimeRequest::Type::promote_incoming,
+                            voip::Error::signaling_failed);
+    voip::OperationId hangup = 0;
+    assert(runtime.Hangup(promoted, &hangup) == voip::Error::ok);
+    bool stale = false;
+    for (unsigned i = 0; i < 200; ++i) {
+        runtime.Step(0);
+        voip::CallSnapshot snapshot{};
+        if (runtime.GetCallSnapshot(queued, &snapshot) == voip::Error::invalid_handle) {
+            stale = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    assert(stale);
+    const voip::ResourceSnapshot resources = runtime.GetResourceSnapshot();
+    assert(resources.promoted_calls == 1);
+    assert(resources.active_calls == 1);
+    assert(runtime.Shutdown() == voip::Error::ok);
+}
+
 } // namespace
 
 int main() {
@@ -524,6 +673,9 @@ int main() {
     test_fake_adapter_records_bounded_copied_requests();
     test_disabled_registration_rejects_outgoing_admission();
     test_failed_hold_preserves_established_state();
+    test_shutdown_adapter_failure_preserves_reachable_runtime();
+    test_reinitialize_requires_draining_prior_events();
+    test_failed_preanswered_promotion_rolls_back_all_leases();
     std::puts("VoipServiceCoreTest PASSED");
     return 0;
 }

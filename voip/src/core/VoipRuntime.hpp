@@ -34,7 +34,7 @@ public:
     Error Initialize(const ServiceConfig &) noexcept;
     Error Shutdown() noexcept;
     Error GetAgentHandle(std::uint8_t, AgentHandle *) const noexcept;
-    Error Dial(AgentHandle, const DialRequest &, CallHandle *, OperationId *) noexcept;
+    Error Dial(AgentHandle, const DialRequest &, OperationId *) noexcept;
     Error Answer(CallHandle, OperationId *) noexcept;
     Error Reject(CallHandle, std::uint16_t, OperationId *) noexcept;
     Error Cancel(CallHandle, OperationId *) noexcept;
@@ -58,6 +58,8 @@ private:
     Error EnqueueControl(VoipCommand &, OperationId *) noexcept;
     void PublishTransition(const ScheduledTransition &) noexcept;
     bool PublishEvent(const Event &) noexcept;
+    bool ReserveCallTerminal(VoipEventQueue::Reservation *, std::size_t *) noexcept;
+    bool CommitCallTerminal(CallHandle, const Event &) noexcept;
     void PublishAdmission(CallHandle, bool waiting) noexcept;
     void PublishAgent(const AgentContext &) noexcept;
     void ApplyEffects(const SchedulerEffects &) noexcept;
@@ -85,6 +87,11 @@ private:
     VoipResourceGuard resources_{};
     CoreActor actor_{};
     std::array<CallHandle, CallScheduler::logical_call_capacity> calls_{};
+    std::array<VoipEventQueue::Reservation,
+               CallScheduler::logical_call_capacity> call_terminals_{};
+    std::array<bool, CallScheduler::logical_call_capacity> call_terminal_live_{};
+    std::array<CallHandle, CallScheduler::logical_call_capacity>
+        call_terminal_handles_{};
     std::size_t call_count_ = 0;
     bool initialized_ = false;
     bool shutting_down_ = false;
@@ -94,6 +101,7 @@ private:
     std::uint32_t answer_timeout_ms_ = 0;
     CoreEventSignal shutdown_signal_{};
     bool shutdown_complete_ = false;
+    Error shutdown_error_ = Error::ok;
     bool event_publication_failed_ = false;
 };
 

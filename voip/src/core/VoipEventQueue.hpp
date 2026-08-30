@@ -72,6 +72,7 @@ public:
     bool TryPeek(Event *event) noexcept;
 
     std::size_t Size() const noexcept;
+    std::size_t AvailableRecords() const noexcept;
     bool IsStopped() const noexcept;
     // Starts a fresh service lifecycle after the previous stopped record was
     // consumed. No active reservations may exist when called.

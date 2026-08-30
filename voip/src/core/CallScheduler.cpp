@@ -149,22 +149,14 @@ bool CallScheduler::PromoteContext(CallContext &context,
         !effects.CanAppend())
         return false;
 
-    AppliedCallTransition accepted{};
-    const AppliedCallTransition *accepted_ptr = nullptr;
-    if (context.answer_on_promotion) {
-        if (context.state_machine.Apply(CallTransition::acceptance, &accepted) !=
-            Error::ok)
-            return false;
-        accepted_ptr = &accepted;
-    }
-
     AgentContext *agent = agents_.Resolve(context.agent);
     agent->promoted_call = context.handle;
     ++promoted_count_;
-    context.phase = context.answer_on_promotion ? Phase::established
-                                                : Phase::promoting;
-    if (context.answer_on_promotion) context.answer_on_promotion = false;
-    AddPromotionEffect(context, accepted_ptr, effects);
+    context.phase = Phase::promoting;
+    AddPromotionEffect(context, nullptr, effects);
+    effects.entries[effects.count - 1].answer_on_promotion =
+        context.answer_on_promotion;
+    context.answer_on_promotion = false;
     if (context.phase == Phase::promoting)
         context.phase = context.direction == CallDirection::incoming
                              ? Phase::incoming

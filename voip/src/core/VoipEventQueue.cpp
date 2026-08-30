@@ -27,7 +27,8 @@ bool VoipEventQueue::IsGuaranteedEvent(const Event &event) noexcept {
         return true;
     case EventType::call_state:
         return event.destination_state == CallState::terminated ||
-               event.call_snapshot.state == CallState::terminated;
+               event.call_snapshot.state == CallState::terminated ||
+               event.transition == CallTransition::timeout;
     case EventType::agent_snapshot:
         return event.agent_snapshot.registration ==
                    RegistrationState::authentication_failed ||
@@ -286,6 +287,12 @@ bool VoipEventQueue::TryPeek(Event *event) noexcept {
 std::size_t VoipEventQueue::Size() const noexcept {
     CoreLockGuard lock(mutex_);
     return count_;
+}
+
+std::size_t VoipEventQueue::AvailableRecords() const noexcept {
+    CoreLockGuard lock(mutex_);
+    const std::size_t used = count_ + reserved_count_;
+    return used >= ordinary_capacity ? 0 : ordinary_capacity - used;
 }
 
 bool VoipEventQueue::IsStopped() const noexcept {

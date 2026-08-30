@@ -4,7 +4,7 @@
 
 **Goal:** Replace the compatibility facade with a heap-free, PJ-independent public service supporting five immutable agents, seven logical calls, two promoted slots, a strict five-entry FIFO, asynchronous operations, and polling events.
 
-**Architecture:** Application threads copy commands into a fixed mailbox. One runtime actor owns domain state and applies commands through an injectable private runtime adapter. Handles are generation checked. Accepted operations reserve a terminal event before admission. A fixed event ring coalesces snapshots, permanently reserves the service-stopped record, and exposes only polling APIs.
+**Architecture:** Application threads copy commands into a fixed mailbox. One runtime actor owns domain state and applies commands through an injectable private runtime adapter. Handles are generation checked. Accepted operations reserve a terminal event before admission. A fixed event ring coalesces snapshots, permanently reserves the service-stopped record, and exposes only polling APIs. `Dial(AgentHandle, const DialRequest &, OperationId *)` admits only a copied command; the actor creates the call handle and includes it in the first copied call-state event.
 
 **Tech Stack:** C++17, Zephyr synchronization primitives behind private adapters, fixed arrays/rings, placement construction in service-owned storage, standalone host unit tests, Zephyr CMake/Kconfig.
 

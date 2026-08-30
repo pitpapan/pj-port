@@ -49,6 +49,8 @@ private:
     std::array<RuntimeRequest, capacity> requests_{};
     std::size_t request_count_ = 0;
     std::array<Error, 10> failures_{};
+    static_assert(static_cast<std::size_t>(RuntimeRequest::Type::shutdown) + 1 == 10,
+                  "failure table must cover every adapter request");
 };
 
 } // namespace voip

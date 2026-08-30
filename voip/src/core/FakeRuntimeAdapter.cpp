@@ -56,6 +56,8 @@ Error FakeRuntimeAdapter::InitializeAccount(const AgentContext &context) noexcep
     request.type = RuntimeRequest::Type::initialize_account;
     request.agent = context.handle;
     Record(request);
+    const Error failure = ConsumeFailure(request.type);
+    if (failure != Error::ok) return failure;
     notification.type = RuntimeNotification::Type::agent_registered;
     notification.agent = context.handle;
     return Enqueue(notification);
@@ -69,6 +71,8 @@ Error FakeRuntimeAdapter::PromoteOutgoing(AgentHandle agent, const char *uri,
     request.agent = agent;
     std::strncpy(request.remote_uri, uri, max_uri_length);
     Record(request);
+    const Error failure = ConsumeFailure(request.type);
+    if (failure != Error::ok) return failure;
     *token = next_token_++;
     if (next_token_ == 0) next_token_ = 1;
     RuntimeNotification notification{};
@@ -87,6 +91,8 @@ Error FakeRuntimeAdapter::PromoteIncoming(AgentHandle agent, std::uint32_t token
     request.agent = agent;
     request.token = token;
     Record(request);
+    const Error failure = ConsumeFailure(request.type);
+    if (failure != Error::ok) return failure;
     *native_token = token != 0 ? token : next_token_++;
     RuntimeNotification notification{};
     notification.type = RuntimeNotification::Type::call_accepted;
@@ -100,6 +106,8 @@ Error FakeRuntimeAdapter::Answer(std::uint32_t token) noexcept {
     request.type = RuntimeRequest::Type::answer;
     request.token = token;
     Record(request);
+    const Error failure = ConsumeFailure(request.type);
+    if (failure != Error::ok) return failure;
     RuntimeNotification notification{};
     notification.type = RuntimeNotification::Type::call_accepted;
     notification.token = token;
@@ -112,6 +120,8 @@ Error FakeRuntimeAdapter::Reject(std::uint32_t token, std::uint16_t status) noex
     request.token = token;
     request.sip_status = status;
     Record(request);
+    const Error failure = ConsumeFailure(request.type);
+    if (failure != Error::ok) return failure;
     RuntimeNotification notification{};
     notification.type = RuntimeNotification::Type::call_rejected;
     notification.token = token;
@@ -125,6 +135,8 @@ Error FakeRuntimeAdapter::Cancel(std::uint32_t token) noexcept {
     request.type = RuntimeRequest::Type::cancel;
     request.token = token;
     Record(request);
+    const Error failure = ConsumeFailure(request.type);
+    if (failure != Error::ok) return failure;
     RuntimeNotification notification{};
     notification.type = RuntimeNotification::Type::call_rejected;
     notification.token = token;
@@ -137,6 +149,8 @@ Error FakeRuntimeAdapter::Hangup(std::uint32_t token) noexcept {
     request.type = RuntimeRequest::Type::hangup;
     request.token = token;
     Record(request);
+    const Error failure = ConsumeFailure(request.type);
+    if (failure != Error::ok) return failure;
     RuntimeNotification notification{};
     notification.type = RuntimeNotification::Type::call_finished;
     notification.token = token;
@@ -171,6 +185,8 @@ Error FakeRuntimeAdapter::BeginCallTeardown(std::uint32_t token) noexcept {
     request.type = RuntimeRequest::Type::teardown;
     request.token = token;
     Record(request);
+    const Error failure = ConsumeFailure(request.type);
+    if (failure != Error::ok) return failure;
     RuntimeNotification notification{};
     notification.type = RuntimeNotification::Type::call_finished;
     notification.token = token;
@@ -181,6 +197,8 @@ Error FakeRuntimeAdapter::Shutdown() noexcept {
     RuntimeRequest request{};
     request.type = RuntimeRequest::Type::shutdown;
     Record(request);
+    const Error failure = ConsumeFailure(request.type);
+    if (failure != Error::ok) return failure;
     stopped_ = true;
     count_ = 0;
     return Error::ok;

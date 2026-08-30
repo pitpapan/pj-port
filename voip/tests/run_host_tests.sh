@@ -2,8 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-out="/tmp/voip-plan2-host-$$"
-mkdir -p "$out"
+out=$(mktemp -d /tmp/voip-plan2-host-XXXXXX)
 cleanup=0
 trap 'if [ "$cleanup" -eq 1 ]; then rm -rf "$out"; fi' EXIT
 
