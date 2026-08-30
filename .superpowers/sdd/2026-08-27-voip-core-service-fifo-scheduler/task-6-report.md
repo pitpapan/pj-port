@@ -132,3 +132,16 @@ teardown-only lease release, prefilled effects, opaque token ownership, and
 capacity restoration. Fix-round verification passed the two focused tests,
 all four earlier Plan 2 host tests, ASan/UBSan focused tests (with leak
 detection disabled under the ptrace-backed harness), and `git diff --check`.
+
+## Fix rounds 4/5
+
+Coverage-only hardening; no RED claim is made. The full-capacity test now
+asserts all seven handles are live immediately after admission, processes
+every handle deterministically without silent skips, verifies terminal
+transition snapshots retain the original handle before teardown invalidation,
+and checks stale acceptance/cancel commands after every release. It retains
+the final exact 7 logical / 2 promoted / 5 FIFO availability assertions.
+
+Verification passed the focused state and scheduler tests, all four prior
+Plan 2 host tests, ASan/UBSan focused binaries (with leak detection disabled
+under the ptrace-backed harness), and `git diff --check`.

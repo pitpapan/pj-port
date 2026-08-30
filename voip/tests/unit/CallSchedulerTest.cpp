@@ -376,6 +376,7 @@ void test_full_capacity_restores_all_fixed_resources() {
         assert(scheduler.AdmitOutgoing(agents[i % 2], uri, &calls[i],
                                        nullptr, effects) == voip::Error::ok);
     }
+    for (const voip::CallHandle call : calls) assert(scheduler.IsLive(call));
     assert(scheduler.LiveCount() == 7);
     assert(scheduler.PromotedCount() == 2);
     assert(scheduler.QueuedCount() == 5);
@@ -385,23 +386,45 @@ void test_full_capacity_restores_all_fixed_resources() {
 
     for (std::size_t i = 0; i < 2; ++i) {
         assert(scheduler.OnAcceptance(calls[i]) == voip::Error::ok);
-        assert(scheduler.Hangup(calls[i], nullptr, effects) == voip::Error::ok);
+        voip::ScheduledTransition terminal{};
+        assert(scheduler.Hangup(calls[i], &terminal, effects) == voip::Error::ok);
+        assert(terminal.snapshot.handle.slot == calls[i].slot);
+        assert(terminal.snapshot.handle.generation == calls[i].generation);
+        assert(terminal.transition.terminal_event_required);
+        assert(scheduler.IsLive(calls[i]));
         assert(scheduler.OnTeardownComplete(calls[i], nullptr, effects) ==
                voip::Error::ok);
+        assert(!scheduler.IsLive(calls[i]));
+        assert(scheduler.OnAcceptance(calls[i]) == voip::Error::invalid_handle);
+        assert(scheduler.Cancel(calls[i], nullptr, effects) ==
+               voip::Error::invalid_handle);
     }
     for (std::size_t i = 2; i < 7; ++i) {
-        if (!scheduler.IsLive(calls[i])) continue;
+        assert(scheduler.IsLive(calls[i]));
+        voip::ScheduledTransition terminal{};
         if (scheduler.IsPromoted(calls[i])) {
             const voip::CallSnapshot snapshot = scheduler.Snapshot(calls[i]);
             if (snapshot.state == voip::CallState::initiated ||
                 snapshot.state == voip::CallState::hold)
                 assert(scheduler.OnAcceptance(calls[i]) == voip::Error::ok);
-            assert(scheduler.Hangup(calls[i], nullptr, effects) == voip::Error::ok);
+            assert(scheduler.Hangup(calls[i], &terminal, effects) == voip::Error::ok);
+            assert(terminal.snapshot.handle.slot == calls[i].slot);
+            assert(terminal.snapshot.handle.generation == calls[i].generation);
+            assert(terminal.transition.terminal_event_required);
+            assert(scheduler.IsLive(calls[i]));
             assert(scheduler.OnTeardownComplete(calls[i], nullptr, effects) ==
                    voip::Error::ok);
         } else {
-            assert(scheduler.Cancel(calls[i], nullptr, effects) == voip::Error::ok);
+            assert(scheduler.Cancel(calls[i], &terminal, effects) == voip::Error::ok);
+            assert(terminal.snapshot.handle.slot == calls[i].slot);
+            assert(terminal.snapshot.handle.generation == calls[i].generation);
+            assert(terminal.transition.terminal_event_required);
+            assert(terminal.handle_invalidated);
         }
+        assert(!scheduler.IsLive(calls[i]));
+        assert(scheduler.OnAcceptance(calls[i]) == voip::Error::invalid_handle);
+        assert(scheduler.Cancel(calls[i], nullptr, effects) ==
+               voip::Error::invalid_handle);
     }
     assert(scheduler.LiveCount() == 0);
     assert(scheduler.PromotedCount() == 0);
