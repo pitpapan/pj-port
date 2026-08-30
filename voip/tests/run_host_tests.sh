@@ -53,4 +53,13 @@ $cxx $flags "$root/tests/unit/NoHeapAfterInitTest.cpp" \
     "$root/src/core/VoipResourceGuard.cpp" -o "$out/NoHeapAfterInitTest"
 "$out/NoHeapAfterInitTest"
 
+$cxx $flags "$root/tests/unit/ShutdownMailboxRegressionTest.cpp" \
+    "$root/src/VoipService.cpp" "$root/src/core/AgentRegistry.cpp" \
+    "$root/src/core/CallStateMachine.cpp" "$root/src/core/CallScheduler.cpp" \
+    "$root/src/core/CommandMailbox.cpp" "$root/src/core/OperationTable.cpp" \
+    "$root/src/core/VoipEventQueue.cpp" "$root/src/core/FakeRuntimeAdapter.cpp" \
+    "$root/src/core/CoreActor.cpp" "$root/src/core/VoipRuntime.cpp" \
+    "$root/src/core/VoipResourceGuard.cpp" -o "$out/ShutdownMailboxRegressionTest"
+"$out/ShutdownMailboxRegressionTest"
+
 cleanup=1

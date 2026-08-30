@@ -47,6 +47,9 @@ public:
     ResourceSnapshot GetResourceSnapshot() const noexcept;
 
     void Step(std::uint64_t now_ms) noexcept;
+    // Deterministic host seam; the public VoipService API exposes no actor
+    // controls.
+    void SetActorPaused(bool paused) noexcept;
     // Deterministic host/fake-adapter seam for copied native notifications.
     Error InjectNotification(const RuntimeNotification &) noexcept;
     void FailNextAdapter(RuntimeRequest::Type, Error) noexcept;

@@ -866,10 +866,6 @@ Error VoipRuntime::Shutdown() noexcept {
         } else if (!shutting_down_) {
             shutting_down_ = true;
             shutdown_complete_ = false;
-            if (!mailbox_.TryPushShutdown()) {
-                shutting_down_ = false;
-                return Error::shutdown_timeout;
-            }
         }
     }
     if (!completion_observed && !shutdown_signal_.Wait(1000))
@@ -983,8 +979,13 @@ void VoipRuntime::Step(std::uint64_t now_ms) noexcept {
     // effects are applied. Current host composition performs those effects
     // under the same bounded runtime lock; still drain any queued records so
     // a producer cannot leave command capacity permanently consumed.
+    if (shutting_down_) scheduler_.SetPromotionEnabled(false);
     VoipCommand command{};
     while (mailbox_.TryPop(&command)) {
+        if (shutting_down_ && command.type != CommandType::shutdown) {
+            (void)operations_.Complete(command.operation, Error::cancelled);
+            continue;
+        }
         ProcessCommand(command);
     }
     if (!shutting_down_) {
@@ -1000,6 +1001,10 @@ void VoipRuntime::Step(std::uint64_t now_ms) noexcept {
     }
     CompleteShutdownIfDrained();
     RefreshResources();
+}
+
+void VoipRuntime::SetActorPaused(bool paused) noexcept {
+    actor_.SetPaused(paused);
 }
 
 Error VoipRuntime::InjectNotification(

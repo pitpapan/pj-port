@@ -142,28 +142,47 @@ bool RunProof() {
         full.available_logical_calls != 0 || full.available_promoted_calls != 0)
         return false;
 
-    // Releasing call 0 makes only the FIFO head eligible. The later calls do
-    // not bypass it, and the head is promoted on the freed agent-0 lease.
+    // Releasing agent 1 leaves one global slot idle, but the agent-0 FIFO head
+    // remains blocked. A later eligible entry must not bypass that head.
     voip::OperationId cancel = 0;
-    if (service.Cancel(calls[0], &cancel) != voip::Error::ok ||
+    if (service.Cancel(calls[1], &cancel) != voip::Error::ok ||
         !WaitForOperation(service, cancel, voip::Error::cancelled) ||
-        !WaitForEstablished(service, calls[2]))
+        service.GetResourceSnapshot().promoted_calls != 1 ||
+        service.GetResourceSnapshot().queued_calls != 5 ||
+        service.GetResourceSnapshot().available_promoted_calls != 1)
         return false;
-    voip::ResourceSnapshot after_head = service.GetResourceSnapshot();
-    if (after_head.promoted_calls != 2 || after_head.queued_calls != 4)
+    voip::CallSnapshot head{};
+    voip::CallSnapshot behind_head{};
+    if (service.GetCallSnapshot(calls[2], &head) != voip::Error::ok ||
+        head.state != voip::CallState::hold ||
+        head.hold_reason != voip::HoldReason::waiting ||
+        service.GetCallSnapshot(calls[3], &behind_head) != voip::Error::ok ||
+        behind_head.state != voip::CallState::hold ||
+        behind_head.hold_reason != voip::HoldReason::waiting)
         return false;
 
-    // Cancel the promoted head and allow the remaining FIFO entries to reach
-    // their bounded timeout, exercising terminal publication and cleanup.
+    // Releasing agent 0 makes the head eligible; both available global slots
+    // are then consumed by the head and the next eligible FIFO entry.
+    if (service.Cancel(calls[0], &cancel) != voip::Error::ok ||
+        !WaitForOperation(service, cancel, voip::Error::cancelled) ||
+        !WaitForEstablished(service, calls[2]) ||
+        !WaitForEstablished(service, calls[3]))
+        return false;
+    voip::ResourceSnapshot after_heads = service.GetResourceSnapshot();
+    if (after_heads.promoted_calls != 2 || after_heads.queued_calls != 3)
+        return false;
+
+    // Cancel the promoted head; call 4 advances, leaving call 5 queued as the
+    // deterministic timeout witness before shutdown.
     if (service.Cancel(calls[2], &cancel) != voip::Error::ok ||
         !WaitForOperation(service, cancel, voip::Error::cancelled))
         return false;
     // Call 4 remains queued after the second cancellation. Its retained dial
     // operation must time out and its public handle must be stale before
     // shutdown begins.
-    if (!WaitForTimedOut(service, dial_operations[4])) return false;
+    if (!WaitForTimedOut(service, dial_operations[5])) return false;
     voip::CallSnapshot timed_out{};
-    if (service.GetCallSnapshot(calls[4], &timed_out) !=
+    if (service.GetCallSnapshot(calls[5], &timed_out) !=
         voip::Error::invalid_handle)
         return false;
     if (service.Shutdown() != voip::Error::ok) return false;

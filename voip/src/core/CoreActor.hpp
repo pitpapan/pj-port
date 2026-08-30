@@ -21,6 +21,7 @@ public:
 
     bool Start(VoipRuntime &) noexcept;
     void Stop() noexcept;
+    void SetPaused(bool paused) noexcept { paused_.store(paused); }
     bool Running() const noexcept { return running_.load(); }
 
 private:
@@ -35,6 +36,7 @@ private:
 #endif
     std::atomic<bool> running_{false};
     std::atomic<bool> stop_{false};
+    std::atomic<bool> paused_{false};
 };
 } // namespace voip
 

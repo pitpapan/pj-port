@@ -127,12 +127,22 @@ menuconfig VOIP_SERVICE
 
 if VOIP_SERVICE
 
+choice VOIP_SERVICE_ADAPTER
+	prompt "VoIP service runtime adapter"
+	default VOIP_SERVICE_FAKE_ADAPTER
+
 config VOIP_SERVICE_FAKE_ADAPTER
 	bool "Deterministic fake runtime adapter"
-	depends on !VOIP_PJSUA
 	depends on !VOIP_PJ_BACKEND
 	depends on !VOIP_FAKE_BACKEND
-	default n
+
+config VOIP_PJSUA
+	bool "PJSUA service adapter"
+	depends on PJSUA
+	help
+	  Reserve the future PJSUA-backed service adapter boundary.
+
+endchoice
 
 config VOIP_MAX_AGENTS
 	int "VoIP service agent capacity"
@@ -170,13 +180,3 @@ config VOIP_EVENT_CAPACITY
 	default 32
 
 endif
-
-config VOIP_PJSUA
-	bool "VoIP PJSUA service adapter"
-	depends on CPP && PJSUA
-	depends on !VOIP_SERVICE
-	depends on !VOIP_FACADE
-	default n
-	help
-	  Reserve the future PJSUA-backed service adapter boundary. Plan 2 keeps
-	  this disabled and uses only the fake adapter.

@@ -353,7 +353,8 @@ void test_every_accepted_operation_gets_terminal_event() {
         dial_queued_terminal |= event.operation == dial_queued;
         cancel_terminal |= event.operation == cancel_operation;
         answer_terminal |= event.operation == answer_operation &&
-                           event.status.error == voip::Error::invalid_state;
+                           (event.status.error == voip::Error::invalid_state ||
+                            event.status.error == voip::Error::cancelled);
     }
     assert(dial_queued_terminal);
     assert(cancel_terminal);
