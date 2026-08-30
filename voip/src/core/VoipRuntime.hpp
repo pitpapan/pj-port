@@ -84,6 +84,9 @@ private:
     void RetryPendingTeardowns() noexcept;
     void CompleteShutdownIfDrained() noexcept;
 
+    // Serializes the public shutdown wait and actor join. The actor only
+    // takes mutex_, so holding this coordination lock cannot invert locks.
+    mutable CoreMutex shutdown_mutex_{};
     mutable CoreMutex mutex_{};
     AgentRegistry agents_{};
     CommandMailbox mailbox_{};

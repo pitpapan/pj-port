@@ -58,7 +58,7 @@ public:
     OperationId signaling_operation = 0;
     PendingOperation pending_operation = PendingOperation::none;
     bool teardown_pending = false;
-    bool shutdown_pending = false;
+    bool native_terminal_pending = false;
     bool answer_on_promotion = false;
     char remote_uri[max_uri_length + 1]{};
 

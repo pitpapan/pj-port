@@ -41,6 +41,7 @@ public:
 private:
     void Record(const RuntimeRequest &) noexcept;
     Error ConsumeFailure(RuntimeRequest::Type) noexcept;
+    Error EnqueueReady(const RuntimeNotification &) noexcept;
     Error Enqueue(const RuntimeNotification &) noexcept;
     std::array<RuntimeNotification, capacity> notifications_{};
     std::array<RuntimeNotification, capacity> deferred_notifications_{};

@@ -413,7 +413,7 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
         const OperationId signaling_operation = context->signaling_operation;
         const OperationId operation = context->operation;
         const std::uint32_t token = context->runtime_token;
-        context->shutdown_pending = false;
+        context->native_terminal_pending = false;
         const bool queued = !scheduler_.IsPromoted(context->handle);
         error = queued
                     ? scheduler_.RejectDeferred(context->handle, &transition,
@@ -442,7 +442,7 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
         const OperationId signaling_operation = context->signaling_operation;
         const OperationId operation = context->operation;
         const CallHandle handle = context->handle;
-        context->shutdown_pending = false;
+        context->native_terminal_pending = false;
         if (!scheduler_.IsPromoted(handle)) {
             const bool queued = !scheduler_.IsPromoted(handle);
             const Error cancel_error = queued
@@ -670,6 +670,11 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
         context->pending_operation = previous_pending;
         return;
     }
+    if ((command.type == CommandType::reject ||
+         command.type == CommandType::cancel ||
+         command.type == CommandType::hangup) &&
+        (scheduler_.IsPromoted(handle) || deferred_native))
+        context->native_terminal_pending = true;
     const OperationId previous_operation = context->operation;
     if (local_answer) {
         (void)operations_.Complete(command.operation, Error::ok);
@@ -792,7 +797,7 @@ void VoipRuntime::CancelAllCalls() noexcept {
         const CallHandle handle = calls_[index];
         CallContext *context = scheduler_.Resolve(handle);
         if (context == nullptr) { ForgetCall(handle); continue; }
-        if (context->shutdown_pending) { ++index; continue; }
+        if (context->native_terminal_pending) { ++index; continue; }
         const bool promoted = scheduler_.IsPromoted(handle);
         const std::uint32_t token = context->runtime_token;
         const CallState state = context->state_machine.Snapshot().state;
@@ -812,11 +817,11 @@ void VoipRuntime::CancelAllCalls() noexcept {
             }
             bool requested = false;
             if (adapter_.Hangup(token) == Error::ok) requested = true;
-            context->shutdown_pending = requested;
+            context->native_terminal_pending = requested;
             ++index;
             continue;
         } else if (queued_incoming) {
-            context->shutdown_pending = adapter_.Reject(token, 486) == Error::ok;
+            context->native_terminal_pending = adapter_.Reject(token, 486) == Error::ok;
             ++index;
             continue;
         }
@@ -840,6 +845,7 @@ void VoipRuntime::CancelAllCalls() noexcept {
 }
 
 Error VoipRuntime::Shutdown() noexcept {
+    CoreLockGuard shutdown_lock(shutdown_mutex_);
     {
         CoreLockGuard lock(mutex_);
         if (shutdown_complete_) return shutdown_error_;
