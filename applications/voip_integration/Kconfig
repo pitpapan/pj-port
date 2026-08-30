@@ -2,6 +2,11 @@ source "Kconfig.zephyr"
 
 menu "VoIP integration validation"
 
+config VOIP_CORE_SERVICE_TEST
+	bool "PJ-independent core service validation"
+	depends on VOIP_SERVICE && VOIP_SERVICE_FAKE_ADAPTER
+	default n
+
 config VOIP_SDK_CONTRACT_TEST
 	bool "Production SDK contract validation"
 	depends on VOIP_SDK && VOIP_FAKE_BACKEND

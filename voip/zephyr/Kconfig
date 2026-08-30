@@ -116,3 +116,68 @@ config VOIP_PJ_SRTP_SIGNALING
 	  requires authenticated SIP TLS.
 
 endif
+
+menuconfig VOIP_SERVICE
+	bool "PJ-independent VoIP core service"
+	depends on CPP
+	depends on !VOIP_FACADE
+	depends on !VOIP_PJSUA
+	depends on !VOIP_PJ_BACKEND
+	depends on !VOIP_FAKE_BACKEND
+	default n
+
+if VOIP_SERVICE
+
+config VOIP_SERVICE_FAKE_ADAPTER
+	bool "Deterministic fake runtime adapter"
+	depends on !VOIP_PJSUA
+	depends on !VOIP_PJ_BACKEND
+	depends on !VOIP_FAKE_BACKEND
+	default n
+
+config VOIP_MAX_AGENTS
+	int "VoIP service agent capacity"
+	range 5 5
+	default 5
+
+config VOIP_MAX_LOGICAL_CALLS
+	int "VoIP service logical call capacity"
+	range 7 7
+	default 7
+
+config VOIP_MAX_PROMOTED_CALLS
+	int "VoIP service promoted call capacity"
+	range 2 2
+	default 2
+
+config VOIP_PENDING_CALL_CAPACITY
+	int "VoIP service pending FIFO capacity"
+	range 5 5
+	default 5
+
+config VOIP_COMMAND_CAPACITY
+	int "VoIP service command capacity"
+	range 16 16
+	default 16
+
+config VOIP_OPERATION_CAPACITY
+	int "VoIP service operation capacity"
+	range 16 16
+	default 16
+
+config VOIP_EVENT_CAPACITY
+	int "VoIP service event capacity"
+	range 32 32
+	default 32
+
+endif
+
+config VOIP_PJSUA
+	bool "VoIP PJSUA service adapter"
+	depends on CPP && PJSUA
+	depends on !VOIP_SERVICE
+	depends on !VOIP_FACADE
+	default n
+	help
+	  Reserve the future PJSUA-backed service adapter boundary. Plan 2 keeps
+	  this disabled and uses only the fake adapter.

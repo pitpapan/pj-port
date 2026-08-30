@@ -23,3 +23,23 @@ if(CONFIG_VOIP_FACADE)
     ../src/PjSrtpKeyMaterial.cpp
   )
 endif()
+
+if(CONFIG_VOIP_SERVICE)
+  zephyr_include_directories(../include)
+  zephyr_library_named(voip_service)
+  zephyr_library_sources(
+    ../src/VoipService.cpp
+    ../src/core/AgentRegistry.cpp
+    ../src/core/CallStateMachine.cpp
+    ../src/core/CallScheduler.cpp
+    ../src/core/CommandMailbox.cpp
+    ../src/core/OperationTable.cpp
+    ../src/core/VoipEventQueue.cpp
+    ../src/core/CoreActor.cpp
+    ../src/core/VoipRuntime.cpp
+    ../src/core/VoipResourceGuard.cpp
+  )
+  zephyr_library_sources_ifdef(CONFIG_VOIP_SERVICE_FAKE_ADAPTER
+    ../src/core/FakeRuntimeAdapter.cpp
+  )
+endif()
