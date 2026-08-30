@@ -247,11 +247,15 @@ bool VoipEventQueue::CancelReservation(Reservation *reservation) noexcept {
 bool VoipEventQueue::TryPop(Event *event) noexcept {
     if (event == nullptr) return false;
     CoreLockGuard lock(mutex_);
-    if (count_ == 0) return false;
+    if (count_ == 0) {
+        signal_.Clear();
+        return false;
+    }
     *event = records_[0];
     for (std::size_t index = 1; index < count_; ++index)
         records_[index - 1] = records_[index];
     --count_;
+    if (count_ == 0) signal_.Clear();
     return true;
 }
 

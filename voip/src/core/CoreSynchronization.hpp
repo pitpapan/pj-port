@@ -2,6 +2,7 @@
 #define VOIP_CORE_SYNCHRONIZATION_HPP
 
 #include <cstdint>
+#include <atomic>
 
 #if defined(__ZEPHYR__)
 #include <zephyr/kernel.h>
@@ -73,7 +74,7 @@ class CoreEventSignal final {
 public:
     CoreEventSignal() noexcept {
 #if defined(__ZEPHYR__)
-        k_sem_init(&signal_, 0, 0xFFFFFFFFU);
+        k_sem_init(&signal_, 0, 1);
 #endif
     }
 
@@ -84,11 +85,18 @@ public:
 #if defined(__ZEPHYR__)
         (void)k_sem_give(&signal_);
 #else
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (count_ != UINT32_MAX) ++count_;
-        }
+        signaled_.store(true, std::memory_order_release);
         condition_.notify_one();
+#endif
+    }
+
+    // Clear is called by the queue while holding its queue mutex, making the
+    // empty check and signal reset one ordered operation against producers.
+    void Clear() noexcept {
+#if defined(__ZEPHYR__)
+        k_sem_reset(&signal_);
+#else
+        signaled_.store(false, std::memory_order_release);
 #endif
     }
 
@@ -97,14 +105,16 @@ public:
         return k_sem_take(&signal_, K_MSEC(timeout_ms)) == 0;
 #else
         std::unique_lock<std::mutex> lock(mutex_);
-        const auto ready = [this]() noexcept { return count_ != 0; };
+        const auto ready = [this]() noexcept {
+            return signaled_.load(std::memory_order_acquire);
+        };
         if (timeout_ms == 0) {
             if (!ready()) return false;
         } else if (!condition_.wait_for(lock, std::chrono::milliseconds(timeout_ms),
                                         ready)) {
             return false;
         }
-        --count_;
+        signaled_.store(false, std::memory_order_release);
         return true;
 #endif
     }
@@ -115,7 +125,7 @@ private:
 #else
     std::mutex mutex_{};
     std::condition_variable condition_{};
-    std::uint32_t count_ = 0;
+    std::atomic<bool> signaled_{false};
 #endif
 };
 

@@ -58,6 +58,28 @@ void test_wait_pop_timeout_and_wakeup() {
     }
 }
 
+void test_zero_timeout_is_nonblocking_and_preserves_output() {
+    voip::VoipEventQueue queue;
+    voip::Event output = Event(voip::EventType::operation_terminal, 7, 3);
+    output.sequence = 91;
+    assert(!queue.WaitPop(&output, 0));
+    assert(output.type == voip::EventType::operation_terminal);
+    assert(output.sequence == 91);
+    assert(output.agent.slot == 7);
+    assert(output.agent.generation == 3);
+}
+
+void test_event_signal_is_binary_and_clearable() {
+    voip::CoreEventSignal signal;
+    signal.Notify();
+    signal.Notify();
+    assert(signal.Wait(0));
+    assert(!signal.Wait(0));
+    signal.Notify();
+    signal.Clear();
+    assert(!signal.Wait(0));
+}
+
 void test_reservation_commit_cancel_exactly_once() {
     voip::VoipEventQueue queue;
     voip::VoipEventQueue::Reservation reservation;
@@ -256,6 +278,8 @@ void test_sequences_are_nonzero_and_monotonic() {
 int main() {
     test_fifo_and_try_pop();
     test_wait_pop_timeout_and_wakeup();
+    test_zero_timeout_is_nonblocking_and_preserves_output();
+    test_event_signal_is_binary_and_clearable();
     test_reservation_commit_cancel_exactly_once();
     test_guaranteed_classification_and_stopped_lifecycle();
     test_pressure_preserves_stopped_slot();

@@ -20,6 +20,10 @@ public:
     static constexpr std::size_t capacity = 32;
     static constexpr std::size_t ordinary_capacity = capacity - 1;
 
+    // A token is owned by its producer while it is active and must be
+    // externally serialized across a handoff to the commit/cancel owner.
+    // Queue destruction and token use must not race. Distinct active tokens
+    // may be committed or cancelled concurrently; queue state is locked.
     class Reservation final {
     public:
         Reservation() noexcept = default;
