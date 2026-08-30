@@ -286,6 +286,132 @@ void test_timeout_head_removal_promotes_next_and_clears_prefilled_effects() {
     assert(scheduler.IsPromoted(later));
 }
 
+void test_explicit_scheduler_state_traces() {
+    Fixture fixture;
+    voip::CallScheduler scheduler(fixture.registry);
+    voip::SchedulerEffects effects;
+    voip::CallHandle call{};
+    assert(scheduler.AdmitOutgoing(fixture.agent, "sip:trace@example.test",
+                                   &call, nullptr, effects) == voip::Error::ok);
+    voip::ScheduledTransition transition{};
+    assert(scheduler.OnAcceptance(call, &transition) == voip::Error::ok);
+    assert(transition.transition.before.state == voip::CallState::initiated);
+    assert(transition.transition.after.state == voip::CallState::established);
+    assert(transition.transition.cause == voip::CallTransition::acceptance);
+    assert(!transition.transition.terminal_event_required);
+    assert(scheduler.SetHeld(call, true, &transition) == voip::Error::ok);
+    assert(transition.transition.before.hold_reason == voip::HoldReason::none);
+    assert(transition.transition.after.hold_reason == voip::HoldReason::media);
+    assert(transition.transition.cause == voip::CallTransition::hold);
+    assert(scheduler.SetHeld(call, false, &transition) == voip::Error::ok);
+    assert(transition.transition.before.hold_reason == voip::HoldReason::media);
+    assert(transition.transition.after.state == voip::CallState::established);
+    assert(transition.transition.cause == voip::CallTransition::resume);
+    assert(scheduler.Hangup(call, &transition, effects) == voip::Error::ok);
+    assert(transition.transition.after.state == voip::CallState::terminated);
+    assert(transition.transition.cause == voip::CallTransition::finish);
+    assert(transition.transition.terminal_event_required);
+    assert(scheduler.IsLive(call));
+    assert(scheduler.OnTeardownComplete(call, &transition, effects) ==
+           voip::Error::ok);
+    assert(transition.transition.before.state == voip::CallState::terminated);
+    assert(transition.transition.after.state == voip::CallState::idle);
+    assert(!transition.transition.terminal_event_required);
+    assert(transition.handle_invalidated);
+    assert(!scheduler.IsLive(call));
+
+    voip::CallHandle active{}, waiting{};
+    assert(scheduler.AdmitOutgoing(fixture.agent, "sip:active-trace@example.test",
+                                   &active, nullptr, effects) == voip::Error::ok);
+    assert(scheduler.AdmitOutgoing(fixture.agent, "sip:waiting-trace@example.test",
+                                   &waiting, nullptr, effects) == voip::Error::ok);
+    voip::CallSnapshot snapshot = scheduler.Snapshot(waiting);
+    assert(snapshot.state == voip::CallState::hold);
+    assert(snapshot.hold_reason == voip::HoldReason::waiting);
+    assert(scheduler.OnAcceptance(active) == voip::Error::ok);
+    assert(scheduler.Hangup(active, nullptr, effects) == voip::Error::ok);
+    assert(scheduler.OnTeardownComplete(active, nullptr, effects) ==
+           voip::Error::ok);
+    assert(effects.count == 1);
+    assert(effects.entries[0].handle.slot == waiting.slot);
+    snapshot = scheduler.Snapshot(waiting);
+    assert(snapshot.state == voip::CallState::hold);
+    assert(snapshot.hold_reason == voip::HoldReason::waiting);
+    assert(scheduler.OnAcceptance(waiting, &transition) == voip::Error::ok);
+    assert(transition.transition.before.state == voip::CallState::hold);
+    assert(transition.transition.before.hold_reason == voip::HoldReason::waiting);
+    assert(transition.transition.after.state == voip::CallState::established);
+    assert(transition.transition.cause == voip::CallTransition::acceptance);
+    assert(scheduler.Hangup(waiting, &transition, effects) == voip::Error::ok);
+    assert(scheduler.OnTeardownComplete(waiting, nullptr, effects) ==
+           voip::Error::ok);
+}
+
+void test_full_capacity_restores_all_fixed_resources() {
+    Source source_b{voip::PcmFormat{8000, 160, 1, voip::SampleFormat::signed_16}};
+    Sink sink_b{voip::PcmFormat{8000, 160, 1, voip::SampleFormat::signed_16}};
+    Fixture fixture;
+    voip::AgentConfig configs[2] = {fixture.config,
+        {{"sip:capacity@example.test", "sip:example.test", "capacity", "p"},
+         {&source_b, &sink_b}, true}};
+    voip::ServiceConfig service = fixture.service;
+    service.agents = configs;
+    service.agent_count = 2;
+    assert(fixture.registry.Initialize(service) == voip::Error::ok);
+    voip::AgentHandle agents[2]{};
+    assert(fixture.registry.GetAgentHandle(0, &agents[0]) == voip::Error::ok);
+    assert(fixture.registry.GetAgentHandle(1, &agents[1]) == voip::Error::ok);
+    fixture.registry.Resolve(agents[0])->registration = voip::RegistrationState::registered;
+    fixture.registry.Resolve(agents[1])->registration = voip::RegistrationState::registered;
+    voip::CallScheduler scheduler(fixture.registry);
+    voip::SchedulerEffects effects;
+    voip::CallHandle calls[7]{};
+    assert(scheduler.AdmitOutgoing(agents[0], "sip:cap-a@example.test", &calls[0],
+                                   nullptr, effects) == voip::Error::ok);
+    assert(scheduler.AdmitOutgoing(agents[1], "sip:cap-b@example.test", &calls[1],
+                                   nullptr, effects) == voip::Error::ok);
+    for (std::size_t i = 2; i < 7; ++i) {
+        char uri[64]{};
+        std::snprintf(uri, sizeof(uri), "sip:cap-%zu@example.test", i);
+        assert(scheduler.AdmitOutgoing(agents[i % 2], uri, &calls[i],
+                                       nullptr, effects) == voip::Error::ok);
+    }
+    assert(scheduler.LiveCount() == 7);
+    assert(scheduler.PromotedCount() == 2);
+    assert(scheduler.QueuedCount() == 5);
+    assert(scheduler.AvailableLogicalCalls() == 0);
+    assert(scheduler.AvailablePromotedCalls() == 0);
+    assert(scheduler.AvailableFifoEntries() == 0);
+
+    for (std::size_t i = 0; i < 2; ++i) {
+        assert(scheduler.OnAcceptance(calls[i]) == voip::Error::ok);
+        assert(scheduler.Hangup(calls[i], nullptr, effects) == voip::Error::ok);
+        assert(scheduler.OnTeardownComplete(calls[i], nullptr, effects) ==
+               voip::Error::ok);
+    }
+    for (std::size_t i = 2; i < 7; ++i) {
+        if (!scheduler.IsLive(calls[i])) continue;
+        if (scheduler.IsPromoted(calls[i])) {
+            const voip::CallSnapshot snapshot = scheduler.Snapshot(calls[i]);
+            if (snapshot.state == voip::CallState::initiated ||
+                snapshot.state == voip::CallState::hold)
+                assert(scheduler.OnAcceptance(calls[i]) == voip::Error::ok);
+            assert(scheduler.Hangup(calls[i], nullptr, effects) == voip::Error::ok);
+            assert(scheduler.OnTeardownComplete(calls[i], nullptr, effects) ==
+                   voip::Error::ok);
+        } else {
+            assert(scheduler.Cancel(calls[i], nullptr, effects) == voip::Error::ok);
+        }
+    }
+    assert(scheduler.LiveCount() == 0);
+    assert(scheduler.PromotedCount() == 0);
+    assert(scheduler.QueuedCount() == 0);
+    assert(scheduler.AvailableLogicalCalls() == 7);
+    assert(scheduler.AvailablePromotedCalls() == 2);
+    assert(scheduler.AvailableFifoEntries() == 5);
+    for (const voip::CallHandle call : calls) assert(!scheduler.IsLive(call));
+}
+
 } // namespace
 
 int main() {
@@ -297,6 +423,8 @@ int main() {
     test_automatic_promotions_are_returned_as_bounded_effects();
     test_runtime_tokens_and_lease_release_order();
     test_timeout_head_removal_promotes_next_and_clears_prefilled_effects();
+    test_explicit_scheduler_state_traces();
+    test_full_capacity_restores_all_fixed_resources();
     std::puts("CallSchedulerTest PASSED");
     return 0;
 }

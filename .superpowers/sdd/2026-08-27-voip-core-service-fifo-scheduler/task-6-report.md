@@ -82,6 +82,29 @@ Focused state and scheduler binaries also passed with ASan/UBSan enabled
 ptrace-backed harness). `git diff --check` is clean, and no Zephyr source was
 inspected.
 
+## Fix round 3
+
+Coverage-only round; no RED claim is made. Added explicit scheduler traces
+for immediate initiation/acceptance/media hold/resume/finish/cleanup and for
+queued waiting, promotion-retained waiting, and acceptance. Added a complete
+capacity test admitting two promoted calls on different agents plus five FIFO
+entries, asserting 7/2/5 exhaustion and restoration, stale handles, and
+teardown/cancel cleanup.
+
+Verification passed:
+
+```text
+CallStateMachineTest PASSED
+CallSchedulerTest PASSED
+HandlePoolTest PASSED
+AgentRegistryTest PASSED
+VoipEventQueueTest PASSED
+OperationMailboxTest PASSED
+```
+
+Focused state/scheduler ASan/UBSan binaries passed with leak detection
+disabled under the ptrace-backed harness. `git diff --check` passed.
+
 ## Fix round 2
 
 Code commit: `3919e2f37` (`fix(voip): make scheduler effects explicit`).
