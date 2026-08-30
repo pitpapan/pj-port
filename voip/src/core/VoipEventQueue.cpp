@@ -1,6 +1,8 @@
 #include "VoipEventQueue.hpp"
 
+#if !defined(__ZEPHYR__)
 #include <chrono>
+#endif
 
 namespace voip {
 
@@ -264,6 +266,18 @@ bool VoipEventQueue::WaitPop(Event *event, std::uint32_t timeout_ms) noexcept {
     if (event == nullptr) return false;
     if (TryPop(event)) return true;
     if (timeout_ms == 0) return false;
+#if defined(__ZEPHYR__)
+    const std::uint64_t deadline =
+        static_cast<std::uint64_t>(k_uptime_get()) + timeout_ms;
+    for (;;) {
+        const std::uint64_t now = static_cast<std::uint64_t>(k_uptime_get());
+        if (now >= deadline) return TryPop(event);
+        const std::uint64_t remaining = deadline - now;
+        (void)signal_.Wait(static_cast<std::uint32_t>(
+            remaining > UINT32_MAX ? UINT32_MAX : remaining));
+        if (TryPop(event)) return true;
+    }
+#else
     const auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::milliseconds(timeout_ms);
     for (;;) {
@@ -274,6 +288,7 @@ bool VoipEventQueue::WaitPop(Event *event, std::uint32_t timeout_ms) noexcept {
         (void)signal_.Wait(static_cast<std::uint32_t>(remaining.count()));
         if (TryPop(event)) return true;
     }
+#endif
 }
 
 bool VoipEventQueue::TryPeek(Event *event) noexcept {

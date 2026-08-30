@@ -19,30 +19,30 @@ enum class CommandType : std::uint8_t {
 };
 
 struct DialCommand {
-    AgentHandle agent{};
-    char remote_uri[max_uri_length + 1]{};
+    AgentHandle agent;
+    char remote_uri[max_uri_length + 1];
 };
 
 struct CallCommand {
-    CallHandle call{};
+    CallHandle call;
 };
 
 struct RejectCommand {
-    CallHandle call{};
-    std::uint16_t sip_status = 0;
-    char reason[max_reason_length + 1]{};
+    CallHandle call;
+    std::uint16_t sip_status;
+    char reason[max_reason_length + 1];
 };
 
 struct SetHeldCommand {
-    CallHandle call{};
-    bool held = false;
+    CallHandle call;
+    bool held;
 };
 
 // Every field is a value. In particular, shutdown does not carry a pointer to
 // a caller-owned completion object or any other caller-stack storage.
 struct VoipCommand {
-    CommandType type = CommandType::shutdown;
-    OperationId operation = 0;
+    CommandType type;
+    OperationId operation;
     union {
         DialCommand dial;
         CallCommand answer;
@@ -53,6 +53,8 @@ struct VoipCommand {
         struct {
         } shutdown;
     };
+
+    VoipCommand() noexcept : type(CommandType::shutdown), operation(0), dial() {}
 };
 
 // Validation is a synchronous borrow: CommandMailbox never stores this

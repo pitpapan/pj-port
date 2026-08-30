@@ -121,7 +121,6 @@ menuconfig VOIP_SERVICE
 	bool "PJ-independent VoIP core service"
 	depends on CPP
 	depends on !VOIP_FACADE
-	depends on !VOIP_PJSUA
 	depends on !VOIP_PJ_BACKEND
 	depends on !VOIP_FAKE_BACKEND
 	default n

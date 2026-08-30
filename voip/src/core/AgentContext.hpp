@@ -17,6 +17,9 @@ struct OwnedSipAccountConfig {
     char auth_username[max_username_length + 1]{};
     char auth_password[max_password_length + 1]{};
 
+    OwnedSipAccountConfig() noexcept
+        : identity_uri{}, registrar_uri{}, auth_username{}, auth_password{} {}
+
     ~OwnedSipAccountConfig() noexcept { EraseCredentials(); }
 
     OwnedSipAccountConfig(const OwnedSipAccountConfig &) = delete;

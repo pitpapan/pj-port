@@ -6,8 +6,13 @@
 namespace voip {
 
 struct CallProjection {
-    CallState state = CallState::idle;
-    HoldReason hold_reason = HoldReason::none;
+    CallState state;
+    HoldReason hold_reason;
+
+    CallProjection() noexcept
+        : state(CallState::idle), hold_reason(HoldReason::none) {}
+    CallProjection(CallState state_, HoldReason hold_reason_) noexcept
+        : state(state_), hold_reason(hold_reason_) {}
 };
 
 struct AppliedCallTransition {

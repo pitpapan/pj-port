@@ -27,6 +27,7 @@ endif()
 if(CONFIG_VOIP_SERVICE)
   zephyr_include_directories(../include)
   zephyr_library_named(voip_service)
+  target_compile_options(voip_service PRIVATE -std=c++17)
   zephyr_library_sources(
     ../src/VoipService.cpp
     ../src/core/AgentRegistry.cpp
