@@ -81,17 +81,24 @@ void test_hol_blocking_and_repeated_promotion() {
     fixture.registry.Resolve(agent_a)->registration = voip::RegistrationState::registered;
     fixture.registry.Resolve(agent_b)->registration = voip::RegistrationState::registered;
     voip::CallScheduler scheduler(fixture.registry);
+    voip::SchedulerEffects effects;
     voip::CallHandle a_active{};
-    assert(scheduler.AdmitOutgoing(agent_a, "sip:a1@example.test", &a_active) == voip::Error::ok);
+    assert(scheduler.AdmitOutgoing(agent_a, "sip:a1@example.test", &a_active,
+                                   nullptr, &effects) == voip::Error::ok);
+    effects.Clear();
     voip::CallHandle a_head{}, b_later{};
-    assert(scheduler.AdmitOutgoing(agent_a, "sip:a2@example.test", &a_head) == voip::Error::ok);
-    assert(scheduler.AdmitOutgoing(agent_b, "sip:b2@example.test", &b_later) == voip::Error::ok);
+    assert(scheduler.AdmitOutgoing(agent_a, "sip:a2@example.test", &a_head,
+                                   nullptr, &effects) == voip::Error::ok);
+    assert(scheduler.AdmitOutgoing(agent_b, "sip:b2@example.test", &b_later,
+                                   nullptr, &effects) == voip::Error::ok);
     assert(scheduler.QueuedCount() == 2);
     assert(!scheduler.IsPromoted(a_head));
     assert(!scheduler.IsPromoted(b_later));
     assert(scheduler.OnAcceptance(a_active) == voip::Error::ok);
-    assert(scheduler.Hangup(a_active) == voip::Error::ok);
-    assert(scheduler.OnTeardownComplete(a_active) == voip::Error::ok);
+    effects.Clear();
+    assert(scheduler.Hangup(a_active, nullptr, &effects) == voip::Error::ok);
+    effects.Clear();
+    assert(scheduler.OnTeardownComplete(a_active, nullptr, &effects) == voip::Error::ok);
     assert(scheduler.IsPromoted(a_head));
     assert(scheduler.IsPromoted(b_later));
 }
@@ -133,6 +140,100 @@ void test_direct_timeout_publishes_before_invalidation() {
     assert(!scheduler.IsLive(call));
 }
 
+void test_registration_and_promoted_acceptance_rules() {
+    Fixture fixture;
+    fixture.registry.Resolve(fixture.agent)->registration =
+        voip::RegistrationState::disabled;
+    voip::CallScheduler scheduler(fixture.registry);
+    voip::CallHandle call{};
+    assert(scheduler.AdmitOutgoing(fixture.agent, "sip:not-registered@example.test",
+                                   &call) == voip::Error::agent_unavailable);
+    fixture.registry.Resolve(fixture.agent)->registration =
+        voip::RegistrationState::registered;
+    assert(scheduler.AdmitOutgoing(fixture.agent, "", &call) ==
+           voip::Error::invalid_argument);
+    assert(scheduler.AdmitOutgoing(fixture.agent, "sip:one@example.test", &call) ==
+           voip::Error::ok);
+    voip::CallHandle queued{};
+    assert(scheduler.AdmitIncoming(fixture.agent, 42, &queued) == voip::Error::ok);
+    assert(scheduler.OnAcceptance(queued) == voip::Error::invalid_state);
+    assert(scheduler.Answer(queued) == voip::Error::ok);
+}
+
+void test_automatic_promotions_are_returned_as_bounded_effects() {
+    Source source_b{voip::PcmFormat{8000, 160, 1, voip::SampleFormat::signed_16}};
+    Sink sink_b{voip::PcmFormat{8000, 160, 1, voip::SampleFormat::signed_16}};
+    Fixture fixture;
+    voip::AgentConfig configs[2] = {fixture.config,
+        {{"sip:b@example.test", "sip:example.test", "b", "p"},
+         {&source_b, &sink_b}, true}};
+    voip::ServiceConfig service = fixture.service;
+    service.agents = configs;
+    service.agent_count = 2;
+    assert(fixture.registry.Initialize(service) == voip::Error::ok);
+    voip::AgentHandle a{}, b{};
+    assert(fixture.registry.GetAgentHandle(0, &a) == voip::Error::ok);
+    assert(fixture.registry.GetAgentHandle(1, &b) == voip::Error::ok);
+    fixture.registry.Resolve(a)->registration = voip::RegistrationState::registered;
+    fixture.registry.Resolve(b)->registration = voip::RegistrationState::registered;
+    voip::CallScheduler scheduler(fixture.registry);
+    voip::SchedulerEffects effects;
+    voip::CallHandle active{};
+    assert(scheduler.AdmitOutgoing(a, "sip:a@example.test", &active, nullptr,
+                                   &effects) == voip::Error::ok);
+    assert(effects.count == 1);
+    assert(effects.entries[0].handle.slot == active.slot);
+    effects.Clear();
+    voip::CallHandle queued_a{}, queued_b{};
+    assert(scheduler.AdmitIncoming(a, 10, &queued_a) == voip::Error::ok);
+    assert(scheduler.Answer(queued_a) == voip::Error::ok);
+    assert(scheduler.AdmitOutgoing(b, "sip:b@example.test", &queued_b) ==
+           voip::Error::ok);
+    assert(scheduler.OnAcceptance(active) == voip::Error::ok);
+    assert(scheduler.Hangup(active) == voip::Error::ok);
+    assert(scheduler.OnTeardownComplete(active, nullptr, &effects) ==
+           voip::Error::ok);
+    assert(effects.count == 2);
+    assert(effects.entries[0].handle.slot == queued_a.slot);
+    assert(effects.entries[0].acceptance_applied);
+    assert(effects.entries[1].handle.slot == queued_b.slot);
+}
+
+void test_runtime_tokens_and_lease_release_order() {
+    Fixture fixture;
+    voip::CallScheduler scheduler(fixture.registry);
+    voip::CallHandle outgoing{};
+    voip::SchedulerEffects effects;
+    assert(scheduler.AdmitOutgoing(fixture.agent, "sip:out@example.test",
+                                   &outgoing, nullptr, &effects) == voip::Error::ok);
+    assert(scheduler.Resolve(outgoing)->runtime_token == 0);
+    assert(scheduler.OnAcceptance(outgoing) == voip::Error::ok);
+    voip::ScheduledTransition terminal{};
+    assert(scheduler.Hangup(outgoing, &terminal, &effects) == voip::Error::ok);
+    assert(scheduler.IsLive(outgoing));
+    assert(scheduler.PromotedCount() == 1);
+    assert(terminal.transition.after.state == voip::CallState::terminated);
+    assert(terminal.transition.terminal_event_required);
+    assert(terminal.snapshot.handle.generation == outgoing.generation);
+    assert(scheduler.OnTeardownComplete(outgoing, nullptr, &effects) ==
+           voip::Error::ok);
+    assert(!scheduler.IsLive(outgoing));
+    assert(scheduler.PromotedCount() == 0);
+
+    voip::CallHandle incoming{};
+    assert(scheduler.AdmitIncoming(fixture.agent, 0x1234u, &incoming) ==
+           voip::Error::ok);
+    assert(scheduler.Resolve(incoming)->runtime_token == 0x1234u);
+    assert(scheduler.Cancel(incoming) == voip::Error::ok);
+    assert(scheduler.OnTeardownComplete(incoming) == voip::Error::ok);
+    assert(!scheduler.IsLive(incoming));
+    voip::CallHandle replacement{};
+    assert(scheduler.AdmitIncoming(fixture.agent, 0x5678u, &replacement) ==
+           voip::Error::ok);
+    assert(replacement.slot == incoming.slot);
+    assert(replacement.generation != incoming.generation);
+}
+
 } // namespace
 
 int main() {
@@ -140,6 +241,9 @@ int main() {
     test_hol_blocking_and_repeated_promotion();
     test_fifo_capacity_and_middle_cancel();
     test_direct_timeout_publishes_before_invalidation();
+    test_registration_and_promoted_acceptance_rules();
+    test_automatic_promotions_are_returned_as_bounded_effects();
+    test_runtime_tokens_and_lease_release_order();
     std::puts("CallSchedulerTest PASSED");
     return 0;
 }

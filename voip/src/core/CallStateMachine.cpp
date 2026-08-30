@@ -41,8 +41,6 @@ Error CallStateMachine::Apply(CallTransition cause,
             next = {CallState::hold, HoldReason::media};
             break;
         case CallTransition::finish:
-        case CallTransition::rejection:
-        case CallTransition::timeout:
             next = {CallState::terminated, HoldReason::none};
             terminal = true;
             break;

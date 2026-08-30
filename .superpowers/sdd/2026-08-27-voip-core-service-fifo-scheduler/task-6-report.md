@@ -47,3 +47,36 @@ terminal-event flag. The scheduler's `OnCapacityChanged()` examines only the
 FIFO head and repeats after each promotion. Direct initiation timeout releases
 immediately after producing its terminal transition; promoted terminated calls
 retain their lease until `OnTeardownComplete()`.
+
+## Fix round 1
+
+Follow-up code commit: `85eb6c3d0`.
+
+This round makes the public machine match the normative UML exactly: an
+established call has only `hold` and `finish` exits, while rejection/timeout
+requests from that projection are mapped by the scheduler to the valid
+`finish` edge. It also gates outgoing admission and later promotion on
+`RegistrationState::registered`, rejects acceptance of queued calls, requires
+an `AgentRegistry&` at scheduler construction, and keeps logical phases
+private to `CallContext`.
+
+Automatic promotions are returned through bounded `SchedulerEffects` storage
+(capacity two), including direction, runtime token, handle, and optional
+answer-on-promotion acceptance data. Release paths return their primary
+transition and all promotion effects without dropping or overwriting them.
+
+Fix-round verification:
+
+```text
+CallStateMachineTest PASSED
+CallSchedulerTest PASSED
+HandlePoolTest PASSED
+AgentRegistryTest PASSED
+VoipEventQueueTest PASSED
+OperationMailboxTest PASSED
+```
+
+Focused state and scheduler binaries also passed with ASan/UBSan enabled
+(`ASAN_OPTIONS=detect_leaks=0`; LeakSanitizer is unavailable under the
+ptrace-backed harness). `git diff --check` is clean, and no Zephyr source was
+inspected.
