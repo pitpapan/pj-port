@@ -1135,6 +1135,60 @@ void test_fake_callback_state_resets_between_lifecycles() {
     while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
 }
 
+void test_shutdown_timeout_requires_retry_before_reinitialize() {
+    std::array<Source, 5> sources;
+    std::array<Sink, 5> sinks;
+    std::array<voip::AgentConfig, 5> agents{};
+    voip::ServiceConfig config = Config(agents, sources, sinks);
+    voip::VoipRuntime runtime;
+    assert(runtime.Initialize(config) == voip::Error::ok);
+    voip::AgentHandle agent{};
+    assert(runtime.GetAgentHandle(1, &agent) == voip::Error::ok);
+    voip::RuntimeNotification incoming{};
+    incoming.type = voip::RuntimeNotification::Type::incoming_call;
+    incoming.agent = agent;
+    incoming.token = 9951;
+    std::strncpy(incoming.remote_uri, "sip:retry-lifecycle@example.test",
+                 voip::max_uri_length);
+    assert(runtime.InjectNotification(incoming) == voip::Error::ok);
+    voip::CallHandle call{};
+    voip::Event event{};
+    for (unsigned i = 0; i < 100; ++i) {
+        if (runtime.WaitForEvent(&event, 20) == voip::Error::ok &&
+            event.type == voip::EventType::incoming_call) {
+            call = event.call;
+            break;
+        }
+    }
+    assert(call.IsValid());
+    runtime.SetAdapterCallbacksDeferred(true);
+    assert(runtime.Shutdown() == voip::Error::shutdown_timeout);
+    runtime.SetAdapterCallbacksDeferred(false);
+    runtime.DrainAdapterCallbacks();
+    bool stopped_event = false;
+    for (unsigned i = 0; i < 100; ++i) {
+        if (runtime.WaitForEvent(&event, 20) == voip::Error::ok &&
+            event.type == voip::EventType::service_stopped) {
+            stopped_event = true;
+            break;
+        }
+    }
+    assert(stopped_event);
+    while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
+    assert(runtime.Initialize(config) == voip::Error::invalid_state);
+    assert(runtime.Shutdown() == voip::Error::ok);
+    std::size_t shutdowns = 0;
+    for (std::size_t i = 0; i < runtime.AdapterRequestCount(); ++i) {
+        voip::RuntimeRequest request{};
+        assert(runtime.GetAdapterRequest(i, &request));
+        if (request.type == voip::RuntimeRequest::Type::shutdown) ++shutdowns;
+    }
+    assert(shutdowns == 1);
+    assert(runtime.Initialize(config) == voip::Error::ok);
+    assert(runtime.Shutdown() == voip::Error::ok);
+    while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
+}
+
 void test_shutdown_orders_native_reject_teardown_before_adapter_shutdown() {
     std::array<Source, 5> sources;
     std::array<Sink, 5> sinks;
@@ -1219,6 +1273,7 @@ int main() {
     test_concurrent_shutdown_callers_are_serialized();
     test_initialize_waits_for_shutdown_coordination();
     test_fake_callback_state_resets_between_lifecycles();
+    test_shutdown_timeout_requires_retry_before_reinitialize();
     test_shutdown_orders_native_reject_teardown_before_adapter_shutdown();
     std::puts("VoipServiceCoreTest PASSED");
     return 0;

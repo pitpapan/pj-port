@@ -9,13 +9,20 @@ VoipRuntime::VoipRuntime() noexcept : scheduler_(agents_) {}
 
 VoipRuntime::~VoipRuntime() noexcept {
     (void)Shutdown();
-    actor_.Stop();
+    CoreLockGuard shutdown_lock(shutdown_mutex_);
+    bool actor_needs_stop = false;
+    {
+        CoreLockGuard lock(mutex_);
+        actor_needs_stop = !actor_stopped_;
+    }
+    if (actor_needs_stop) actor_.Stop();
 }
 
 Error VoipRuntime::Initialize(const ServiceConfig &config) noexcept {
     CoreLockGuard shutdown_lock(shutdown_mutex_);
     CoreLockGuard lock(mutex_);
     if (initialized_) return Error::invalid_state;
+    if (shutdown_complete_ && !actor_stopped_) return Error::invalid_state;
     // Terminal and diagnostic records remain readable after shutdown. A new
     // lifecycle is explicit only after the caller drains the prior queue.
     if (events_.Size() != 0) return Error::invalid_state;
@@ -62,9 +69,11 @@ Error VoipRuntime::Initialize(const ServiceConfig &config) noexcept {
         PublishAgent(*agent);
     }
     initialized_ = true;
+    actor_stopped_ = false;
     RefreshResources();
     if (!actor_.Start(*this)) {
         initialized_ = false;
+        actor_stopped_ = true;
         (void)adapter_.Shutdown();
         agents_.Reset();
         events_.ResetLifecycle();
@@ -847,11 +856,14 @@ void VoipRuntime::CancelAllCalls() noexcept {
 
 Error VoipRuntime::Shutdown() noexcept {
     CoreLockGuard shutdown_lock(shutdown_mutex_);
+    bool completion_observed = false;
     {
         CoreLockGuard lock(mutex_);
-        if (shutdown_complete_) return shutdown_error_;
-        if (!initialized_ || stopped_) return Error::ok;
-        if (!shutting_down_) {
+        if (shutdown_complete_) {
+            completion_observed = true;
+        } else if (!initialized_ || stopped_) {
+            return Error::ok;
+        } else if (!shutting_down_) {
             shutting_down_ = true;
             shutdown_complete_ = false;
             if (!mailbox_.TryPushShutdown()) {
@@ -860,11 +872,18 @@ Error VoipRuntime::Shutdown() noexcept {
             }
         }
     }
-    if (!shutdown_signal_.Wait(1000)) return Error::shutdown_timeout;
-    actor_.Stop();
+    if (!completion_observed && !shutdown_signal_.Wait(1000))
+        return Error::shutdown_timeout;
+    bool actor_needs_stop = false;
+    {
+        CoreLockGuard lock(mutex_);
+        actor_needs_stop = !actor_stopped_;
+    }
+    if (actor_needs_stop) actor_.Stop();
     Error result = Error::ok;
     {
         CoreLockGuard lock(mutex_);
+        if (actor_needs_stop) actor_stopped_ = true;
         result = shutdown_error_;
         // The signal is binary. Re-notify so concurrent/repeated callers
         // waiting on the same in-flight drain each observe completion.

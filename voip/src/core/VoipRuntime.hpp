@@ -104,6 +104,7 @@ private:
         call_terminal_handles_{};
     std::size_t call_count_ = 0;
     bool initialized_ = false;
+    bool actor_stopped_ = true;
     bool shutting_down_ = false;
     bool stopped_ = false;
     std::uint64_t now_ms_ = 0;

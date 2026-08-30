@@ -9,9 +9,11 @@ bool CoreActor::Start(VoipRuntime &runtime) noexcept {
     if (running_.load()) return false;
     stop_.store(false);
 #if defined(__ZEPHYR__)
+    running_.store(false);
     thread_ = k_thread_create(&thread_data_, stack_, K_THREAD_STACK_SIZEOF(stack_),
                               &CoreActor::Entry, &runtime, nullptr, nullptr,
                               K_PRIO_PREEMPT(5), 0, K_NO_WAIT);
+    if (thread_ != nullptr) running_.store(true);
     return thread_ != nullptr;
 #else
     try {
@@ -38,6 +40,7 @@ void CoreActor::Stop() noexcept {
 
 #if defined(__ZEPHYR__)
 void CoreActor::Entry(void *first, void *, void *) noexcept {
+    running_.store(true);
     static_cast<VoipRuntime *>(first)->Step(
         static_cast<std::uint64_t>(k_uptime_get()));
     // The actor remains in the runtime-owned loop until shutdown.  Keeping
