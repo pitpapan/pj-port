@@ -50,7 +50,8 @@ retain their lease until `OnTeardownComplete()`.
 
 ## Fix round 1
 
-Follow-up code commit: `85eb6c3d0`.
+Private-phase follow-up commit: `85eb6c3d0`.
+Fix-round code/report commit: `2ce49e391`.
 
 This round makes the public machine match the normative UML exactly: an
 established call has only `hold` and `finish` exits, while rejection/timeout
