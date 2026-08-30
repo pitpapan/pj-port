@@ -54,7 +54,7 @@ bool VoipEventQueue::Reserve(const Event &event,
         event.type == EventType::service_stopped)
         return false;
     CoreLockGuard lock(mutex_);
-    if (stopped_committed_) return false;
+    if (stopped_committed_ || reserved_count_ >= capacity) return false;
     if (count_ + reserved_count_ >= ordinary_capacity) {
         bool has_match = false;
         if (IsCoalescibleEvent(event)) {
@@ -161,7 +161,9 @@ bool VoipEventQueue::CommitReservation(Reservation *reservation,
     if (reservation == nullptr || reservation->queue_ != this ||
         !reservation->active_ ||
         (reservation->permanent_ && event.type != EventType::service_stopped) ||
-        (!reservation->permanent_ && event.type == EventType::service_stopped))
+        (!reservation->permanent_ && event.type == EventType::service_stopped) ||
+        (!reservation->permanent_ &&
+         IsGuaranteedEvent(event) != reservation->guaranteed_))
         return false;
     bool committed = false;
     {
@@ -212,9 +214,22 @@ bool VoipEventQueue::CommitReservation(Reservation *reservation,
 
 bool VoipEventQueue::CancelReservation(Reservation *reservation) noexcept {
     if (reservation == nullptr || reservation->queue_ != this ||
-        !reservation->active_ || reservation->permanent_)
+        !reservation->active_)
         return false;
     CoreLockGuard lock(mutex_);
+    if (reservation->permanent_) {
+        if (stopped_reservation_ != reservation || stopped_committed_)
+            return false;
+        // The dedicated slot remains unavailable to ordinary events, while a
+        // new lifecycle owner may reclaim the uncommitted stop reservation.
+        stopped_reservation_ = nullptr;
+        stopped_claimed_ = false;
+        reservation->active_ = false;
+        reservation->queue_ = nullptr;
+        reservation->guaranteed_ = false;
+        reservation->permanent_ = false;
+        return true;
+    }
     for (std::size_t slot = 0; slot < reserved_count_; ++slot) {
         if (reservations_[slot] == reservation) {
             reservations_[slot] = reservations_[reserved_count_ - 1];

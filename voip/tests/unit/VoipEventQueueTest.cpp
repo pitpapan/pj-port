@@ -3,6 +3,7 @@
 #include <cassert>
 #include <chrono>
 #include <cstdio>
+#include <array>
 #include <thread>
 
 namespace {
@@ -153,6 +154,51 @@ void test_reserved_event_cannot_publish_after_stopped() {
     assert(!queue.TryPop(&output));
 }
 
+void test_abandoned_stopped_reservation_is_reclaimable() {
+    voip::VoipEventQueue queue;
+    {
+        voip::VoipEventQueue::Reservation abandoned;
+        assert(queue.ReserveServiceStopped(&abandoned));
+    }
+    voip::VoipEventQueue::Reservation reclaimed;
+    assert(queue.ReserveServiceStopped(&reclaimed));
+    assert(queue.CommitServiceStopped(&reclaimed));
+    voip::Event output{};
+    assert(queue.TryPop(&output));
+    assert(output.type == voip::EventType::service_stopped);
+}
+
+void test_reservation_classification_cannot_change_at_commit() {
+    voip::VoipEventQueue queue;
+    voip::VoipEventQueue::Reservation ordinary;
+    const voip::Event ordinary_event = Event(voip::EventType::resource_snapshot);
+    assert(queue.ReserveOrdinary(ordinary_event, &ordinary));
+    assert(!ordinary.Commit(Event(voip::EventType::incoming_call)));
+    assert(ordinary.IsActive());
+    assert(ordinary.Cancel());
+
+    voip::VoipEventQueue::Reservation guaranteed;
+    const voip::Event guaranteed_event = Event(voip::EventType::incoming_call);
+    assert(queue.ReserveGuaranteed(guaranteed_event, &guaranteed));
+    assert(!guaranteed.Commit(ordinary_event));
+    assert(guaranteed.IsActive());
+    assert(guaranteed.Cancel());
+}
+
+void test_reservation_storage_has_a_fixed_bound() {
+    voip::VoipEventQueue queue;
+    voip::Event event = Event(voip::EventType::media_snapshot, 9, 2);
+    assert(queue.Publish(event));
+    std::array<voip::VoipEventQueue::Reservation,
+               voip::VoipEventQueue::capacity>
+        reservations{};
+    for (auto &reservation : reservations)
+        assert(queue.ReserveOrdinary(event, &reservation));
+    voip::VoipEventQueue::Reservation overflow;
+    assert(!queue.ReserveOrdinary(event, &overflow));
+    for (auto &reservation : reservations) assert(reservation.Cancel());
+}
+
 void test_coalesces_in_place_with_new_sequence() {
     voip::VoipEventQueue queue;
     voip::Event first = Event(voip::EventType::media_snapshot, 2, 4);
@@ -216,6 +262,9 @@ int main() {
     test_coalesces_in_place_with_new_sequence();
     test_full_queue_still_accepts_matching_coalescible_replacement();
     test_reserved_event_cannot_publish_after_stopped();
+    test_abandoned_stopped_reservation_is_reclaimable();
+    test_reservation_classification_cannot_change_at_commit();
+    test_reservation_storage_has_a_fixed_bound();
     test_sequences_are_nonzero_and_monotonic();
     std::puts("VoipEventQueueTest PASSED");
     return 0;
