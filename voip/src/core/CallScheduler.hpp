@@ -53,6 +53,10 @@ public:
     Error AdmitOutgoing(AgentHandle agent, const char *remote_uri,
                         CallHandle *handle, bool *promoted,
                         SchedulerEffects &effects) noexcept;
+    Error AdmitOutgoing(AgentHandle agent, const char *remote_uri,
+                        CallHandle *handle, SchedulerEffects &effects) noexcept {
+        return AdmitOutgoing(agent, remote_uri, handle, nullptr, effects);
+    }
     Error AdmitOutgoing(AgentHandle agent, const DialRequest &request,
                         CallHandle *handle, bool *promoted,
                         SchedulerEffects &effects) noexcept {
@@ -62,6 +66,12 @@ public:
     Error AdmitIncoming(AgentHandle agent, std::uint32_t runtime_token,
                         const char *remote_uri, CallHandle *handle,
                         bool *promoted, SchedulerEffects &effects) noexcept;
+    Error AdmitIncoming(AgentHandle agent, std::uint32_t runtime_token,
+                        const char *remote_uri, CallHandle *handle,
+                        SchedulerEffects &effects) noexcept {
+        return AdmitIncoming(agent, runtime_token, remote_uri, handle, nullptr,
+                             effects);
+    }
     Error AdmitIncoming(AgentHandle agent, std::uint32_t runtime_token,
                         CallHandle *handle, bool *promoted,
                         SchedulerEffects &effects) noexcept {
@@ -74,16 +84,32 @@ public:
                        ScheduledTransition *result = nullptr) noexcept;
     Error Reject(CallHandle handle, ScheduledTransition *result,
                  SchedulerEffects &effects) noexcept;
+    Error Reject(CallHandle handle, SchedulerEffects &effects) noexcept {
+        return Reject(handle, nullptr, effects);
+    }
     Error Cancel(CallHandle handle, ScheduledTransition *result,
                  SchedulerEffects &effects) noexcept;
+    Error Cancel(CallHandle handle, SchedulerEffects &effects) noexcept {
+        return Cancel(handle, nullptr, effects);
+    }
     Error Hangup(CallHandle handle, ScheduledTransition *result,
                  SchedulerEffects &effects) noexcept;
+    Error Hangup(CallHandle handle, SchedulerEffects &effects) noexcept {
+        return Hangup(handle, nullptr, effects);
+    }
     Error OnTimeout(CallHandle handle, ScheduledTransition *result,
                     SchedulerEffects &effects) noexcept;
+    Error OnTimeout(CallHandle handle, SchedulerEffects &effects) noexcept {
+        return OnTimeout(handle, nullptr, effects);
+    }
     Error SetHeld(CallHandle handle, bool held,
                   ScheduledTransition *result = nullptr) noexcept;
     Error OnTeardownComplete(CallHandle handle, ScheduledTransition *result,
                              SchedulerEffects &effects) noexcept;
+    Error OnTeardownComplete(CallHandle handle,
+                             SchedulerEffects &effects) noexcept {
+        return OnTeardownComplete(handle, nullptr, effects);
+    }
 
     Error Accept(CallHandle handle,
                  ScheduledTransition *result = nullptr) noexcept {
