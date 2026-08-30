@@ -158,12 +158,12 @@ bool RunProof() {
     if (service.Cancel(calls[2], &cancel) != voip::Error::ok ||
         !WaitForOperation(service, cancel, voip::Error::cancelled))
         return false;
-    // Call 3 remains queued after the second cancellation. Its retained dial
+    // Call 4 remains queued after the second cancellation. Its retained dial
     // operation must time out and its public handle must be stale before
     // shutdown begins.
-    if (!WaitForTimedOut(service, dial_operations[3])) return false;
+    if (!WaitForTimedOut(service, dial_operations[4])) return false;
     voip::CallSnapshot timed_out{};
-    if (service.GetCallSnapshot(calls[3], &timed_out) !=
+    if (service.GetCallSnapshot(calls[4], &timed_out) !=
         voip::Error::invalid_handle)
         return false;
     if (service.Shutdown() != voip::Error::ok) return false;
