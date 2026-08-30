@@ -55,6 +55,8 @@ public:
     void FailNextAdapter(RuntimeRequest::Type, Error) noexcept;
     void SetAdapterCallbacksDeferred(bool) noexcept;
     void DrainAdapterCallbacks() noexcept;
+    void SetAdapterInitializationNotificationBurst(std::size_t) noexcept;
+    std::size_t PendingAdapterNotifications() const noexcept;
     std::size_t AdapterRequestCount() const noexcept;
     bool GetAdapterRequest(std::size_t, RuntimeRequest *) const noexcept;
     bool Validate(AgentHandle) const noexcept override;

@@ -10,7 +10,7 @@ namespace voip {
 
 class FakeRuntimeAdapter final : public RuntimeAdapter {
 public:
-    static constexpr std::size_t capacity = 32;
+    static constexpr std::size_t capacity = RuntimeAdapter::notification_capacity + 16;
     FakeRuntimeAdapter() noexcept = default;
     ~FakeRuntimeAdapter() noexcept override = default;
     FakeRuntimeAdapter(const FakeRuntimeAdapter &) = delete;
@@ -36,6 +36,8 @@ public:
     Error Inject(const RuntimeNotification &) noexcept;
     void SetCallbacksDeferred(bool) noexcept;
     void DrainDeferredCallbacks() noexcept;
+    void SetInitializationNotificationBurst(std::size_t) noexcept;
+    std::size_t PendingNotifications() const noexcept { return count_; }
     void FailNext(RuntimeRequest::Type, Error) noexcept;
     std::size_t RequestCount() const noexcept { return request_count_; }
     bool GetRequest(std::size_t index, RuntimeRequest *request) const noexcept;
@@ -54,6 +56,7 @@ private:
     std::uint32_t next_token_ = 1;
     bool stopped_ = false;
     bool callbacks_deferred_ = false;
+    std::size_t initialization_notification_burst_ = 0;
     std::array<RuntimeRequest, capacity> requests_{};
     std::size_t request_count_ = 0;
     std::array<Error, 10> failures_{};

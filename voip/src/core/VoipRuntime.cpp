@@ -1029,6 +1029,8 @@ void VoipRuntime::Step(std::uint64_t now_ms) noexcept {
         }
         lifecycle_ = Lifecycle::running;
         CompleteStartup(Error::ok);
+        RefreshResources();
+        return;
     }
     if (lifecycle_ != Lifecycle::running && lifecycle_ != Lifecycle::shutting_down)
         return;
@@ -1101,6 +1103,25 @@ void VoipRuntime::DrainAdapterCallbacks() noexcept {
 #if !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
     CoreLockGuard lock(mutex_);
     adapter_.DrainDeferredCallbacks();
+#endif
+}
+
+void VoipRuntime::SetAdapterInitializationNotificationBurst(
+    std::size_t count) noexcept {
+#if !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
+    CoreLockGuard lock(mutex_);
+    adapter_.SetInitializationNotificationBurst(count);
+#else
+    (void)count;
+#endif
+}
+
+std::size_t VoipRuntime::PendingAdapterNotifications() const noexcept {
+#if !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
+    CoreLockGuard lock(mutex_);
+    return adapter_.PendingNotifications();
+#else
+    return 0;
 #endif
 }
 

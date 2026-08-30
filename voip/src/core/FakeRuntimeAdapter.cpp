@@ -68,6 +68,11 @@ void FakeRuntimeAdapter::DrainDeferredCallbacks() noexcept {
     }
 }
 
+void FakeRuntimeAdapter::SetInitializationNotificationBurst(
+    std::size_t count) noexcept {
+    initialization_notification_burst_ = count > capacity ? capacity : count;
+}
+
 Error FakeRuntimeAdapter::Initialize(const AgentRegistry &agents,
                                      const SecurityPolicy &,
                                      const PcmFormat &) noexcept {
@@ -96,6 +101,18 @@ Error FakeRuntimeAdapter::Initialize(const AgentRegistry &agents,
         notification.registration = agent->registration == RegistrationState::disabled
                                     ? RegistrationState::disabled
                                     : RegistrationState::registered;
+        notification.status = {Error::ok, 200, {}};
+        const Error enqueue_error = Enqueue(notification);
+        if (enqueue_error != Error::ok) return enqueue_error;
+    }
+    AgentHandle handle{};
+    if (agents.GetAgentHandle(0, &handle) != Error::ok)
+        return Error::internal_failure;
+    for (std::size_t i = 0; i < initialization_notification_burst_; ++i) {
+        RuntimeNotification notification{};
+        notification.type = RuntimeNotification::Type::registration_state;
+        notification.agent = handle;
+        notification.registration = RegistrationState::registered;
         notification.status = {Error::ok, 200, {}};
         const Error enqueue_error = Enqueue(notification);
         if (enqueue_error != Error::ok) return enqueue_error;

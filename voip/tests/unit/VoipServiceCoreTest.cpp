@@ -633,6 +633,24 @@ void test_initialize_waits_for_actor_bootstrap_without_holding_runtime_mutex() {
     while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
 }
 
+void test_bootstrap_drains_at_most_one_notification_capacity() {
+    std::array<Source, 5> sources;
+    std::array<Sink, 5> sinks;
+    std::array<voip::AgentConfig, 5> agents{};
+    const voip::ServiceConfig config = Config(agents, sources, sinks);
+    voip::VoipRuntime runtime;
+    runtime.SetActorPaused(true);
+    runtime.SetAdapterInitializationNotificationBurst(
+        voip::RuntimeAdapter::notification_capacity);
+    assert(runtime.Initialize(config) == voip::Error::ok);
+    assert(runtime.PendingAdapterNotifications() ==
+           5);
+    runtime.SetActorPaused(false);
+    assert(runtime.Shutdown() == voip::Error::ok);
+    voip::Event event{};
+    while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
+}
+
 void test_registration_notifications_update_only_the_matching_agent() {
     std::array<Source, 5> sources;
     std::array<Sink, 5> sinks;
@@ -1345,6 +1363,7 @@ int main() {
     test_reinitialize_requires_draining_prior_events();
     test_initialization_failure_rolls_back_adapter_and_events();
     test_initialize_waits_for_actor_bootstrap_without_holding_runtime_mutex();
+    test_bootstrap_drains_at_most_one_notification_capacity();
     test_registration_notifications_update_only_the_matching_agent();
     test_invalid_promoted_answer_does_not_call_adapter();
     test_queued_incoming_hangup_uses_native_callback_before_release();
