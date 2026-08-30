@@ -27,7 +27,7 @@ bool CallScheduler::CopyUri(char (&destination)[max_uri_length + 1],
 Error CallScheduler::AdmitOutgoing(AgentHandle agent, const char *remote_uri,
                                    CallHandle *handle,
                                    bool *promoted,
-                                   SchedulerEffects *effects) noexcept {
+                                   SchedulerEffects &effects) noexcept {
     return Admit(agent, CallDirection::outgoing, 0, remote_uri, handle,
                  promoted, effects);
 }
@@ -36,7 +36,7 @@ Error CallScheduler::AdmitIncoming(AgentHandle agent, std::uint32_t token,
                                    const char *remote_uri,
                                    CallHandle *handle,
                                    bool *promoted,
-                                   SchedulerEffects *effects) noexcept {
+                                   SchedulerEffects &effects) noexcept {
     return Admit(agent, CallDirection::incoming, token, remote_uri, handle,
                  promoted, effects);
 }
@@ -44,7 +44,8 @@ Error CallScheduler::AdmitIncoming(AgentHandle agent, std::uint32_t token,
 Error CallScheduler::Admit(AgentHandle agent, CallDirection direction,
                            std::uint32_t token, const char *remote_uri,
                            CallHandle *handle, bool *promoted,
-                           SchedulerEffects *effects) noexcept {
+                           SchedulerEffects &effects) noexcept {
+    effects.Clear();
     if (handle == nullptr) return Error::invalid_argument;
     if (agents_.Resolve(agent) == nullptr) return Error::invalid_handle;
     if (remote_uri == nullptr) return Error::invalid_argument;
@@ -54,13 +55,12 @@ Error CallScheduler::Admit(AgentHandle agent, CallDirection direction,
         agents_.Resolve(agent)->registration != RegistrationState::registered)
         return Error::agent_unavailable;
 
-    SchedulerEffects *sink = EffectsOrPending(effects);
+    SchedulerEffects &sink = effects;
 
     const bool can_promote_now = fifo_count_ == 0 && CanPromote(agent);
     if (can_promote_now && direction == CallDirection::outgoing &&
         agents_.Resolve(agent)->registration != RegistrationState::registered)
         return Error::agent_unavailable;
-    if (can_promote_now && !sink->CanAppend()) return Error::resource_exhausted;
     if (!can_promote_now && fifo_count_ >= fifo_capacity)
         return Error::queue_full;
 
@@ -95,12 +95,7 @@ Error CallScheduler::Admit(AgentHandle agent, CallDirection direction,
         context->phase = direction == CallDirection::incoming
                              ? Phase::incoming
                              : Phase::outgoing;
-        if (!AddPromotionEffect(*context, nullptr, sink)) {
-            ClearAgentLease(*context);
-            (void)calls_.Release(candidate);
-            --live_count_;
-            return Error::resource_exhausted;
-        }
+        AddPromotionEffect(*context, nullptr, sink);
         if (promoted != nullptr) *promoted = true;
     } else {
         AppliedCallTransition waiting{};
@@ -149,12 +144,11 @@ bool CallScheduler::RemoveFromFifo(CallHandle handle) noexcept {
 }
 
 bool CallScheduler::PromoteContext(CallContext &context,
-                                   SchedulerEffects *effects) noexcept {
+                                   SchedulerEffects &effects) noexcept {
     if (!CanPromote(context.agent) || !SignalingEligible(context) ||
-        !effects->CanAppend())
+        !effects.CanAppend())
         return false;
 
-    const Phase old_phase = context.phase;
     AppliedCallTransition accepted{};
     const AppliedCallTransition *accepted_ptr = nullptr;
     if (context.answer_on_promotion) {
@@ -167,15 +161,10 @@ bool CallScheduler::PromoteContext(CallContext &context,
     AgentContext *agent = agents_.Resolve(context.agent);
     agent->promoted_call = context.handle;
     ++promoted_count_;
-    context.phase = context.answer_on_promotion ? Phase::incoming
+    context.phase = context.answer_on_promotion ? Phase::established
                                                 : Phase::promoting;
     if (context.answer_on_promotion) context.answer_on_promotion = false;
-    if (!AddPromotionEffect(context, accepted_ptr, effects)) {
-        context.phase = old_phase;
-        agent->promoted_call = CallHandle{};
-        --promoted_count_;
-        return false;
-    }
+    AddPromotionEffect(context, accepted_ptr, effects);
     if (context.phase == Phase::promoting)
         context.phase = context.direction == CallDirection::incoming
                              ? Phase::incoming
@@ -183,34 +172,33 @@ bool CallScheduler::PromoteContext(CallContext &context,
     return true;
 }
 
-bool CallScheduler::PromoteHead(SchedulerEffects *effects) noexcept {
-    if (fifo_count_ == 0) return false;
-    CallContext *head = calls_.Resolve(fifo_[0]);
-    if (head == nullptr || !CanPromote(head->agent) ||
-        !SignalingEligible(*head) || !effects->CanAppend()) return false;
-    const CallHandle handle = fifo_[0];
-    if (!PromoteContext(*head, effects)) return false;
-    for (std::size_t i = 1; i < fifo_count_; ++i) fifo_[i - 1] = fifo_[i];
-    fifo_[--fifo_count_] = CallHandle{};
-    (void)handle;
-    return true;
+bool CallScheduler::PromoteHead(SchedulerEffects &effects) noexcept {
+    while (fifo_count_ != 0) {
+        CallContext *head = calls_.Resolve(fifo_[0]);
+        if (head == nullptr) {
+            for (std::size_t i = 1; i < fifo_count_; ++i)
+                fifo_[i - 1] = fifo_[i];
+            fifo_[--fifo_count_] = CallHandle{};
+            continue;
+        }
+        if (!CanPromote(head->agent) || !SignalingEligible(*head) ||
+            !effects.CanAppend()) return false;
+        if (!PromoteContext(*head, effects)) return false;
+        for (std::size_t i = 1; i < fifo_count_; ++i) fifo_[i - 1] = fifo_[i];
+        fifo_[--fifo_count_] = CallHandle{};
+        return true;
+    }
+    return false;
 }
 
-bool CallScheduler::OnCapacityChanged(SchedulerEffects *effects) noexcept {
-    SchedulerEffects *sink = EffectsOrPending(effects);
+bool CallScheduler::OnCapacityChanged(SchedulerEffects &effects) noexcept {
+    effects.Clear();
     bool promoted_any = false;
     while (promoted_count_ < promoted_capacity && fifo_count_ != 0) {
-        if (!PromoteHead(sink)) break;
+        if (!PromoteHead(effects)) break;
         promoted_any = true;
     }
     return promoted_any;
-}
-
-bool CallScheduler::TakePendingEffects(SchedulerEffects *effects) noexcept {
-    if (effects == nullptr) return false;
-    *effects = pending_effects_;
-    pending_effects_.Clear();
-    return true;
 }
 
 void CallScheduler::FillTransition(const CallContext &context,
@@ -240,16 +228,10 @@ Error CallScheduler::Apply(CallContext &context, CallTransition cause,
     return Error::ok;
 }
 
-SchedulerEffects *CallScheduler::EffectsOrPending(
-    SchedulerEffects *effects) noexcept {
-    return effects == nullptr ? &pending_effects_ : effects;
-}
-
-bool CallScheduler::AddPromotionEffect(
+void CallScheduler::AddPromotionEffect(
     const CallContext &context, const AppliedCallTransition *acceptance,
-    SchedulerEffects *effects) noexcept {
-    if (effects == nullptr || !effects->CanAppend()) return false;
-    PromotionEffect &entry = effects->entries[effects->count++];
+    SchedulerEffects &effects) noexcept {
+    PromotionEffect &entry = effects.entries[effects.count++];
     entry = {};
     entry.handle = context.handle;
     entry.direction = context.direction;
@@ -258,7 +240,6 @@ bool CallScheduler::AddPromotionEffect(
         entry.acceptance_applied = true;
         FillTransition(context, *acceptance, &entry.acceptance);
     }
-    return true;
 }
 
 CallTransition CallScheduler::CauseFor(
@@ -304,8 +285,8 @@ void CallScheduler::SetPhaseAfterAcceptance(CallContext &context) noexcept {
     context.phase = Phase::established;
 }
 
-Error CallScheduler::Answer(CallHandle handle, ScheduledTransition *result,
-                            SchedulerEffects *effects) noexcept {
+Error CallScheduler::Answer(CallHandle handle,
+                            ScheduledTransition *result) noexcept {
     CallContext *context = calls_.Resolve(handle);
     if (context == nullptr) return Error::invalid_handle;
     if (context->direction != CallDirection::incoming)
@@ -314,12 +295,11 @@ Error CallScheduler::Answer(CallHandle handle, ScheduledTransition *result,
         context->answer_on_promotion = true;
         return Error::ok;
     }
-    return OnAcceptance(handle, result, effects);
+    return OnAcceptance(handle, result);
 }
 
 Error CallScheduler::OnAcceptance(CallHandle handle,
-                                  ScheduledTransition *result,
-                                  SchedulerEffects *effects) noexcept {
+                                  ScheduledTransition *result) noexcept {
     CallContext *context = calls_.Resolve(handle);
     if (context == nullptr) return Error::invalid_handle;
     if (IsQueued(*context)) return Error::invalid_state;
@@ -327,12 +307,12 @@ Error CallScheduler::OnAcceptance(CallHandle handle,
     if (error != Error::ok) return error;
     context->answer_on_promotion = false;
     SetPhaseAfterAcceptance(*context);
-    (void)effects;
     return Error::ok;
 }
 
 Error CallScheduler::Reject(CallHandle handle, ScheduledTransition *result,
-                            SchedulerEffects *effects) noexcept {
+                            SchedulerEffects &effects) noexcept {
+    effects.Clear();
     CallContext *context = calls_.Resolve(handle);
     if (context == nullptr) return Error::invalid_handle;
     const Error error = Apply(*context,
@@ -351,12 +331,13 @@ Error CallScheduler::Reject(CallHandle handle, ScheduledTransition *result,
 }
 
 Error CallScheduler::Cancel(CallHandle handle, ScheduledTransition *result,
-                            SchedulerEffects *effects) noexcept {
+                            SchedulerEffects &effects) noexcept {
     return Reject(handle, result, effects);
 }
 
 Error CallScheduler::Hangup(CallHandle handle, ScheduledTransition *result,
-                            SchedulerEffects *effects) noexcept {
+                            SchedulerEffects &effects) noexcept {
+    effects.Clear();
     CallContext *context = calls_.Resolve(handle);
     if (context == nullptr) return Error::invalid_handle;
     const Error error = Apply(*context,
@@ -374,7 +355,8 @@ Error CallScheduler::Hangup(CallHandle handle, ScheduledTransition *result,
 }
 
 Error CallScheduler::OnTimeout(CallHandle handle, ScheduledTransition *result,
-                               SchedulerEffects *effects) noexcept {
+                               SchedulerEffects &effects) noexcept {
+    effects.Clear();
     CallContext *context = calls_.Resolve(handle);
     if (context == nullptr) return Error::invalid_handle;
     const Error error = Apply(*context,
@@ -396,8 +378,7 @@ Error CallScheduler::OnTimeout(CallHandle handle, ScheduledTransition *result,
 }
 
 Error CallScheduler::SetHeld(CallHandle handle, bool held,
-                             ScheduledTransition *result,
-                             SchedulerEffects *effects) noexcept {
+                             ScheduledTransition *result) noexcept {
     CallContext *context = calls_.Resolve(handle);
     if (context == nullptr) return Error::invalid_handle;
     const CallProjection projection = context->state_machine.Snapshot();
@@ -407,13 +388,13 @@ Error CallScheduler::SetHeld(CallHandle handle, bool held,
     if (error != Error::ok) return error;
     context->phase = held ? Phase::held : Phase::established;
     (void)projection;
-    (void)effects;
     return Error::ok;
 }
 
 Error CallScheduler::OnTeardownComplete(
     CallHandle handle, ScheduledTransition *result,
-    SchedulerEffects *effects) noexcept {
+    SchedulerEffects &effects) noexcept {
+    effects.Clear();
     CallContext *context = calls_.Resolve(handle);
     if (context == nullptr) return Error::invalid_handle;
     if (context->phase != Phase::disconnecting)

@@ -51,74 +51,60 @@ public:
     CallScheduler &operator=(const CallScheduler &) = delete;
 
     Error AdmitOutgoing(AgentHandle agent, const char *remote_uri,
-                        CallHandle *handle, bool *promoted = nullptr,
-                        SchedulerEffects *effects = nullptr) noexcept;
+                        CallHandle *handle, bool *promoted,
+                        SchedulerEffects &effects) noexcept;
     Error AdmitOutgoing(AgentHandle agent, const DialRequest &request,
-                        CallHandle *handle, bool *promoted = nullptr,
-                        SchedulerEffects *effects = nullptr) noexcept {
+                        CallHandle *handle, bool *promoted,
+                        SchedulerEffects &effects) noexcept {
         return AdmitOutgoing(agent, request.remote_uri, handle, promoted,
                              effects);
     }
     Error AdmitIncoming(AgentHandle agent, std::uint32_t runtime_token,
                         const char *remote_uri, CallHandle *handle,
-                        bool *promoted = nullptr,
-                        SchedulerEffects *effects = nullptr) noexcept;
+                        bool *promoted, SchedulerEffects &effects) noexcept;
     Error AdmitIncoming(AgentHandle agent, std::uint32_t runtime_token,
-                        CallHandle *handle, bool *promoted = nullptr,
-                        SchedulerEffects *effects = nullptr) noexcept {
+                        CallHandle *handle, bool *promoted,
+                        SchedulerEffects &effects) noexcept {
         return AdmitIncoming(agent, runtime_token, "", handle, promoted,
                              effects);
     }
 
-    Error Answer(CallHandle handle, ScheduledTransition *result = nullptr,
-                 SchedulerEffects *effects = nullptr) noexcept;
+    Error Answer(CallHandle handle, ScheduledTransition *result = nullptr) noexcept;
     Error OnAcceptance(CallHandle handle,
-                       ScheduledTransition *result = nullptr,
-                       SchedulerEffects *effects = nullptr) noexcept;
-    Error Reject(CallHandle handle,
-                 ScheduledTransition *result = nullptr,
-                 SchedulerEffects *effects = nullptr) noexcept;
-    Error Cancel(CallHandle handle,
-                 ScheduledTransition *result = nullptr,
-                 SchedulerEffects *effects = nullptr) noexcept;
-    Error Hangup(CallHandle handle,
-                 ScheduledTransition *result = nullptr,
-                 SchedulerEffects *effects = nullptr) noexcept;
-    Error OnTimeout(CallHandle handle,
-                    ScheduledTransition *result = nullptr,
-                    SchedulerEffects *effects = nullptr) noexcept;
+                       ScheduledTransition *result = nullptr) noexcept;
+    Error Reject(CallHandle handle, ScheduledTransition *result,
+                 SchedulerEffects &effects) noexcept;
+    Error Cancel(CallHandle handle, ScheduledTransition *result,
+                 SchedulerEffects &effects) noexcept;
+    Error Hangup(CallHandle handle, ScheduledTransition *result,
+                 SchedulerEffects &effects) noexcept;
+    Error OnTimeout(CallHandle handle, ScheduledTransition *result,
+                    SchedulerEffects &effects) noexcept;
     Error SetHeld(CallHandle handle, bool held,
-                  ScheduledTransition *result = nullptr,
-                  SchedulerEffects *effects = nullptr) noexcept;
-    Error OnTeardownComplete(CallHandle handle,
-                             ScheduledTransition *result = nullptr,
-                             SchedulerEffects *effects = nullptr) noexcept;
+                  ScheduledTransition *result = nullptr) noexcept;
+    Error OnTeardownComplete(CallHandle handle, ScheduledTransition *result,
+                             SchedulerEffects &effects) noexcept;
 
     Error Accept(CallHandle handle,
-                 ScheduledTransition *result = nullptr,
-                 SchedulerEffects *effects = nullptr) noexcept {
-        return OnAcceptance(handle, result, effects);
+                 ScheduledTransition *result = nullptr) noexcept {
+        return OnAcceptance(handle, result);
     }
-    Error Finish(CallHandle handle,
-                 ScheduledTransition *result = nullptr,
-                 SchedulerEffects *effects = nullptr) noexcept {
+    Error Finish(CallHandle handle, ScheduledTransition *result,
+                 SchedulerEffects &effects) noexcept {
         return Hangup(handle, result, effects);
     }
-    Error Timeout(CallHandle handle,
-                  ScheduledTransition *result = nullptr,
-                  SchedulerEffects *effects = nullptr) noexcept {
+    Error Timeout(CallHandle handle, ScheduledTransition *result,
+                  SchedulerEffects &effects) noexcept {
         return OnTimeout(handle, result, effects);
     }
-    Error TeardownComplete(CallHandle handle,
-                           ScheduledTransition *result = nullptr,
-                           SchedulerEffects *effects = nullptr) noexcept {
+    Error TeardownComplete(CallHandle handle, ScheduledTransition *result,
+                           SchedulerEffects &effects) noexcept {
         return OnTeardownComplete(handle, result, effects);
     }
 
     // Looks at only the FIFO head. It can promote repeatedly until no head is
     // eligible, the queue is empty, or both promoted slots are occupied.
-    bool OnCapacityChanged(SchedulerEffects *effects = nullptr) noexcept;
-    bool TakePendingEffects(SchedulerEffects *effects) noexcept;
+    bool OnCapacityChanged(SchedulerEffects &effects) noexcept;
 
     bool IsLive(CallHandle handle) const noexcept;
     bool IsPromoted(CallHandle handle) const noexcept;
@@ -148,18 +134,17 @@ private:
     static bool CopyUri(char (&destination)[max_uri_length + 1],
                         const char *source) noexcept;
     bool CanPromote(const AgentHandle &agent) const noexcept;
-    bool PromoteContext(CallContext &context, SchedulerEffects *effects) noexcept;
-    bool PromoteHead(SchedulerEffects *effects) noexcept;
+    bool PromoteContext(CallContext &context, SchedulerEffects &effects) noexcept;
+    bool PromoteHead(SchedulerEffects &effects) noexcept;
     Error Admit(AgentHandle agent, CallDirection direction,
                 std::uint32_t runtime_token, const char *remote_uri,
                 CallHandle *handle, bool *promoted,
-                SchedulerEffects *effects) noexcept;
+                SchedulerEffects &effects) noexcept;
     Error Apply(CallContext &context, CallTransition cause,
                 ScheduledTransition *result) noexcept;
-    SchedulerEffects *EffectsOrPending(SchedulerEffects *effects) noexcept;
-    bool AddPromotionEffect(const CallContext &context,
+    void AddPromotionEffect(const CallContext &context,
                             const AppliedCallTransition *acceptance,
-                            SchedulerEffects *effects) noexcept;
+                            SchedulerEffects &effects) noexcept;
     CallTransition CauseFor(const CallContext &context,
                             CallTransition requested) const noexcept;
     bool SignalingEligible(const CallContext &context) const noexcept;
@@ -179,7 +164,6 @@ private:
     std::size_t fifo_count_ = 0;
     std::size_t promoted_count_ = 0;
     std::size_t live_count_ = 0;
-    SchedulerEffects pending_effects_{};
 };
 
 static_assert(CallScheduler::logical_call_capacity == 7,

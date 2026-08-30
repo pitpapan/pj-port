@@ -81,3 +81,28 @@ Focused state and scheduler binaries also passed with ASan/UBSan enabled
 (`ASAN_OPTIONS=detect_leaks=0`; LeakSanitizer is unavailable under the
 ptrace-backed harness). `git diff --check` is clean, and no Zephyr source was
 inspected.
+
+## Fix round 2
+
+Code commit: pending.
+
+The scheduler now requires a fresh caller-owned `SchedulerEffects&` for every
+admission, capacity-change, and release operation. Effects are cleared at the
+start of each such operation; no pending or persistent effects live in the
+scheduler, and prefilled output cannot block promotion. Non-promotion state
+operations no longer accept irrelevant effects parameters.
+
+Promotion validates signaling eligibility, FIFO-head validity, available
+effect capacity, and answer-on-promotion acceptance before changing ownership.
+Every automatic promotion is returned in bounded two-entry storage with its
+handle, direction, opaque token, and optional acceptance transition. Queued
+outgoing calls require registered agents, while registration loss blocks only
+the FIFO head and never bypasses it. Established rejection/timeout requests
+are mapped to the normative `finish` edge.
+
+Additional tests cover queued timeout head removal and promotion, mixed
+direction ordering, simultaneous agents, stale commands after reuse,
+teardown-only lease release, prefilled effects, opaque token ownership, and
+capacity restoration. Fix-round verification passed the two focused tests,
+all four earlier Plan 2 host tests, ASan/UBSan focused tests (with leak
+detection disabled under the ptrace-backed harness), and `git diff --check`.
