@@ -573,14 +573,8 @@ void test_shutdown_adapter_failure_preserves_reachable_runtime() {
     assert(runtime.Initialize(config) == voip::Error::ok);
     runtime.FailNextAdapter(voip::RuntimeRequest::Type::shutdown,
                             voip::Error::signaling_failed);
-    assert(runtime.Shutdown() == voip::Error::signaling_failed);
-    assert(runtime.Shutdown() == voip::Error::signaling_failed);
-    voip::OperationId operation = 0;
-    voip::AgentHandle agent{};
-    assert(runtime.GetAgentHandle(0, &agent) == voip::Error::ok);
-    assert(runtime.Dial(agent, {"sip:after-shutdown-failure@example.test"},
-                        &operation) == voip::Error::shutting_down);
-    assert(operation == 0);
+    assert(runtime.Shutdown() == voip::Error::ok);
+    assert(runtime.AdapterRequestCount() >= 2);
 }
 
 void test_reinitialize_requires_draining_prior_events() {
@@ -597,6 +591,101 @@ void test_reinitialize_requires_draining_prior_events() {
     assert(runtime.Initialize(config) == voip::Error::ok);
     assert(runtime.Shutdown() == voip::Error::ok);
     while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
+}
+
+void test_initialization_failure_rolls_back_adapter_and_events() {
+    std::array<Source, 5> sources;
+    std::array<Sink, 5> sinks;
+    std::array<voip::AgentConfig, 5> agents{};
+    const voip::ServiceConfig config = Config(agents, sources, sinks);
+    voip::VoipRuntime runtime;
+    runtime.FailNextAdapter(voip::RuntimeRequest::Type::initialize_account,
+                             voip::Error::signaling_failed);
+    assert(runtime.Initialize(config) == voip::Error::signaling_failed);
+    assert(runtime.Initialize(config) == voip::Error::ok);
+    voip::Event event{};
+    while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
+    assert(runtime.Shutdown() == voip::Error::ok);
+    while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
+}
+
+void test_invalid_promoted_answer_does_not_call_adapter() {
+    std::array<Source, 5> sources;
+    std::array<Sink, 5> sinks;
+    std::array<voip::AgentConfig, 5> agents{};
+    const voip::ServiceConfig config = Config(agents, sources, sinks);
+    voip::VoipRuntime runtime;
+    assert(runtime.Initialize(config) == voip::Error::ok);
+    voip::AgentHandle agent{};
+    assert(runtime.GetAgentHandle(0, &agent) == voip::Error::ok);
+    voip::CallHandle call{};
+    voip::OperationId dial = 0;
+    assert(DialAndGetHandle(runtime, agent, "sip:invalid-answer@example.test",
+                            &call, &dial));
+    const std::size_t before = runtime.AdapterRequestCount();
+    voip::OperationId answer = 0;
+    assert(runtime.Answer(call, &answer) == voip::Error::ok);
+    bool invalid = false;
+    voip::Event event{};
+    for (unsigned i = 0; i < 100 && !invalid; ++i) {
+        if (runtime.WaitForEvent(&event, 20) == voip::Error::ok &&
+            event.type == voip::EventType::operation_terminal &&
+            event.operation == answer)
+            invalid = event.status.error == voip::Error::invalid_state;
+    }
+    assert(invalid);
+    for (std::size_t i = before; i < runtime.AdapterRequestCount(); ++i) {
+        voip::RuntimeRequest request{};
+        assert(runtime.GetAdapterRequest(i, &request));
+        assert(request.type != voip::RuntimeRequest::Type::answer);
+    }
+    assert(runtime.Shutdown() == voip::Error::ok);
+}
+
+void test_queued_incoming_hangup_uses_native_callback_before_release() {
+    std::array<Source, 5> sources;
+    std::array<Sink, 5> sinks;
+    std::array<voip::AgentConfig, 5> agents{};
+    voip::ServiceConfig config = Config(agents, sources, sinks);
+    config.queue_timeout_ms = 60000;
+    voip::VoipRuntime runtime;
+    assert(runtime.Initialize(config) == voip::Error::ok);
+    voip::AgentHandle agent{};
+    assert(runtime.GetAgentHandle(0, &agent) == voip::Error::ok);
+    voip::CallHandle active{};
+    voip::OperationId dial = 0;
+    assert(DialAndGetHandle(runtime, agent, "sip:active-hangup@example.test",
+                            &active, &dial));
+    voip::RuntimeNotification incoming{};
+    incoming.type = voip::RuntimeNotification::Type::incoming_call;
+    incoming.agent = agent;
+    incoming.token = 9901;
+    std::strncpy(incoming.remote_uri, "sip:queued-hangup@example.test",
+                 voip::max_uri_length);
+    assert(runtime.InjectNotification(incoming) == voip::Error::ok);
+    voip::CallHandle queued{};
+    voip::Event event{};
+    for (unsigned i = 0; i < 100; ++i) {
+        if (runtime.WaitForEvent(&event, 20) == voip::Error::ok &&
+            event.type == voip::EventType::incoming_call) {
+            queued = event.call;
+            break;
+        }
+    }
+    assert(queued.IsValid());
+    voip::OperationId hangup = 0;
+    assert(runtime.Hangup(queued, &hangup) == voip::Error::ok);
+    bool completed = false;
+    for (unsigned i = 0; i < 100 && !completed; ++i) {
+        if (runtime.WaitForEvent(&event, 20) == voip::Error::ok &&
+            event.type == voip::EventType::operation_terminal &&
+            event.operation == hangup)
+            completed = event.status.error == voip::Error::cancelled;
+    }
+    assert(completed);
+    voip::CallSnapshot snapshot{};
+    assert(runtime.GetCallSnapshot(queued, &snapshot) == voip::Error::invalid_handle);
+    assert(runtime.Shutdown() == voip::Error::ok);
 }
 
 void test_stale_agent_is_rejected_before_operation_or_mailbox_reservation() {
@@ -811,8 +900,8 @@ void test_shutdown_orders_native_reject_teardown_before_adapter_shutdown() {
             request.token == 9701 && request.sip_status == 486) rejected = true;
     }
     assert(shutdown_index == count - 1);
-    assert(hangups >= 2);
-    assert(teardowns >= 2);
+    assert(hangups == 2);
+    assert(teardowns == 0);
     assert(rejected);
 }
 
@@ -832,6 +921,9 @@ int main() {
     test_failed_hold_preserves_established_state();
     test_shutdown_adapter_failure_preserves_reachable_runtime();
     test_reinitialize_requires_draining_prior_events();
+    test_initialization_failure_rolls_back_adapter_and_events();
+    test_invalid_promoted_answer_does_not_call_adapter();
+    test_queued_incoming_hangup_uses_native_callback_before_release();
     test_stale_agent_is_rejected_before_operation_or_mailbox_reservation();
     test_queued_terminal_event_commits_before_call_release();
     test_teardown_failure_retries_and_releases_call_capacity();

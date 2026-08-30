@@ -22,6 +22,7 @@ Error VoipRuntime::Initialize(const ServiceConfig &config) noexcept {
     if (error != Error::ok) return error;
     mailbox_.Reset();
     events_.ResetLifecycle();
+    scheduler_.SetPromotionEnabled(true);
     shutting_down_ = false;
     stopped_ = false;
     shutdown_complete_ = false;
@@ -46,6 +47,7 @@ Error VoipRuntime::Initialize(const ServiceConfig &config) noexcept {
         if (agent == nullptr) continue;
         const Error adapter_error = adapter_.InitializeAccount(*agent);
         if (adapter_error != Error::ok) {
+            (void)adapter_.Shutdown();
             agents_.Reset();
             // Roll back snapshots emitted for earlier accounts so a failed
             // initialization cannot strand a nonempty event lifecycle.
@@ -62,7 +64,9 @@ Error VoipRuntime::Initialize(const ServiceConfig &config) noexcept {
     RefreshResources();
     if (!actor_.Start(*this)) {
         initialized_ = false;
+        (void)adapter_.Shutdown();
         agents_.Reset();
+        events_.ResetLifecycle();
         return Error::internal_failure;
     }
     return Error::ok;
@@ -220,18 +224,14 @@ void VoipRuntime::ApplyEffects(const SchedulerEffects &effects) noexcept {
             if (adapter_.Answer(token) != Error::ok) {
                 SchedulerEffects timeout_effects{};
                 ScheduledTransition timeout{};
-                if (scheduler_.OnTimeout(effect.handle, &timeout,
+                if (scheduler_.OnTimeoutDeferred(effect.handle, &timeout,
                                          timeout_effects) == Error::ok) {
                     PublishTransition(timeout);
                     CompleteOperationIds(signaling_operation, operation,
                                          Error::signaling_failed);
-                    if (timeout.handle_invalidated) {
-                        ForgetCall(effect.handle);
-                    } else {
-                        context->teardown_pending = false;
-                        if (adapter_.BeginCallTeardown(token) == Error::ok)
-                            context->teardown_pending = true;
-                    }
+                    context->teardown_pending = false;
+                    if (adapter_.BeginCallTeardown(token) == Error::ok)
+                        context->teardown_pending = true;
                 } else {
                     CompleteOperationIds(signaling_operation, operation,
                                          Error::signaling_failed);
@@ -414,6 +414,7 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
         const OperationId signaling_operation = context->signaling_operation;
         const OperationId operation = context->operation;
         const std::uint32_t token = context->runtime_token;
+        context->shutdown_pending = false;
         const bool queued = !scheduler_.IsPromoted(context->handle);
         error = queued
                     ? scheduler_.RejectDeferred(context->handle, &transition,
@@ -442,6 +443,7 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
         const OperationId signaling_operation = context->signaling_operation;
         const OperationId operation = context->operation;
         const CallHandle handle = context->handle;
+        context->shutdown_pending = false;
         if (!scheduler_.IsPromoted(handle)) {
             const bool queued = !scheduler_.IsPromoted(handle);
             const Error cancel_error = queued
@@ -459,7 +461,8 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
             break;
         }
         if (scheduler_.IsPromoted(context->handle) &&
-            context->state_machine.Snapshot().state != CallState::terminated) {
+            context->state_machine.Snapshot().state != CallState::terminated &&
+            context->state_machine.Snapshot().state != CallState::idle) {
             error = scheduler_.Hangup(context->handle, &transition, effects);
             if (error == Error::ok) PublishTransition(transition);
         }
@@ -480,23 +483,22 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
         const OperationId operation = context->operation;
         const std::uint32_t token = context->runtime_token;
         const bool queued = !scheduler_.IsPromoted(context->handle);
-        error = queued
-                    ? scheduler_.OnTimeoutDeferred(context->handle, &transition,
-                                                   effects)
-                    : scheduler_.OnTimeout(context->handle, &transition,
-                                            effects);
+        error = scheduler_.OnTimeoutDeferred(context->handle, &transition,
+                                             effects);
         if (error == Error::ok) {
             PublishTransition(transition);
             CompleteOperationIds(signaling, operation, Error::timed_out);
             if (queued) {
                 FinalizeTerminal(context->handle, effects);
-            } else if (transition.handle_invalidated) {
-                ForgetCall(transition.handle);
             } else if (CallContext *live = scheduler_.Resolve(transition.handle)) {
                 live->signaling_operation = 0;
                 live->operation = 0;
                 live->pending_operation = CallContext::PendingOperation::none;
-                if (token != 0) (void)adapter_.BeginCallTeardown(token);
+                live->teardown_pending = false;
+                if (token != 0 && adapter_.BeginCallTeardown(token) == Error::ok)
+                    live->teardown_pending = true;
+                else if (token == 0)
+                    FinalizeTerminal(transition.handle, effects);
             }
             ApplyEffects(effects);
         }
@@ -525,24 +527,7 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
 
 void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
     if (command.type == CommandType::shutdown) {
-        CancelAllCalls();
-        const Error adapter_error = adapter_.Shutdown();
-        if (adapter_error != Error::ok) {
-            shutdown_error_ = adapter_error;
-            shutdown_complete_ = true;
-            shutdown_signal_.Notify();
-            return;
-        }
-        VoipEventQueue::Reservation stopped;
-        if (!events_.ReserveServiceStopped(&stopped) ||
-            !events_.CommitServiceStopped(&stopped)) {
-            event_publication_failed_ = true;
-            return;
-        }
-        stopped_ = true;
-        initialized_ = false;
-        shutdown_complete_ = true;
-        shutdown_signal_.Notify();
+        scheduler_.SetPromotionEnabled(false);
         return;
     }
     if (command.type == CommandType::dial) {
@@ -615,8 +600,12 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
     switch (command.type) {
     case CommandType::answer:
         context->pending_operation = CallContext::PendingOperation::answer;
-        if (scheduler_.IsPromoted(handle))
-            error = adapter_.Answer(context->runtime_token);
+        if (scheduler_.IsPromoted(handle)) {
+            if (!scheduler_.CanAnswer(handle))
+                error = Error::invalid_state;
+            else
+                error = adapter_.Answer(context->runtime_token);
+        }
         else {
             error = scheduler_.Answer(handle, &transition);
             local_answer = error == Error::ok;
@@ -656,6 +645,11 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
     case CommandType::hangup:
         context->pending_operation = CallContext::PendingOperation::hangup;
         if (scheduler_.IsPromoted(handle)) error = adapter_.Hangup(context->runtime_token);
+        else if (context->direction == CallDirection::incoming &&
+                 context->runtime_token != 0) {
+            deferred_native = true;
+            error = adapter_.Hangup(context->runtime_token);
+        }
         else if (!scheduler_.IsPromoted(handle))
             error = scheduler_.HangupDeferred(handle, &transition, effects);
         else error = scheduler_.Hangup(handle, &transition, effects);
@@ -794,46 +788,44 @@ Error VoipRuntime::SetHeld(CallHandle call, bool held, OperationId *operation) n
 }
 
 void VoipRuntime::CancelAllCalls() noexcept {
-    for (std::size_t index = call_count_; index != 0; --index) {
-        const CallHandle handle = calls_[index - 1];
+    std::size_t index = 0;
+    while (index < call_count_) {
+        const CallHandle handle = calls_[index];
         CallContext *context = scheduler_.Resolve(handle);
         if (context == nullptr) { ForgetCall(handle); continue; }
-        const OperationId signaling_operation = context->signaling_operation;
-        const OperationId operation = context->operation;
+        if (context->shutdown_pending) { ++index; continue; }
         const bool promoted = scheduler_.IsPromoted(handle);
         const std::uint32_t token = context->runtime_token;
         const bool queued_incoming = !promoted &&
                                      context->direction == CallDirection::incoming &&
                                      token != 0;
         if (promoted && token != 0) {
-            (void)adapter_.Hangup(token);
-            (void)adapter_.BeginCallTeardown(token);
+            bool requested = false;
+            if (adapter_.Hangup(token) == Error::ok) requested = true;
+            context->shutdown_pending = requested;
+            ++index;
+            continue;
         } else if (queued_incoming) {
-            (void)adapter_.Reject(token, 486);
+            context->shutdown_pending = adapter_.Reject(token, 486) == Error::ok;
+            ++index;
+            continue;
         }
+        // Queued outgoing calls have no native token and can be completed
+        // locally.  Keep the terminal event commit before invalidation.
         ScheduledTransition transition{}; SchedulerEffects effects{};
-        const Error cancel_error = (!promoted)
-                                       ? scheduler_.CancelDeferred(
-                                             handle, &transition, effects)
-                                       : scheduler_.Cancel(handle, &transition,
-                                                           effects);
+        const Error cancel_error = scheduler_.CancelDeferred(handle, &transition,
+                                                              effects);
         if (cancel_error == Error::ok) {
             PublishTransition(transition);
-            if (transition.handle_invalidated) {
-                CompleteOperationIds(signaling_operation, operation, Error::cancelled);
-                ForgetCall(handle);
-            } else if (!promoted) {
-                CompleteOperationIds(signaling_operation, operation,
-                                     Error::cancelled);
-                FinalizeTerminal(handle, effects);
-            } else if (scheduler_.OnTeardownComplete(handle, nullptr, effects) == Error::ok) {
-                CompleteOperationIds(signaling_operation, operation, Error::cancelled);
-                ForgetCall(handle);
-            }
-            // No promotion is permitted once shutdown starts. Any effects
-            // returned by cancellation are intentionally discarded; the
-            // remaining FIFO entries are cancelled by this same pass.
+            const OperationId signaling_operation = context->signaling_operation;
+            const OperationId operation = context->operation;
+            CompleteOperationIds(signaling_operation, operation, Error::cancelled);
+            FinalizeTerminal(handle, effects);
+            // No promotion is permitted once shutdown starts; discard any
+            // effects because the adapter is being drained instead.
+            continue;
         }
+        ++index;
     }
 }
 
@@ -842,9 +834,14 @@ Error VoipRuntime::Shutdown() noexcept {
         CoreLockGuard lock(mutex_);
         if (shutdown_complete_) return shutdown_error_;
         if (!initialized_ || stopped_) return Error::ok;
-        shutting_down_ = true;
-        shutdown_complete_ = false;
-        if (!mailbox_.TryPushShutdown()) return Error::shutdown_timeout;
+        if (!shutting_down_) {
+            shutting_down_ = true;
+            shutdown_complete_ = false;
+            if (!mailbox_.TryPushShutdown()) {
+                shutting_down_ = false;
+                return Error::shutdown_timeout;
+            }
+        }
     }
     if (!shutdown_signal_.Wait(1000)) return Error::shutdown_timeout;
     actor_.Stop();
@@ -852,6 +849,9 @@ Error VoipRuntime::Shutdown() noexcept {
     {
         CoreLockGuard lock(mutex_);
         result = shutdown_error_;
+        // The signal is binary. Re-notify so concurrent/repeated callers
+        // waiting on the same in-flight drain each observe completion.
+        if (shutdown_complete_) shutdown_signal_.Notify();
         if (result == Error::ok) {
             agents_.Reset();
             RefreshResources();
@@ -885,19 +885,14 @@ void VoipRuntime::ApplyTimers(std::uint64_t now_ms) noexcept {
         const OperationId signaling = context->signaling_operation;
         const OperationId operation = context->operation;
         const std::uint32_t token = context->runtime_token;
-        const Error timeout_error = queued
-                                        ? scheduler_.OnTimeoutDeferred(
-                                              handle, &transition, effects)
-                                        : scheduler_.OnTimeout(handle, &transition,
-                                                               effects);
+        const Error timeout_error = scheduler_.OnTimeoutDeferred(
+            handle, &transition, effects);
         if (timeout_error != Error::ok)
             continue;
         PublishTransition(transition);
         CompleteOperationIds(signaling, operation, Error::timed_out);
         if (queued) {
             FinalizeTerminal(handle, effects);
-        } else if (transition.handle_invalidated) {
-            ForgetCall(handle);
         } else if (CallContext *live = scheduler_.Resolve(handle)) {
             live->signaling_operation = 0;
             live->operation = 0;
@@ -905,6 +900,8 @@ void VoipRuntime::ApplyTimers(std::uint64_t now_ms) noexcept {
             live->teardown_pending = false;
             if (token != 0 && adapter_.BeginCallTeardown(token) == Error::ok) {
                 live->teardown_pending = true;
+            } else if (token == 0) {
+                FinalizeTerminal(handle, effects);
             }
         }
         ApplyEffects(effects);
@@ -914,13 +911,32 @@ void VoipRuntime::ApplyTimers(std::uint64_t now_ms) noexcept {
 void VoipRuntime::RetryPendingTeardowns() noexcept {
     for (std::size_t index = 0; index < call_count_; ++index) {
         CallContext *context = scheduler_.Resolve(calls_[index]);
+        const CallState state = context == nullptr
+                                    ? CallState::terminated
+                                    : context->state_machine.Snapshot().state;
         if (context == nullptr || context->teardown_pending ||
-            context->state_machine.Snapshot().state != CallState::terminated)
+            (state != CallState::terminated && state != CallState::idle))
             continue;
         if (context->runtime_token != 0 &&
             adapter_.BeginCallTeardown(context->runtime_token) == Error::ok)
             context->teardown_pending = true;
     }
+}
+
+void VoipRuntime::CompleteShutdownIfDrained() noexcept {
+    if (!shutting_down_ || shutdown_complete_ || call_count_ != 0) return;
+    if (adapter_.Shutdown() != Error::ok) return;
+    VoipEventQueue::Reservation stopped;
+    if (!events_.ReserveServiceStopped(&stopped) ||
+        !events_.CommitServiceStopped(&stopped)) {
+        event_publication_failed_ = true;
+        return;
+    }
+    stopped_ = true;
+    initialized_ = false;
+    shutdown_complete_ = true;
+    shutdown_error_ = Error::ok;
+    shutdown_signal_.Notify();
 }
 
 void VoipRuntime::Step(std::uint64_t now_ms) noexcept {
@@ -935,13 +951,18 @@ void VoipRuntime::Step(std::uint64_t now_ms) noexcept {
     while (mailbox_.TryPop(&command)) {
         ProcessCommand(command);
     }
-    ApplyTimers(now_ms);
-    RetryPendingTeardowns();
+    if (!shutting_down_) {
+        ApplyTimers(now_ms);
+        RetryPendingTeardowns();
+    } else {
+        CancelAllCalls();
+    }
     RuntimeNotification notification{};
     for (std::size_t i = 0; i < RuntimeAdapter::notification_capacity; ++i) {
         if (!adapter_.Poll(&notification)) break;
         ProcessNotification(notification);
     }
+    CompleteShutdownIfDrained();
     RefreshResources();
 }
 

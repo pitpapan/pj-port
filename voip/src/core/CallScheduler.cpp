@@ -185,6 +185,7 @@ bool CallScheduler::PromoteHead(SchedulerEffects &effects) noexcept {
 
 bool CallScheduler::OnCapacityChanged(SchedulerEffects &effects) noexcept {
     effects.Clear();
+    if (!promotions_enabled_) return false;
     bool promoted_any = false;
     while (promoted_count_ < promoted_capacity && fifo_count_ != 0) {
         if (!PromoteHead(effects)) break;
@@ -288,6 +289,16 @@ Error CallScheduler::Answer(CallHandle handle,
         return Error::ok;
     }
     return OnAcceptance(handle, result);
+}
+
+bool CallScheduler::CanAnswer(CallHandle handle) const noexcept {
+    const CallContext *context = calls_.Resolve(handle);
+    if (context == nullptr || context->direction != CallDirection::incoming)
+        return false;
+    const CallProjection projection = context->state_machine.Snapshot();
+    return projection.state == CallState::initiated ||
+           (projection.state == CallState::hold &&
+            projection.hold_reason == HoldReason::waiting);
 }
 
 Error CallScheduler::OnAcceptance(CallHandle handle,
@@ -408,8 +419,17 @@ Error CallScheduler::HangupDeferred(CallHandle handle,
 Error CallScheduler::OnTimeoutDeferred(
     CallHandle handle, ScheduledTransition *result,
     SchedulerEffects &effects) noexcept {
-    return ApplyDeferredTerminal(handle, CallTransition::timeout, result,
-                                 effects);
+    effects.Clear();
+    CallContext *context = calls_.Resolve(handle);
+    if (context == nullptr) return Error::invalid_handle;
+    const bool queued = IsQueued(*context);
+    const Error error = Apply(*context, CauseFor(*context, CallTransition::timeout),
+                              result);
+    if (error != Error::ok) return error;
+    if (queued && !RemoveFromFifo(handle)) return Error::internal_failure;
+    context->phase = Phase::disconnecting;
+    if (result != nullptr) result->handle_invalidated = false;
+    return Error::ok;
 }
 
 Error CallScheduler::FinalizeTerminal(CallHandle handle,
@@ -417,7 +437,8 @@ Error CallScheduler::FinalizeTerminal(CallHandle handle,
     effects.Clear();
     CallContext *context = calls_.Resolve(handle);
     if (context == nullptr) return Error::invalid_handle;
-    if (context->state_machine.Snapshot().state != CallState::terminated)
+    const CallState state = context->state_machine.Snapshot().state;
+    if (state != CallState::terminated && state != CallState::idle)
         return Error::invalid_state;
     if (!ReleaseContext(*context, nullptr)) return Error::internal_failure;
     (void)OnCapacityChanged(effects);

@@ -80,6 +80,7 @@ private:
     void CancelAllCalls() noexcept;
     void ApplyTimers(std::uint64_t now_ms) noexcept;
     void RetryPendingTeardowns() noexcept;
+    void CompleteShutdownIfDrained() noexcept;
 
     mutable CoreMutex mutex_{};
     AgentRegistry agents_{};

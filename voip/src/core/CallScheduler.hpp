@@ -81,6 +81,7 @@ public:
     }
 
     Error Answer(CallHandle handle, ScheduledTransition *result = nullptr) noexcept;
+    bool CanAnswer(CallHandle handle) const noexcept;
     Error OnAcceptance(CallHandle handle,
                        ScheduledTransition *result = nullptr) noexcept;
     Error Reject(CallHandle handle, ScheduledTransition *result,
@@ -144,6 +145,7 @@ public:
     // Looks at only the FIFO head. It can promote repeatedly until no head is
     // eligible, the queue is empty, or both promoted slots are occupied.
     bool OnCapacityChanged(SchedulerEffects &effects) noexcept;
+    void SetPromotionEnabled(bool enabled) noexcept { promotions_enabled_ = enabled; }
 
     bool IsLive(CallHandle handle) const noexcept;
     bool IsPromoted(CallHandle handle) const noexcept;
@@ -207,6 +209,7 @@ private:
     std::size_t fifo_count_ = 0;
     std::size_t promoted_count_ = 0;
     std::size_t live_count_ = 0;
+    bool promotions_enabled_ = true;
 };
 
 static_assert(CallScheduler::logical_call_capacity == 7,
