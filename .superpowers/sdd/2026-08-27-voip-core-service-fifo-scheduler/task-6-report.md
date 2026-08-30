@@ -84,7 +84,8 @@ inspected.
 
 ## Fix round 2
 
-Code commit: pending.
+Code commit: `3919e2f37` (`fix(voip): make scheduler effects explicit`).
+API ergonomics follow-up: `1fdc07b2c` (`fix(voip): add explicit scheduler effect overloads`).
 
 The scheduler now requires a fresh caller-owned `SchedulerEffects&` for every
 admission, capacity-change, and release operation. Effects are cleared at the
