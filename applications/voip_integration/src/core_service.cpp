@@ -51,7 +51,7 @@ voip::ServiceConfig MakeConfig(std::array<voip::AgentConfig, 5> &agents,
         agents[i] = {{identities[i], "sip:example.test", "core", "secret"},
                      {&sources[i], &sinks[i]}, true};
     }
-    return {agents.data(), static_cast<std::uint8_t>(agents.size()), 5, 5,
+    return {agents.data(), static_cast<std::uint8_t>(agents.size()), 1000, 1000,
             {8000, 160, 1, voip::SampleFormat::signed_16},
             {voip::SignalingSecurity::none, voip::MediaSecurity::none}};
 }
@@ -78,6 +78,17 @@ bool WaitForOperation(voip::VoipService &service, voip::OperationId operation,
         if (event.type == voip::EventType::operation_terminal &&
             event.operation == operation)
             return event.status.error == expected;
+    }
+    return false;
+}
+
+bool WaitForTimedOut(voip::VoipService &service, voip::OperationId operation) {
+    voip::Event event{};
+    for (unsigned attempt = 0; attempt < 150; ++attempt) {
+        if (service.WaitForEvent(&event, 20) != voip::Error::ok) continue;
+        if (event.type == voip::EventType::operation_terminal &&
+            event.operation == operation)
+            return event.status.error == voip::Error::timed_out;
     }
     return false;
 }
@@ -116,8 +127,9 @@ bool RunProof() {
     // so the agent-0 head is blocked by call 0, proving strict HOL behavior.
     const std::array<std::uint8_t, 7> call_agents = {0, 1, 0, 2, 3, 4, 1};
     std::array<voip::CallHandle, 7> calls{};
+    std::array<voip::OperationId, 7> dial_operations{};
     for (std::size_t i = 0; i < calls.size(); ++i) {
-        voip::OperationId operation = 0;
+        voip::OperationId &operation = dial_operations[i];
         if (service.Dial(handles[call_agents[i]], {"sip:peer@example.test"},
                          &operation) != voip::Error::ok ||
             !GetCallEvent(service, operation, &calls[i]))
@@ -146,7 +158,14 @@ bool RunProof() {
     if (service.Cancel(calls[2], &cancel) != voip::Error::ok ||
         !WaitForOperation(service, cancel, voip::Error::cancelled))
         return false;
-    k_sleep(K_MSEC(25));
+    // Call 3 remains queued after the second cancellation. Its retained dial
+    // operation must time out and its public handle must be stale before
+    // shutdown begins.
+    if (!WaitForTimedOut(service, dial_operations[3])) return false;
+    voip::CallSnapshot timed_out{};
+    if (service.GetCallSnapshot(calls[3], &timed_out) !=
+        voip::Error::invalid_handle)
+        return false;
     if (service.Shutdown() != voip::Error::ok) return false;
     if (service.Shutdown() != voip::Error::ok) return false;
     return true;
