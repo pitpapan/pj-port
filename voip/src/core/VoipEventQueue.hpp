@@ -73,6 +73,9 @@ public:
 
     std::size_t Size() const noexcept;
     bool IsStopped() const noexcept;
+    // Starts a fresh service lifecycle after the previous stopped record was
+    // consumed. No active reservations may exist when called.
+    void ResetLifecycle() noexcept;
 
     static bool IsGuaranteedEvent(const Event &event) noexcept;
     static bool IsCoalescibleEvent(const Event &event) noexcept;

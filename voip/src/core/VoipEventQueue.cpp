@@ -293,6 +293,16 @@ bool VoipEventQueue::IsStopped() const noexcept {
     return stopped_committed_;
 }
 
+void VoipEventQueue::ResetLifecycle() noexcept {
+    CoreLockGuard lock(mutex_);
+    count_ = 0;
+    reserved_count_ = 0;
+    stopped_claimed_ = false;
+    stopped_committed_ = false;
+    stopped_reservation_ = nullptr;
+    signal_.Clear();
+}
+
 void VoipEventQueue::DetachReservations() noexcept {
     CoreLockGuard lock(mutex_);
     for (Reservation *reservation : reservations_) {

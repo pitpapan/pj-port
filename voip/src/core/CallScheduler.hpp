@@ -152,6 +152,7 @@ public:
     const CallContext *Resolve(CallHandle handle) const noexcept {
         return calls_.Resolve(handle);
     }
+    CallContext *Resolve(CallHandle handle) noexcept { return calls_.Resolve(handle); }
 
 private:
     using Pool = HandlePool<CallHandle, logical_call_capacity, CallContext>;

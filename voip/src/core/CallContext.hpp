@@ -39,11 +39,24 @@ private:
     friend class CallScheduler;
 
 public:
+    enum class PendingOperation : std::uint8_t {
+        none,
+        answer,
+        reject,
+        cancel,
+        hangup,
+        set_held,
+    };
+
     CallHandle handle{};
     AgentHandle agent{};
     CallDirection direction = CallDirection::outgoing;
     CallStateMachine state_machine{};
     std::uint32_t runtime_token = 0;
+    std::uint64_t admitted_at_ms = 0;
+    OperationId operation = 0;
+    OperationId signaling_operation = 0;
+    PendingOperation pending_operation = PendingOperation::none;
     bool answer_on_promotion = false;
     char remote_uri[max_uri_length + 1]{};
 
