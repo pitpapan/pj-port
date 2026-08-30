@@ -16,7 +16,9 @@ public:
     FakeRuntimeAdapter(const FakeRuntimeAdapter &) = delete;
     FakeRuntimeAdapter &operator=(const FakeRuntimeAdapter &) = delete;
 
-    Error InitializeAccount(const AgentContext &) noexcept override;
+    Error Initialize(const AgentRegistry &, const SecurityPolicy &,
+                     const PcmFormat &) noexcept override;
+    Error Pump(std::uint64_t, std::uint32_t) noexcept override;
     Error PromoteOutgoing(AgentHandle, const char *, std::uint32_t *) noexcept override;
     Error PromoteIncoming(AgentHandle, std::uint32_t, std::uint32_t *) noexcept override;
     Error Answer(std::uint32_t) noexcept override;
@@ -24,7 +26,7 @@ public:
     Error Cancel(std::uint32_t) noexcept override;
     Error Hangup(std::uint32_t) noexcept override;
     Error SetHeld(std::uint32_t, bool) noexcept override;
-    bool Poll(RuntimeNotification *) noexcept override;
+    bool TryGetNotification(RuntimeNotification *) noexcept override;
     Error BeginCallTeardown(std::uint32_t) noexcept override;
     Error Shutdown() noexcept override;
 

@@ -61,6 +61,10 @@ public:
     bool Validate(CallHandle) const noexcept override;
 
 private:
+    enum class Lifecycle : std::uint8_t { idle, starting, running, shutting_down, stopped };
+
+    void CompleteStartup(Error) noexcept;
+    void RollbackStartup(Error) noexcept;
     Error ReserveOperation(OperationId *) noexcept;
     Error EnqueueControl(VoipCommand &, OperationId *) noexcept;
     void PublishTransition(const ScheduledTransition &) noexcept;
@@ -106,14 +110,16 @@ private:
     std::array<CallHandle, CallScheduler::logical_call_capacity>
         call_terminal_handles_{};
     std::size_t call_count_ = 0;
-    bool initialized_ = false;
+    Lifecycle lifecycle_ = Lifecycle::idle;
     bool actor_stopped_ = true;
-    bool shutting_down_ = false;
-    bool stopped_ = false;
     std::uint64_t now_ms_ = 0;
     std::uint32_t queue_timeout_ms_ = 0;
     std::uint32_t answer_timeout_ms_ = 0;
+    SecurityPolicy security_{};
+    PcmFormat conference_format_{};
     CoreEventSignal shutdown_signal_{};
+    CoreEventSignal startup_signal_{};
+    Error startup_error_ = Error::ok;
     bool shutdown_complete_ = false;
     Error shutdown_error_ = Error::ok;
     bool event_publication_failed_ = false;

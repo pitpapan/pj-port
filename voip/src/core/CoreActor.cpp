@@ -55,6 +55,11 @@ void CoreActor::Entry(void *first, void *, void *) noexcept {
 void CoreActor::Run(VoipRuntime *runtime) noexcept {
 #if !defined(__ZEPHYR__)
     running_.store(true);
+    // Bootstrap is actor-owned and must run even when the deterministic host
+    // seam pauses normal iterations before Start().
+    const auto bootstrap_now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    runtime->Step(static_cast<std::uint64_t>(bootstrap_now));
     while (!stop_.load()) {
         if (paused_.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));

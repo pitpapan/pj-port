@@ -601,12 +601,94 @@ void test_initialization_failure_rolls_back_adapter_and_events() {
     std::array<voip::AgentConfig, 5> agents{};
     const voip::ServiceConfig config = Config(agents, sources, sinks);
     voip::VoipRuntime runtime;
-    runtime.FailNextAdapter(voip::RuntimeRequest::Type::initialize_account,
+    runtime.FailNextAdapter(voip::RuntimeRequest::Type::initialize,
                              voip::Error::signaling_failed);
     assert(runtime.Initialize(config) == voip::Error::signaling_failed);
+    voip::AgentHandle handle{};
+    assert(runtime.GetAgentHandle(0, &handle) == voip::Error::invalid_argument);
+    voip::Event event{};
+    assert(runtime.TryGetEvent(&event) == voip::Error::timed_out);
     assert(runtime.Initialize(config) == voip::Error::ok);
+    while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
+    assert(runtime.Shutdown() == voip::Error::ok);
+    while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
+}
+
+void test_initialize_waits_for_actor_bootstrap_without_holding_runtime_mutex() {
+    std::array<Source, 5> sources;
+    std::array<Sink, 5> sinks;
+    std::array<voip::AgentConfig, 5> agents{};
+    const voip::ServiceConfig config = Config(agents, sources, sinks);
+    voip::VoipRuntime runtime;
+    assert(runtime.Initialize(config) == voip::Error::ok);
+    std::array<voip::AgentHandle, 5> handles{};
+    for (std::uint8_t i = 0; i < handles.size(); ++i)
+        assert(runtime.GetAgentHandle(i, &handles[i]) == voip::Error::ok);
+    voip::Event event{};
+    std::size_t snapshots = 0;
+    while (runtime.TryGetEvent(&event) == voip::Error::ok)
+        if (event.type == voip::EventType::agent_snapshot) ++snapshots;
+    assert(snapshots == 5);
+    assert(runtime.Shutdown() == voip::Error::ok);
+    while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
+}
+
+void test_registration_notifications_update_only_the_matching_agent() {
+    std::array<Source, 5> sources;
+    std::array<Sink, 5> sinks;
+    std::array<voip::AgentConfig, 5> agents{};
+    const voip::ServiceConfig config = Config(agents, sources, sinks);
+    voip::VoipRuntime runtime;
+    assert(runtime.Initialize(config) == voip::Error::ok);
+
+    std::array<voip::AgentHandle, 5> handles{};
+    for (std::uint8_t i = 0; i < handles.size(); ++i)
+        assert(runtime.GetAgentHandle(i, &handles[i]) == voip::Error::ok);
     voip::Event event{};
     while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
+
+    const std::array<voip::RegistrationState, 5> states{
+        voip::RegistrationState::registered,
+        voip::RegistrationState::refreshing,
+        voip::RegistrationState::authentication_failed,
+        voip::RegistrationState::transport_failed,
+        voip::RegistrationState::disabled,
+    };
+    for (std::size_t i = 0; i < handles.size(); ++i) {
+        voip::RuntimeNotification notification{};
+        notification.type = voip::RuntimeNotification::Type::registration_state;
+        notification.agent = handles[i];
+        notification.registration = states[i];
+        notification.status = {i == 2 ? voip::Error::authentication_failed
+                                      : voip::Error::ok,
+                               static_cast<std::uint16_t>(i == 2 ? 401 : 200), {}};
+        assert(runtime.InjectNotification(notification) == voip::Error::ok);
+    }
+
+    std::array<bool, 5> seen{};
+    for (std::size_t attempts = 0; attempts < 100 &&
+                                   !(seen[0] && seen[1] && seen[2] && seen[3] && seen[4]);
+         ++attempts) {
+        if (runtime.WaitForEvent(&event, 20) != voip::Error::ok ||
+            event.type != voip::EventType::agent_snapshot)
+            continue;
+        for (std::size_t i = 0; i < handles.size(); ++i) {
+            if (event.agent.slot != handles[i].slot ||
+                event.agent.generation != handles[i].generation)
+                continue;
+            assert(event.agent_snapshot.registration == states[i]);
+            assert(event.status.error == (i == 2 ? voip::Error::authentication_failed
+                                                  : voip::Error::ok));
+            assert(event.status.sip_status == (i == 2 ? 401 : 200));
+            seen[i] = true;
+        }
+    }
+    for (bool value : seen) assert(value);
+    voip::AgentSnapshot snapshot{};
+    for (std::size_t i = 0; i < handles.size(); ++i) {
+        assert(runtime.GetAgentSnapshot(handles[i], &snapshot) == voip::Error::ok);
+        assert(snapshot.registration == states[i]);
+    }
     assert(runtime.Shutdown() == voip::Error::ok);
     while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
 }
@@ -1262,6 +1344,8 @@ int main() {
     test_shutdown_adapter_failure_preserves_reachable_runtime();
     test_reinitialize_requires_draining_prior_events();
     test_initialization_failure_rolls_back_adapter_and_events();
+    test_initialize_waits_for_actor_bootstrap_without_holding_runtime_mutex();
+    test_registration_notifications_update_only_the_matching_agent();
     test_invalid_promoted_answer_does_not_call_adapter();
     test_queued_incoming_hangup_uses_native_callback_before_release();
     test_stale_agent_is_rejected_before_operation_or_mailbox_reservation();

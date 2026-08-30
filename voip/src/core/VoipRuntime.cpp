@@ -20,66 +20,89 @@ VoipRuntime::~VoipRuntime() noexcept {
 
 Error VoipRuntime::Initialize(const ServiceConfig &config) noexcept {
     CoreLockGuard shutdown_lock(shutdown_mutex_);
-    CoreLockGuard lock(mutex_);
-    if (initialized_) return Error::invalid_state;
-    if (shutdown_complete_ && !actor_stopped_) return Error::invalid_state;
-    // Terminal and diagnostic records remain readable after shutdown. A new
-    // lifecycle is explicit only after the caller drains the prior queue.
-    if (events_.Size() != 0) return Error::invalid_state;
-    const Error error = agents_.Initialize(config);
-    if (error != Error::ok) return error;
-    mailbox_.Reset();
-    events_.ResetLifecycle();
-    scheduler_.SetPromotionEnabled(true);
-    shutting_down_ = false;
-    stopped_ = false;
-    shutdown_complete_ = false;
-    shutdown_error_ = Error::ok;
-    event_publication_failed_ = false;
-    shutdown_signal_.Clear();
-    call_count_ = 0;
-    calls_ = {};
+    {
+        CoreLockGuard lock(mutex_);
+        if (lifecycle_ == Lifecycle::starting || lifecycle_ == Lifecycle::running ||
+            lifecycle_ == Lifecycle::shutting_down)
+            return Error::invalid_state;
+        if (shutdown_complete_ && !actor_stopped_) return Error::invalid_state;
+        // Terminal and diagnostic records remain readable after shutdown. A new
+        // lifecycle is explicit only after the caller drains the prior queue.
+        if (events_.Size() != 0) return Error::invalid_state;
+        const Error error = agents_.Initialize(config);
+        if (error != Error::ok) return error;
+        mailbox_.Reset();
+        events_.ResetLifecycle();
+        scheduler_.SetPromotionEnabled(true);
+        lifecycle_ = Lifecycle::starting;
+        shutdown_complete_ = false;
+        shutdown_error_ = Error::ok;
+        startup_error_ = Error::ok;
+        event_publication_failed_ = false;
+        shutdown_signal_.Clear();
+        startup_signal_.Clear();
+        call_count_ = 0;
+        calls_ = {};
 #if defined(__ZEPHYR__)
-    now_ms_ = static_cast<std::uint64_t>(k_uptime_get());
+        now_ms_ = static_cast<std::uint64_t>(k_uptime_get());
 #else
-    now_ms_ = static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count());
+        now_ms_ = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
 #endif
-    queue_timeout_ms_ = config.queue_timeout_ms;
-    answer_timeout_ms_ = config.answer_timeout_ms;
-    for (std::size_t i = 0; i < agents_.Count(); ++i) {
-        AgentHandle handle{};
-        (void)agents_.GetAgentHandle(static_cast<std::uint8_t>(i), &handle);
-        AgentContext *agent = agents_.Resolve(handle);
-        if (agent == nullptr) continue;
-        const Error adapter_error = adapter_.InitializeAccount(*agent);
-        if (adapter_error != Error::ok) {
-            (void)adapter_.Shutdown();
+        queue_timeout_ms_ = config.queue_timeout_ms;
+        answer_timeout_ms_ = config.answer_timeout_ms;
+        security_ = config.security;
+        conference_format_ = config.conference_format;
+        actor_stopped_ = false;
+        RefreshResources();
+        if (!actor_.Start(*this)) {
+            actor_stopped_ = true;
             agents_.Reset();
-            // Roll back snapshots emitted for earlier accounts so a failed
-            // initialization cannot strand a nonempty event lifecycle.
             events_.ResetLifecycle();
-            return adapter_error;
+            lifecycle_ = Lifecycle::idle;
+            return Error::internal_failure;
         }
-        // The deterministic adapter has no asynchronous registration delay,
-        // but disabled accounts remain disabled until a future control path.
-        if (agent->registration == RegistrationState::registering)
-            agent->registration = RegistrationState::registered;
-        PublishAgent(*agent);
     }
-    initialized_ = true;
-    actor_stopped_ = false;
-    RefreshResources();
-    if (!actor_.Start(*this)) {
-        initialized_ = false;
+    if (!startup_signal_.Wait(1000)) {
+        actor_.Stop();
+        CoreLockGuard lock(mutex_);
         actor_stopped_ = true;
         (void)adapter_.Shutdown();
         agents_.Reset();
         events_.ResetLifecycle();
+        lifecycle_ = Lifecycle::idle;
+        RefreshResources();
         return Error::internal_failure;
     }
-    return Error::ok;
+    Error result = Error::internal_failure;
+    bool actor_needs_stop = false;
+    {
+        CoreLockGuard lock(mutex_);
+        result = startup_error_;
+        actor_needs_stop = result != Error::ok && !actor_stopped_;
+    }
+    if (actor_needs_stop) actor_.Stop();
+    if (result != Error::ok) {
+        CoreLockGuard lock(mutex_);
+        actor_stopped_ = true;
+        agents_.Reset();
+        events_.ResetLifecycle();
+        lifecycle_ = Lifecycle::idle;
+        RefreshResources();
+    }
+    return result;
+}
+
+void VoipRuntime::CompleteStartup(Error error) noexcept {
+    startup_error_ = error;
+    startup_signal_.Notify();
+}
+
+void VoipRuntime::RollbackStartup(Error error) noexcept {
+    (void)adapter_.Shutdown();
+    lifecycle_ = Lifecycle::stopped;
+    CompleteStartup(error);
 }
 
 Error VoipRuntime::ReserveOperation(OperationId *operation) noexcept {
@@ -318,7 +341,21 @@ void VoipRuntime::FinalizeTerminal(CallHandle handle,
 }
 
 void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) noexcept {
-    if (notification.type == RuntimeNotification::Type::agent_registered) return;
+    if (notification.type == RuntimeNotification::Type::registration_state) {
+        AgentContext *agent = agents_.Resolve(notification.agent);
+        if (agent == nullptr) return;
+        agent->registration = notification.registration;
+        Event event{};
+        event.type = EventType::agent_snapshot;
+        event.agent = agent->handle;
+        event.agent_snapshot.handle = agent->handle;
+        event.agent_snapshot.registration = agent->registration;
+        std::strncpy(event.agent_snapshot.identity_uri, agent->sip.identity_uri,
+                     max_uri_length);
+        event.status = notification.status;
+        (void)PublishEvent(event);
+        return;
+    }
     if (notification.type == RuntimeNotification::Type::incoming_call) {
         Event incoming{};
         incoming.type = EventType::incoming_call;
@@ -529,7 +566,7 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
         break;
     case RuntimeNotification::Type::incoming_call:
         break;
-    case RuntimeNotification::Type::agent_registered:
+    case RuntimeNotification::Type::registration_state:
         break;
     }
 }
@@ -716,7 +753,7 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
 Error VoipRuntime::Dial(AgentHandle agent, const DialRequest &request,
                         OperationId *operation) noexcept {
     CoreLockGuard lock(mutex_);
-    if (!initialized_ || shutting_down_) return Error::shutting_down;
+    if (lifecycle_ != Lifecycle::running) return Error::shutting_down;
     if (operation == nullptr || request.remote_uri == nullptr)
         return Error::invalid_argument;
     *operation = 0;
@@ -735,7 +772,7 @@ Error VoipRuntime::Dial(AgentHandle agent, const DialRequest &request,
 
 Error VoipRuntime::Answer(CallHandle call, OperationId *operation) noexcept {
     CoreLockGuard lock(mutex_);
-    if (!initialized_ || shutting_down_) return Error::shutting_down;
+    if (lifecycle_ != Lifecycle::running) return Error::shutting_down;
     if (operation == nullptr) return Error::invalid_argument;
     if (scheduler_.Resolve(call) == nullptr) return Error::invalid_handle;
     VoipCommand command{};
@@ -749,7 +786,7 @@ Error VoipRuntime::Answer(CallHandle call, OperationId *operation) noexcept {
 Error VoipRuntime::Reject(CallHandle call, std::uint16_t status,
                           OperationId *operation) noexcept {
     CoreLockGuard lock(mutex_);
-    if (!initialized_ || shutting_down_) return Error::shutting_down;
+    if (lifecycle_ != Lifecycle::running) return Error::shutting_down;
     if (operation == nullptr) return Error::invalid_argument;
     if (scheduler_.Resolve(call) == nullptr) return Error::invalid_handle;
     VoipCommand command{};
@@ -763,7 +800,7 @@ Error VoipRuntime::Reject(CallHandle call, std::uint16_t status,
 
 Error VoipRuntime::Cancel(CallHandle call, OperationId *operation) noexcept {
     CoreLockGuard lock(mutex_);
-    if (!initialized_ || shutting_down_) return Error::shutting_down;
+    if (lifecycle_ != Lifecycle::running) return Error::shutting_down;
     if (operation == nullptr) return Error::invalid_argument;
     if (scheduler_.Resolve(call) == nullptr) return Error::invalid_handle;
     VoipCommand command{};
@@ -776,7 +813,7 @@ Error VoipRuntime::Cancel(CallHandle call, OperationId *operation) noexcept {
 
 Error VoipRuntime::Hangup(CallHandle call, OperationId *operation) noexcept {
     CoreLockGuard lock(mutex_);
-    if (!initialized_ || shutting_down_) return Error::shutting_down;
+    if (lifecycle_ != Lifecycle::running) return Error::shutting_down;
     if (operation == nullptr) return Error::invalid_argument;
     if (scheduler_.Resolve(call) == nullptr) return Error::invalid_handle;
     VoipCommand command{};
@@ -789,7 +826,7 @@ Error VoipRuntime::Hangup(CallHandle call, OperationId *operation) noexcept {
 
 Error VoipRuntime::SetHeld(CallHandle call, bool held, OperationId *operation) noexcept {
     CoreLockGuard lock(mutex_);
-    if (!initialized_ || shutting_down_) return Error::shutting_down;
+    if (lifecycle_ != Lifecycle::running) return Error::shutting_down;
     if (operation == nullptr) return Error::invalid_argument;
     if (scheduler_.Resolve(call) == nullptr) return Error::invalid_handle;
     VoipCommand command{};
@@ -861,10 +898,10 @@ Error VoipRuntime::Shutdown() noexcept {
         CoreLockGuard lock(mutex_);
         if (shutdown_complete_) {
             completion_observed = true;
-        } else if (!initialized_ || stopped_) {
+        } else if (lifecycle_ == Lifecycle::idle || lifecycle_ == Lifecycle::stopped) {
             return Error::ok;
-        } else if (!shutting_down_) {
-            shutting_down_ = true;
+        } else if (lifecycle_ == Lifecycle::running) {
+            lifecycle_ = Lifecycle::shutting_down;
             shutdown_complete_ = false;
         }
     }
@@ -956,7 +993,7 @@ void VoipRuntime::RetryPendingTeardowns() noexcept {
 }
 
 void VoipRuntime::CompleteShutdownIfDrained() noexcept {
-    if (!shutting_down_ || shutdown_complete_ || call_count_ != 0) return;
+    if (lifecycle_ != Lifecycle::shutting_down || shutdown_complete_ || call_count_ != 0) return;
     if (adapter_.Shutdown() != Error::ok) return;
     VoipEventQueue::Reservation stopped;
     if (!events_.ReserveServiceStopped(&stopped) ||
@@ -964,8 +1001,7 @@ void VoipRuntime::CompleteShutdownIfDrained() noexcept {
         event_publication_failed_ = true;
         return;
     }
-    stopped_ = true;
-    initialized_ = false;
+    lifecycle_ = Lifecycle::stopped;
     shutdown_complete_ = true;
     shutdown_error_ = Error::ok;
     shutdown_signal_.Notify();
@@ -973,30 +1009,53 @@ void VoipRuntime::CompleteShutdownIfDrained() noexcept {
 
 void VoipRuntime::Step(std::uint64_t now_ms) noexcept {
     CoreLockGuard lock(mutex_);
-    if (!initialized_ || stopped_) return;
+    if (lifecycle_ == Lifecycle::starting) {
+        const Error error = adapter_.Initialize(agents_, security_, conference_format_);
+        if (error != Error::ok) {
+            RollbackStartup(error);
+            return;
+        }
+        for (std::size_t i = 0; i < agents_.Count(); ++i) {
+            AgentHandle handle{};
+            (void)agents_.GetAgentHandle(static_cast<std::uint8_t>(i), &handle);
+            AgentContext *agent = agents_.Resolve(handle);
+            if (agent != nullptr) PublishAgent(*agent);
+        }
+        (void)adapter_.Pump(now_ms, 0);
+        RuntimeNotification initial_notification{};
+        for (std::size_t i = 0; i < RuntimeAdapter::notification_capacity; ++i) {
+            if (!adapter_.TryGetNotification(&initial_notification)) break;
+            ProcessNotification(initial_notification);
+        }
+        lifecycle_ = Lifecycle::running;
+        CompleteStartup(Error::ok);
+    }
+    if (lifecycle_ != Lifecycle::running && lifecycle_ != Lifecycle::shutting_down)
+        return;
     now_ms_ = now_ms;
     // Public admission copies into the fixed mailbox before actor-side
     // effects are applied. Current host composition performs those effects
     // under the same bounded runtime lock; still drain any queued records so
     // a producer cannot leave command capacity permanently consumed.
-    if (shutting_down_) scheduler_.SetPromotionEnabled(false);
+    if (lifecycle_ == Lifecycle::shutting_down) scheduler_.SetPromotionEnabled(false);
     VoipCommand command{};
     while (mailbox_.TryPop(&command)) {
-        if (shutting_down_ && command.type != CommandType::shutdown) {
+        if (lifecycle_ == Lifecycle::shutting_down && command.type != CommandType::shutdown) {
             (void)operations_.Complete(command.operation, Error::cancelled);
             continue;
         }
         ProcessCommand(command);
     }
-    if (!shutting_down_) {
+    if (lifecycle_ != Lifecycle::shutting_down) {
         ApplyTimers(now_ms);
         RetryPendingTeardowns();
     } else {
         CancelAllCalls();
     }
     RuntimeNotification notification{};
+    (void)adapter_.Pump(now_ms, 0);
     for (std::size_t i = 0; i < RuntimeAdapter::notification_capacity; ++i) {
-        if (!adapter_.Poll(&notification)) break;
+        if (!adapter_.TryGetNotification(&notification)) break;
         ProcessNotification(notification);
     }
     CompleteShutdownIfDrained();
@@ -1011,7 +1070,7 @@ Error VoipRuntime::InjectNotification(
     const RuntimeNotification &notification) noexcept {
 #if !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
     CoreLockGuard lock(mutex_);
-    if (!initialized_ || shutting_down_) return Error::shutting_down;
+    if (lifecycle_ != Lifecycle::running) return Error::shutting_down;
     return adapter_.Inject(notification);
 #else
     (void)notification;

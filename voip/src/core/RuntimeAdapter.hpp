@@ -8,9 +8,11 @@
 
 namespace voip {
 
+class AgentRegistry;
+
 struct RuntimeNotification {
     enum class Type : std::uint8_t {
-        agent_registered,
+        registration_state,
         call_accepted,
         call_rejected,
         call_finished,
@@ -25,12 +27,14 @@ struct RuntimeNotification {
     std::uint32_t token = 0;
     std::uint16_t sip_status = 0;
     Error error = Error::ok;
+    RegistrationState registration = RegistrationState::disabled;
+    Status status{};
     char remote_uri[max_uri_length + 1]{};
 };
 
 struct RuntimeRequest {
     enum class Type : std::uint8_t {
-        initialize_account,
+        initialize,
         promote_outgoing,
         promote_incoming,
         answer,
@@ -53,7 +57,9 @@ class RuntimeAdapter {
 public:
     static constexpr std::size_t notification_capacity = 32;
     virtual ~RuntimeAdapter() noexcept = default;
-    virtual Error InitializeAccount(const AgentContext &) noexcept = 0;
+    virtual Error Initialize(const AgentRegistry &, const SecurityPolicy &,
+                             const PcmFormat &) noexcept = 0;
+    virtual Error Pump(std::uint64_t, std::uint32_t) noexcept = 0;
     virtual Error PromoteOutgoing(AgentHandle, const char *,
                                   std::uint32_t *) noexcept = 0;
     virtual Error PromoteIncoming(AgentHandle, std::uint32_t,
@@ -63,7 +69,7 @@ public:
     virtual Error Cancel(std::uint32_t) noexcept = 0;
     virtual Error Hangup(std::uint32_t) noexcept = 0;
     virtual Error SetHeld(std::uint32_t, bool) noexcept = 0;
-    virtual bool Poll(RuntimeNotification *) noexcept = 0;
+    virtual bool TryGetNotification(RuntimeNotification *) noexcept = 0;
     virtual Error BeginCallTeardown(std::uint32_t) noexcept = 0;
     virtual Error Shutdown() noexcept = 0;
 };
@@ -73,7 +79,9 @@ public:
 // a target image and never owns dynamic state.
 class NullRuntimeAdapter final : public RuntimeAdapter {
 public:
-    Error InitializeAccount(const AgentContext &) noexcept override { return Error::ok; }
+    Error Initialize(const AgentRegistry &, const SecurityPolicy &,
+                     const PcmFormat &) noexcept override { return Error::ok; }
+    Error Pump(std::uint64_t, std::uint32_t) noexcept override { return Error::ok; }
     Error PromoteOutgoing(AgentHandle, const char *, std::uint32_t *) noexcept override { return Error::unsupported_configuration; }
     Error PromoteIncoming(AgentHandle, std::uint32_t, std::uint32_t *) noexcept override { return Error::unsupported_configuration; }
     Error Answer(std::uint32_t) noexcept override { return Error::unsupported_configuration; }
@@ -81,7 +89,7 @@ public:
     Error Cancel(std::uint32_t) noexcept override { return Error::unsupported_configuration; }
     Error Hangup(std::uint32_t) noexcept override { return Error::unsupported_configuration; }
     Error SetHeld(std::uint32_t, bool) noexcept override { return Error::unsupported_configuration; }
-    bool Poll(RuntimeNotification *) noexcept override { return false; }
+    bool TryGetNotification(RuntimeNotification *) noexcept override { return false; }
     Error BeginCallTeardown(std::uint32_t) noexcept override { return Error::unsupported_configuration; }
     Error Shutdown() noexcept override { return Error::ok; }
 };

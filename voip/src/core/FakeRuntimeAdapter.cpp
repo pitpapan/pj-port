@@ -1,4 +1,5 @@
 #include "FakeRuntimeAdapter.hpp"
+#include "AgentRegistry.hpp"
 
 #if !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
 
@@ -67,7 +68,9 @@ void FakeRuntimeAdapter::DrainDeferredCallbacks() noexcept {
     }
 }
 
-Error FakeRuntimeAdapter::InitializeAccount(const AgentContext &context) noexcept {
+Error FakeRuntimeAdapter::Initialize(const AgentRegistry &agents,
+                                     const SecurityPolicy &,
+                                     const PcmFormat &) noexcept {
     if (stopped_) {
         stopped_ = false;
         read_ = 0;
@@ -76,16 +79,32 @@ Error FakeRuntimeAdapter::InitializeAccount(const AgentContext &context) noexcep
         deferred_count_ = 0;
         callbacks_deferred_ = false;
     }
-    RuntimeNotification notification{};
     RuntimeRequest request{};
-    request.type = RuntimeRequest::Type::initialize_account;
-    request.agent = context.handle;
+    request.type = RuntimeRequest::Type::initialize;
     Record(request);
     const Error failure = ConsumeFailure(request.type);
     if (failure != Error::ok) return failure;
-    notification.type = RuntimeNotification::Type::agent_registered;
-    notification.agent = context.handle;
-    return Enqueue(notification);
+    for (std::size_t i = 0; i < agents.Count(); ++i) {
+        AgentHandle handle{};
+        if (agents.GetAgentHandle(static_cast<std::uint8_t>(i), &handle) != Error::ok)
+            return Error::internal_failure;
+        const AgentContext *agent = agents.Resolve(handle);
+        if (agent == nullptr) return Error::internal_failure;
+        RuntimeNotification notification{};
+        notification.type = RuntimeNotification::Type::registration_state;
+        notification.agent = handle;
+        notification.registration = agent->registration == RegistrationState::disabled
+                                    ? RegistrationState::disabled
+                                    : RegistrationState::registered;
+        notification.status = {Error::ok, 200, {}};
+        const Error enqueue_error = Enqueue(notification);
+        if (enqueue_error != Error::ok) return enqueue_error;
+    }
+    return Error::ok;
+}
+
+Error FakeRuntimeAdapter::Pump(std::uint64_t, std::uint32_t) noexcept {
+    return stopped_ ? Error::shutting_down : Error::ok;
 }
 
 Error FakeRuntimeAdapter::PromoteOutgoing(AgentHandle agent, const char *uri,
@@ -194,7 +213,7 @@ Error FakeRuntimeAdapter::SetHeld(std::uint32_t token, bool held) noexcept {
     return Enqueue(notification);
 }
 
-bool FakeRuntimeAdapter::Poll(RuntimeNotification *notification) noexcept {
+bool FakeRuntimeAdapter::TryGetNotification(RuntimeNotification *notification) noexcept {
     if (notification == nullptr || count_ == 0) return false;
     *notification = notifications_[read_];
     read_ = (read_ + 1) % capacity;
