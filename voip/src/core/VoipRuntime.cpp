@@ -214,36 +214,30 @@ void VoipRuntime::ApplyEffects(const SchedulerEffects &effects) noexcept {
         }
         context->runtime_token = token;
         if (effect.answer_on_promotion) {
-            ScheduledTransition acceptance{};
-            if (scheduler_.OnAcceptance(context->handle, &acceptance) != Error::ok) {
-                (void)adapter_.BeginCallTeardown(token);
+            // A queued incoming Answer is a local decision. Native 200/Answer
+            // must succeed before the business state accepts the call; the
+            // resulting copied callback is processed on a later Step().
+            if (adapter_.Answer(token) != Error::ok) {
                 SchedulerEffects timeout_effects{};
                 ScheduledTransition timeout{};
                 if (scheduler_.OnTimeout(effect.handle, &timeout,
                                          timeout_effects) == Error::ok) {
                     PublishTransition(timeout);
                     CompleteOperationIds(signaling_operation, operation,
-                                         Error::invalid_state);
+                                         Error::signaling_failed);
                     if (timeout.handle_invalidated) {
                         ForgetCall(effect.handle);
                     } else {
-                        ScheduledTransition cleanup{};
-                        SchedulerEffects cleanup_effects{};
-                        if (scheduler_.OnTeardownComplete(
-                                effect.handle, &cleanup,
-                                cleanup_effects) == Error::ok) {
-                            ForgetCall(cleanup.handle);
-                            ApplyEffects(cleanup_effects);
-                        }
+                        context->teardown_pending = false;
+                        if (adapter_.BeginCallTeardown(token) == Error::ok)
+                            context->teardown_pending = true;
                     }
                 } else {
                     CompleteOperationIds(signaling_operation, operation,
-                                         Error::invalid_state);
+                                         Error::signaling_failed);
                 }
                 continue;
             }
-            PublishTransition(acceptance);
-            CompleteCallOperations(*context, Error::ok);
         }
         if (effect.acceptance_applied) {
             PublishTransition(effect.acceptance);
@@ -308,6 +302,12 @@ void VoipRuntime::CompleteOperationIds(OperationId signaling,
         (void)operations_.Complete(current, error);
 }
 
+void VoipRuntime::FinalizeTerminal(CallHandle handle,
+                                   SchedulerEffects &effects) noexcept {
+    if (scheduler_.FinalizeTerminal(handle, effects) != Error::ok) return;
+    ForgetCall(handle);
+}
+
 void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) noexcept {
     if (notification.type == RuntimeNotification::Type::agent_registered) return;
     if (notification.type == RuntimeNotification::Type::incoming_call) {
@@ -362,7 +362,13 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
             event_publication_failed_ = true;
             ScheduledTransition rollback{};
             SchedulerEffects rollback_effects{};
-            if (scheduler_.Cancel(handle, &rollback, rollback_effects) == Error::ok) {
+            const Error rollback_error = promoted
+                                             ? scheduler_.Cancel(handle, &rollback,
+                                                                  rollback_effects)
+                                             : scheduler_.CancelDeferred(
+                                                   handle, &rollback,
+                                                   rollback_effects);
+            if (rollback_error == Error::ok) {
                 PublishTransition(rollback);
                 if (rollback.handle_invalidated) {
                     ForgetCall(handle);
@@ -408,15 +414,25 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
         const OperationId signaling_operation = context->signaling_operation;
         const OperationId operation = context->operation;
         const std::uint32_t token = context->runtime_token;
-        error = scheduler_.Reject(context->handle, &transition, effects);
+        const bool queued = !scheduler_.IsPromoted(context->handle);
+        error = queued
+                    ? scheduler_.RejectDeferred(context->handle, &transition,
+                                                effects)
+                    : scheduler_.Reject(context->handle, &transition, effects);
         if (error == Error::ok) {
             PublishTransition(transition);
             CompleteOperationIds(signaling_operation, operation,
                                  notification.error == Error::ok
                                      ? Error::remote_rejected
                                      : notification.error);
-            if (!transition.handle_invalidated && token != 0)
-                (void)adapter_.BeginCallTeardown(token);
+            if (!queued && !transition.handle_invalidated && token != 0) {
+                if (adapter_.BeginCallTeardown(token) == Error::ok) {
+                    context->teardown_pending = true;
+                } else {
+                    context->teardown_pending = false;
+                }
+            }
+            if (queued) FinalizeTerminal(context->handle, effects);
             ApplyEffects(effects);
         }
         }
@@ -427,10 +443,17 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
         const OperationId operation = context->operation;
         const CallHandle handle = context->handle;
         if (!scheduler_.IsPromoted(handle)) {
-            if (scheduler_.Cancel(handle, &transition, effects) == Error::ok) {
+            const bool queued = !scheduler_.IsPromoted(handle);
+            const Error cancel_error = queued
+                                           ? scheduler_.CancelDeferred(
+                                                 handle, &transition, effects)
+                                           : scheduler_.Cancel(handle, &transition,
+                                                               effects);
+            if (cancel_error == Error::ok) {
                 PublishTransition(transition);
                 CompleteOperationIds(signaling_operation, operation, Error::cancelled);
-                ForgetCall(handle);
+                if (queued) FinalizeTerminal(handle, effects);
+                else ForgetCall(handle);
                 ApplyEffects(effects);
             }
             break;
@@ -441,6 +464,7 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
             if (error == Error::ok) PublishTransition(transition);
         }
         if (scheduler_.IsLive(context->handle)) {
+            context->teardown_pending = false;
             ScheduledTransition cleanup{};
             if (scheduler_.OnTeardownComplete(context->handle, &cleanup, effects) == Error::ok) {
                 CompleteOperationIds(signaling_operation, operation, Error::ok);
@@ -455,11 +479,18 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
         const OperationId signaling = context->signaling_operation;
         const OperationId operation = context->operation;
         const std::uint32_t token = context->runtime_token;
-        error = scheduler_.OnTimeout(context->handle, &transition, effects);
+        const bool queued = !scheduler_.IsPromoted(context->handle);
+        error = queued
+                    ? scheduler_.OnTimeoutDeferred(context->handle, &transition,
+                                                   effects)
+                    : scheduler_.OnTimeout(context->handle, &transition,
+                                            effects);
         if (error == Error::ok) {
             PublishTransition(transition);
             CompleteOperationIds(signaling, operation, Error::timed_out);
-            if (transition.handle_invalidated) {
+            if (queued) {
+                FinalizeTerminal(context->handle, effects);
+            } else if (transition.handle_invalidated) {
                 ForgetCall(transition.handle);
             } else if (CallContext *live = scheduler_.Resolve(transition.handle)) {
                 live->signaling_operation = 0;
@@ -579,13 +610,17 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
     ScheduledTransition transition{};
     Error error = Error::ok;
     bool deferred_native = false;
+    bool local_transition = false;
+    bool local_answer = false;
     switch (command.type) {
     case CommandType::answer:
         context->pending_operation = CallContext::PendingOperation::answer;
         if (scheduler_.IsPromoted(handle))
             error = adapter_.Answer(context->runtime_token);
-        else
+        else {
             error = scheduler_.Answer(handle, &transition);
+            local_answer = error == Error::ok;
+        }
         break;
     case CommandType::reject:
         context->pending_operation = CallContext::PendingOperation::reject;
@@ -598,7 +633,11 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
             error = adapter_.Reject(context->runtime_token,
                                     command.reject.sip_status);
         } else {
-            error = scheduler_.Reject(handle, &transition, effects);
+            const bool queued = !scheduler_.IsPromoted(handle);
+            error = queued
+                        ? scheduler_.RejectDeferred(handle, &transition, effects)
+                        : scheduler_.Reject(handle, &transition, effects);
+            local_transition = error == Error::ok;
         }
         break;
     case CommandType::cancel:
@@ -609,12 +648,18 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
             deferred_native = true;
             error = adapter_.Cancel(context->runtime_token);
         }
+        else if (!scheduler_.IsPromoted(handle))
+            error = scheduler_.CancelDeferred(handle, &transition, effects);
         else error = scheduler_.Cancel(handle, &transition, effects);
+        local_transition = !scheduler_.IsPromoted(handle) && error == Error::ok;
         break;
     case CommandType::hangup:
         context->pending_operation = CallContext::PendingOperation::hangup;
         if (scheduler_.IsPromoted(handle)) error = adapter_.Hangup(context->runtime_token);
+        else if (!scheduler_.IsPromoted(handle))
+            error = scheduler_.HangupDeferred(handle, &transition, effects);
         else error = scheduler_.Hangup(handle, &transition, effects);
+        local_transition = !scheduler_.IsPromoted(handle) && error == Error::ok;
         break;
     case CommandType::set_held:
         context->pending_operation = CallContext::PendingOperation::set_held;
@@ -633,23 +678,28 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
         return;
     }
     const OperationId previous_operation = context->operation;
-    if (!transition.handle_invalidated)
+    if (local_answer) {
+        (void)operations_.Complete(command.operation, Error::ok);
+        context->pending_operation = CallContext::PendingOperation::none;
+    } else if (!transition.handle_invalidated)
         BindCallOperation(*context, command.operation);
     if (command.type == CommandType::set_held) {
         // The state transition and operation completion occur only when the
         // adapter reports the negotiated media change.
-    } else if (!deferred_native && !scheduler_.IsPromoted(handle)) {
+    } else if (local_transition && !deferred_native && !scheduler_.IsPromoted(handle)) {
         PublishTransition(transition);
+        const Error terminal = command.type == CommandType::cancel
+                                   ? Error::cancelled
+                                   : command.type == CommandType::reject
+                                         ? Error::remote_rejected
+                                         : Error::ok;
+        CompleteOperationIds(signaling_operation, command.operation, terminal);
+        if (previous_operation != 0 && previous_operation != signaling_operation)
+            (void)operations_.Complete(previous_operation, terminal);
         if (transition.handle_invalidated) {
-            const Error terminal = command.type == CommandType::cancel
-                                       ? Error::cancelled
-                                       : command.type == CommandType::reject
-                                             ? Error::remote_rejected
-                                             : Error::ok;
-            CompleteOperationIds(signaling_operation, command.operation, terminal);
-            if (previous_operation != 0 && previous_operation != signaling_operation)
-                (void)operations_.Complete(previous_operation, terminal);
             ForgetCall(handle);
+        } else {
+            FinalizeTerminal(handle, effects);
         }
     }
     ApplyEffects(effects);
@@ -662,6 +712,7 @@ Error VoipRuntime::Dial(AgentHandle agent, const DialRequest &request,
     if (operation == nullptr || request.remote_uri == nullptr)
         return Error::invalid_argument;
     *operation = 0;
+    if (agents_.Resolve(agent) == nullptr) return Error::invalid_handle;
     VoipCommand command{};
     command.type = CommandType::dial;
     command.dial.agent = agent;
@@ -749,12 +800,32 @@ void VoipRuntime::CancelAllCalls() noexcept {
         if (context == nullptr) { ForgetCall(handle); continue; }
         const OperationId signaling_operation = context->signaling_operation;
         const OperationId operation = context->operation;
+        const bool promoted = scheduler_.IsPromoted(handle);
+        const std::uint32_t token = context->runtime_token;
+        const bool queued_incoming = !promoted &&
+                                     context->direction == CallDirection::incoming &&
+                                     token != 0;
+        if (promoted && token != 0) {
+            (void)adapter_.Hangup(token);
+            (void)adapter_.BeginCallTeardown(token);
+        } else if (queued_incoming) {
+            (void)adapter_.Reject(token, 486);
+        }
         ScheduledTransition transition{}; SchedulerEffects effects{};
-        if (scheduler_.Cancel(handle, &transition, effects) == Error::ok) {
+        const Error cancel_error = (!promoted)
+                                       ? scheduler_.CancelDeferred(
+                                             handle, &transition, effects)
+                                       : scheduler_.Cancel(handle, &transition,
+                                                           effects);
+        if (cancel_error == Error::ok) {
             PublishTransition(transition);
             if (transition.handle_invalidated) {
                 CompleteOperationIds(signaling_operation, operation, Error::cancelled);
                 ForgetCall(handle);
+            } else if (!promoted) {
+                CompleteOperationIds(signaling_operation, operation,
+                                     Error::cancelled);
+                FinalizeTerminal(handle, effects);
             } else if (scheduler_.OnTeardownComplete(handle, nullptr, effects) == Error::ok) {
                 CompleteOperationIds(signaling_operation, operation, Error::cancelled);
                 ForgetCall(handle);
@@ -814,19 +885,41 @@ void VoipRuntime::ApplyTimers(std::uint64_t now_ms) noexcept {
         const OperationId signaling = context->signaling_operation;
         const OperationId operation = context->operation;
         const std::uint32_t token = context->runtime_token;
-        if (scheduler_.OnTimeout(handle, &transition, effects) != Error::ok)
+        const Error timeout_error = queued
+                                        ? scheduler_.OnTimeoutDeferred(
+                                              handle, &transition, effects)
+                                        : scheduler_.OnTimeout(handle, &transition,
+                                                               effects);
+        if (timeout_error != Error::ok)
             continue;
         PublishTransition(transition);
         CompleteOperationIds(signaling, operation, Error::timed_out);
-        if (transition.handle_invalidated) {
+        if (queued) {
+            FinalizeTerminal(handle, effects);
+        } else if (transition.handle_invalidated) {
             ForgetCall(handle);
         } else if (CallContext *live = scheduler_.Resolve(handle)) {
             live->signaling_operation = 0;
             live->operation = 0;
             live->pending_operation = CallContext::PendingOperation::none;
-            if (token != 0) (void)adapter_.BeginCallTeardown(token);
+            live->teardown_pending = false;
+            if (token != 0 && adapter_.BeginCallTeardown(token) == Error::ok) {
+                live->teardown_pending = true;
+            }
         }
         ApplyEffects(effects);
+    }
+}
+
+void VoipRuntime::RetryPendingTeardowns() noexcept {
+    for (std::size_t index = 0; index < call_count_; ++index) {
+        CallContext *context = scheduler_.Resolve(calls_[index]);
+        if (context == nullptr || context->teardown_pending ||
+            context->state_machine.Snapshot().state != CallState::terminated)
+            continue;
+        if (context->runtime_token != 0 &&
+            adapter_.BeginCallTeardown(context->runtime_token) == Error::ok)
+            context->teardown_pending = true;
     }
 }
 
@@ -843,6 +936,7 @@ void VoipRuntime::Step(std::uint64_t now_ms) noexcept {
         ProcessCommand(command);
     }
     ApplyTimers(now_ms);
+    RetryPendingTeardowns();
     RuntimeNotification notification{};
     for (std::size_t i = 0; i < RuntimeAdapter::notification_capacity; ++i) {
         if (!adapter_.Poll(&notification)) break;
@@ -921,6 +1015,27 @@ bool VoipRuntime::Validate(AgentHandle handle) const noexcept {
 }
 bool VoipRuntime::Validate(CallHandle handle) const noexcept {
     return scheduler_.IsLive(handle);
+}
+
+std::size_t VoipRuntime::AdapterRequestCount() const noexcept {
+#if !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
+    CoreLockGuard lock(mutex_);
+    return adapter_.RequestCount();
+#else
+    return 0;
+#endif
+}
+
+bool VoipRuntime::GetAdapterRequest(std::size_t index,
+                                    RuntimeRequest *request) const noexcept {
+#if !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
+    CoreLockGuard lock(mutex_);
+    return adapter_.GetRequest(index, request);
+#else
+    (void)index;
+    (void)request;
+    return false;
+#endif
 }
 
 } // namespace voip

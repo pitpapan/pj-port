@@ -94,11 +94,8 @@ Error FakeRuntimeAdapter::PromoteIncoming(AgentHandle agent, std::uint32_t token
     const Error failure = ConsumeFailure(request.type);
     if (failure != Error::ok) return failure;
     *native_token = token != 0 ? token : next_token_++;
-    RuntimeNotification notification{};
-    notification.type = RuntimeNotification::Type::call_accepted;
-    notification.agent = agent;
-    notification.token = *native_token;
-    return Enqueue(notification);
+    (void)agent;
+    return Error::ok;
 }
 
 Error FakeRuntimeAdapter::Answer(std::uint32_t token) noexcept {

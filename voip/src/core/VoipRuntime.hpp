@@ -50,6 +50,8 @@ public:
     // Deterministic host/fake-adapter seam for copied native notifications.
     Error InjectNotification(const RuntimeNotification &) noexcept;
     void FailNextAdapter(RuntimeRequest::Type, Error) noexcept;
+    std::size_t AdapterRequestCount() const noexcept;
+    bool GetAdapterRequest(std::size_t, RuntimeRequest *) const noexcept;
     bool Validate(AgentHandle) const noexcept override;
     bool Validate(CallHandle) const noexcept override;
 
@@ -74,8 +76,10 @@ private:
     void CompleteCallOperations(CallContext &, Error) noexcept;
     void CompleteOperationIds(OperationId signaling, OperationId current,
                               Error) noexcept;
+    void FinalizeTerminal(CallHandle, SchedulerEffects &) noexcept;
     void CancelAllCalls() noexcept;
     void ApplyTimers(std::uint64_t now_ms) noexcept;
+    void RetryPendingTeardowns() noexcept;
 
     mutable CoreMutex mutex_{};
     AgentRegistry agents_{};

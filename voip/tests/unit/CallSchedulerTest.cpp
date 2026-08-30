@@ -149,6 +149,27 @@ void test_direct_timeout_publishes_before_invalidation() {
     assert(!scheduler.IsLive(call));
 }
 
+void test_deferred_queued_terminal_is_live_until_finalize() {
+    Fixture fixture;
+    voip::CallScheduler scheduler(fixture.registry);
+    voip::SchedulerEffects effects;
+    voip::CallHandle active{};
+    voip::CallHandle queued{};
+    assert(scheduler.AdmitOutgoing(fixture.agent, "sip:active-deferred@example.test",
+                                   &active, nullptr, effects) == voip::Error::ok);
+    assert(scheduler.AdmitOutgoing(fixture.agent, "sip:queued-deferred@example.test",
+                                   &queued, nullptr, effects) == voip::Error::ok);
+    voip::ScheduledTransition terminal{};
+    assert(scheduler.CancelDeferred(queued, &terminal, effects) == voip::Error::ok);
+    assert(terminal.transition.terminal_event_required);
+    assert(!terminal.handle_invalidated);
+    assert(scheduler.IsLive(queued));
+    assert(scheduler.FinalizeTerminal(queued, effects) == voip::Error::ok);
+    assert(!scheduler.IsLive(queued));
+    assert(scheduler.Hangup(active, &terminal, effects) == voip::Error::ok);
+    assert(scheduler.OnTeardownComplete(active, nullptr, effects) == voip::Error::ok);
+}
+
 void test_registration_and_promoted_acceptance_rules() {
     Fixture fixture;
     fixture.registry.Resolve(fixture.agent)->registration =
@@ -443,6 +464,7 @@ int main() {
     test_hol_blocking_and_repeated_promotion();
     test_fifo_capacity_and_middle_cancel();
     test_direct_timeout_publishes_before_invalidation();
+    test_deferred_queued_terminal_is_live_until_finalize();
     test_registration_and_promoted_acceptance_rules();
     test_automatic_promotions_are_returned_as_bounded_effects();
     test_runtime_tokens_and_lease_release_order();

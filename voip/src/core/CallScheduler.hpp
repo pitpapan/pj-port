@@ -100,6 +100,18 @@ public:
     }
     Error OnTimeout(CallHandle handle, ScheduledTransition *result,
                     SchedulerEffects &effects) noexcept;
+    // Runtime composition uses the deferred forms for queued calls so the
+    // guaranteed terminal event can be committed while the context is still
+    // resolvable. FinalizeTerminal performs the explicit release afterwards.
+    Error RejectDeferred(CallHandle handle, ScheduledTransition *result,
+                         SchedulerEffects &effects) noexcept;
+    Error CancelDeferred(CallHandle handle, ScheduledTransition *result,
+                         SchedulerEffects &effects) noexcept;
+    Error HangupDeferred(CallHandle handle, ScheduledTransition *result,
+                         SchedulerEffects &effects) noexcept;
+    Error OnTimeoutDeferred(CallHandle handle, ScheduledTransition *result,
+                            SchedulerEffects &effects) noexcept;
+    Error FinalizeTerminal(CallHandle handle, SchedulerEffects &effects) noexcept;
     Error OnTimeout(CallHandle handle, SchedulerEffects &effects) noexcept {
         return OnTimeout(handle, nullptr, effects);
     }
@@ -180,6 +192,9 @@ private:
                         const AppliedCallTransition &transition,
                         ScheduledTransition *result) const noexcept;
     bool RemoveFromFifo(CallHandle handle) noexcept;
+    Error ApplyDeferredTerminal(CallHandle handle, CallTransition requested,
+                                ScheduledTransition *result,
+                                SchedulerEffects &effects) noexcept;
     bool ReleaseContext(CallContext &context,
                         ScheduledTransition *result) noexcept;
     void SetPhaseAfterAcceptance(CallContext &context) noexcept;

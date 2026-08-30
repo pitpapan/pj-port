@@ -369,6 +369,61 @@ Error CallScheduler::OnTimeout(CallHandle handle, ScheduledTransition *result,
     return Error::ok;
 }
 
+Error CallScheduler::ApplyDeferredTerminal(
+    CallHandle handle, CallTransition requested, ScheduledTransition *result,
+    SchedulerEffects &effects) noexcept {
+    effects.Clear();
+    CallContext *context = calls_.Resolve(handle);
+    if (context == nullptr) return Error::invalid_handle;
+    if (!IsQueued(*context)) return Error::invalid_state;
+    const Error error = Apply(*context, CauseFor(*context, requested), result);
+    if (error != Error::ok) return error;
+    if (!RemoveFromFifo(handle)) return Error::internal_failure;
+    // Keep the slot and context live until the runtime has committed the
+    // guaranteed terminal record. No promotion is attempted in this phase.
+    if (result != nullptr) result->handle_invalidated = false;
+    return Error::ok;
+}
+
+Error CallScheduler::RejectDeferred(CallHandle handle,
+                                    ScheduledTransition *result,
+                                    SchedulerEffects &effects) noexcept {
+    return ApplyDeferredTerminal(handle, CallTransition::rejection, result,
+                                 effects);
+}
+
+Error CallScheduler::CancelDeferred(CallHandle handle,
+                                    ScheduledTransition *result,
+                                    SchedulerEffects &effects) noexcept {
+    return RejectDeferred(handle, result, effects);
+}
+
+Error CallScheduler::HangupDeferred(CallHandle handle,
+                                    ScheduledTransition *result,
+                                    SchedulerEffects &effects) noexcept {
+    return ApplyDeferredTerminal(handle, CallTransition::finish, result,
+                                 effects);
+}
+
+Error CallScheduler::OnTimeoutDeferred(
+    CallHandle handle, ScheduledTransition *result,
+    SchedulerEffects &effects) noexcept {
+    return ApplyDeferredTerminal(handle, CallTransition::timeout, result,
+                                 effects);
+}
+
+Error CallScheduler::FinalizeTerminal(CallHandle handle,
+                                      SchedulerEffects &effects) noexcept {
+    effects.Clear();
+    CallContext *context = calls_.Resolve(handle);
+    if (context == nullptr) return Error::invalid_handle;
+    if (context->state_machine.Snapshot().state != CallState::terminated)
+        return Error::invalid_state;
+    if (!ReleaseContext(*context, nullptr)) return Error::internal_failure;
+    (void)OnCapacityChanged(effects);
+    return Error::ok;
+}
+
 Error CallScheduler::SetHeld(CallHandle handle, bool held,
                              ScheduledTransition *result) noexcept {
     CallContext *context = calls_.Resolve(handle);
@@ -391,11 +446,12 @@ Error CallScheduler::OnTeardownComplete(
     if (context == nullptr) return Error::invalid_handle;
     if (context->phase != Phase::disconnecting)
         return Error::invalid_state;
-    if (context->state_machine.Snapshot().state != CallState::terminated)
+    const CallState state = context->state_machine.Snapshot().state;
+    if (state != CallState::terminated && state != CallState::idle)
         return Error::invalid_state;
     AppliedCallTransition cleanup{};
-    if (context->state_machine.Apply(CallTransition::cleanup, &cleanup) !=
-        Error::ok)
+    if (state == CallState::terminated &&
+        context->state_machine.Apply(CallTransition::cleanup, &cleanup) != Error::ok)
         return Error::internal_failure;
     if (result != nullptr) {
         result->handle = context->handle;
