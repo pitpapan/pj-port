@@ -50,6 +50,8 @@ public:
     // Deterministic host/fake-adapter seam for copied native notifications.
     Error InjectNotification(const RuntimeNotification &) noexcept;
     void FailNextAdapter(RuntimeRequest::Type, Error) noexcept;
+    void SetAdapterCallbacksDeferred(bool) noexcept;
+    void DrainAdapterCallbacks() noexcept;
     std::size_t AdapterRequestCount() const noexcept;
     bool GetAdapterRequest(std::size_t, RuntimeRequest *) const noexcept;
     bool Validate(AgentHandle) const noexcept override;

@@ -32,6 +32,8 @@ public:
     // delivery. The production adapter supplies the same copied records from
     // its poller; this method never mutates core state.
     Error Inject(const RuntimeNotification &) noexcept;
+    void SetCallbacksDeferred(bool) noexcept;
+    void DrainDeferredCallbacks() noexcept;
     void FailNext(RuntimeRequest::Type, Error) noexcept;
     std::size_t RequestCount() const noexcept { return request_count_; }
     bool GetRequest(std::size_t index, RuntimeRequest *request) const noexcept;
@@ -41,11 +43,14 @@ private:
     Error ConsumeFailure(RuntimeRequest::Type) noexcept;
     Error Enqueue(const RuntimeNotification &) noexcept;
     std::array<RuntimeNotification, capacity> notifications_{};
+    std::array<RuntimeNotification, capacity> deferred_notifications_{};
     std::size_t read_ = 0;
     std::size_t write_ = 0;
     std::size_t count_ = 0;
+    std::size_t deferred_count_ = 0;
     std::uint32_t next_token_ = 1;
     bool stopped_ = false;
+    bool callbacks_deferred_ = false;
     std::array<RuntimeRequest, capacity> requests_{};
     std::size_t request_count_ = 0;
     std::array<Error, 10> failures_{};

@@ -37,11 +37,31 @@ bool FakeRuntimeAdapter::GetRequest(std::size_t index,
 }
 
 Error FakeRuntimeAdapter::Enqueue(const RuntimeNotification &notification) noexcept {
+    if (callbacks_deferred_) {
+        if (deferred_count_ == capacity) return Error::resource_exhausted;
+        deferred_notifications_[deferred_count_++] = notification;
+        return Error::ok;
+    }
     if (count_ == capacity || stopped_) return Error::resource_exhausted;
     notifications_[write_] = notification;
     write_ = (write_ + 1) % capacity;
     ++count_;
     return Error::ok;
+}
+
+void FakeRuntimeAdapter::SetCallbacksDeferred(bool deferred) noexcept {
+    callbacks_deferred_ = deferred;
+}
+
+void FakeRuntimeAdapter::DrainDeferredCallbacks() noexcept {
+    while (deferred_count_ != 0 && count_ != capacity) {
+        notifications_[write_] = deferred_notifications_[0];
+        write_ = (write_ + 1) % capacity;
+        ++count_;
+        for (std::size_t i = 1; i < deferred_count_; ++i)
+            deferred_notifications_[i - 1] = deferred_notifications_[i];
+        --deferred_count_;
+    }
 }
 
 Error FakeRuntimeAdapter::InitializeAccount(const AgentContext &context) noexcept {

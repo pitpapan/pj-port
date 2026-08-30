@@ -198,21 +198,20 @@ void VoipRuntime::ApplyEffects(const SchedulerEffects &effects) noexcept {
             error = adapter_.PromoteOutgoing(context->agent, context->remote_uri,
                                              &token);
         if (error != Error::ok) {
-            SchedulerEffects ignored{};
+            // Promotion did not acquire a native call. Keep the scheduler
+            // context live while committing its reserved terminal event so
+            // the event can carry the operation and a valid handle. Explicit
+            // finalization then releases the logical lease.
+            SchedulerEffects terminal_effects{};
             ScheduledTransition transition{};
-            if (scheduler_.OnTimeout(effect.handle, &transition, ignored) == Error::ok)
+            if (scheduler_.OnTimeoutDeferred(effect.handle, &transition,
+                                             terminal_effects) == Error::ok) {
                 PublishTransition(transition);
-            CompleteOperationIds(signaling_operation, operation, error);
-            if (transition.handle_invalidated) {
-                ForgetCall(effect.handle);
+                CompleteOperationIds(signaling_operation, operation, error);
+                FinalizeTerminal(effect.handle, terminal_effects);
+                ApplyEffects(terminal_effects);
             } else {
-                ScheduledTransition cleanup{};
-                SchedulerEffects cleanup_effects{};
-                if (scheduler_.OnTeardownComplete(effect.handle, &cleanup,
-                                                  cleanup_effects) == Error::ok) {
-                    ForgetCall(cleanup.handle);
-                    ApplyEffects(cleanup_effects);
-                }
+                CompleteOperationIds(signaling_operation, operation, error);
             }
             continue;
         }
@@ -796,10 +795,21 @@ void VoipRuntime::CancelAllCalls() noexcept {
         if (context->shutdown_pending) { ++index; continue; }
         const bool promoted = scheduler_.IsPromoted(handle);
         const std::uint32_t token = context->runtime_token;
+        const CallState state = context->state_machine.Snapshot().state;
         const bool queued_incoming = !promoted &&
                                      context->direction == CallDirection::incoming &&
                                      token != 0;
         if (promoted && token != 0) {
+            if (context->teardown_pending) {
+                ++index;
+                continue;
+            }
+            if (state == CallState::terminated || state == CallState::idle) {
+                if (adapter_.BeginCallTeardown(token) == Error::ok)
+                    context->teardown_pending = true;
+                ++index;
+                continue;
+            }
             bool requested = false;
             if (adapter_.Hangup(token) == Error::ok) requested = true;
             context->shutdown_pending = requested;
@@ -985,6 +995,22 @@ void VoipRuntime::FailNextAdapter(RuntimeRequest::Type type, Error error) noexce
 #else
     (void)type;
     (void)error;
+#endif
+}
+
+void VoipRuntime::SetAdapterCallbacksDeferred(bool deferred) noexcept {
+#if !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
+    CoreLockGuard lock(mutex_);
+    adapter_.SetCallbacksDeferred(deferred);
+#else
+    (void)deferred;
+#endif
+}
+
+void VoipRuntime::DrainAdapterCallbacks() noexcept {
+#if !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
+    CoreLockGuard lock(mutex_);
+    adapter_.DrainDeferredCallbacks();
 #endif
 }
 
