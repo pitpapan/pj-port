@@ -2,7 +2,6 @@
 #define VOIP_CORE_SYNCHRONIZATION_HPP
 
 #include <cstdint>
-#include <atomic>
 
 #if defined(__ZEPHYR__)
 #include <zephyr/kernel.h>
@@ -67,9 +66,9 @@ private:
     CoreMutex &mutex_;
 };
 
-// A counting signal is used rather than a naked condition-variable notify:
-// notifications that occur between the queue check and the wait are retained
-// and therefore cannot cause a lost wakeup.
+// A binary nonempty signal is used rather than a naked condition-variable
+// notify. Its predicate mutation and wait registration share one mutex, so a
+// notification cannot be lost between the queue check and wait.
 class CoreEventSignal final {
 public:
     CoreEventSignal() noexcept {
@@ -85,7 +84,10 @@ public:
 #if defined(__ZEPHYR__)
         (void)k_sem_give(&signal_);
 #else
-        signaled_.store(true, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            signaled_ = true;
+        }
         condition_.notify_one();
 #endif
     }
@@ -96,7 +98,8 @@ public:
 #if defined(__ZEPHYR__)
         k_sem_reset(&signal_);
 #else
-        signaled_.store(false, std::memory_order_release);
+        std::lock_guard<std::mutex> lock(mutex_);
+        signaled_ = false;
 #endif
     }
 
@@ -105,16 +108,14 @@ public:
         return k_sem_take(&signal_, K_MSEC(timeout_ms)) == 0;
 #else
         std::unique_lock<std::mutex> lock(mutex_);
-        const auto ready = [this]() noexcept {
-            return signaled_.load(std::memory_order_acquire);
-        };
+        const auto ready = [this]() noexcept { return signaled_; };
         if (timeout_ms == 0) {
             if (!ready()) return false;
         } else if (!condition_.wait_for(lock, std::chrono::milliseconds(timeout_ms),
                                         ready)) {
             return false;
         }
-        signaled_.store(false, std::memory_order_release);
+        signaled_ = false;
         return true;
 #endif
     }
@@ -125,7 +126,7 @@ private:
 #else
     std::mutex mutex_{};
     std::condition_variable condition_{};
-    std::atomic<bool> signaled_{false};
+    bool signaled_ = false;
 #endif
 };
 

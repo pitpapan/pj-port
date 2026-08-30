@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdio>
 #include <array>
+#include <atomic>
 #include <thread>
 
 namespace {
@@ -78,6 +79,22 @@ void test_event_signal_is_binary_and_clearable() {
     signal.Notify();
     signal.Clear();
     assert(!signal.Wait(0));
+}
+
+void test_signal_handoff_stress_has_no_lost_notification() {
+    for (unsigned iteration = 0; iteration < 1000; ++iteration) {
+        voip::CoreEventSignal signal;
+        std::atomic<bool> start{false};
+        std::thread producer([&signal, &start]() {
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            signal.Notify();
+        });
+        start.store(true, std::memory_order_release);
+        assert(signal.Wait(20));
+        producer.join();
+        assert(!signal.Wait(0));
+    }
 }
 
 void test_reservation_commit_cancel_exactly_once() {
@@ -280,6 +297,7 @@ int main() {
     test_wait_pop_timeout_and_wakeup();
     test_zero_timeout_is_nonblocking_and_preserves_output();
     test_event_signal_is_binary_and_clearable();
+    test_signal_handoff_stress_has_no_lost_notification();
     test_reservation_commit_cancel_exactly_once();
     test_guaranteed_classification_and_stopped_lifecycle();
     test_pressure_preserves_stopped_slot();
