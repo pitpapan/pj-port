@@ -1,0 +1,394 @@
+#include "CallScheduler.hpp"
+
+#include <cstring>
+
+namespace voip {
+namespace {
+
+std::size_t BoundedLength(const char *value) noexcept {
+    if (value == nullptr) return max_uri_length + 1;
+    for (std::size_t i = 0; i <= max_uri_length; ++i) {
+        if (value[i] == '\0') return i;
+    }
+    return max_uri_length + 1;
+}
+
+} // namespace
+
+bool CallScheduler::CopyUri(char (&destination)[max_uri_length + 1],
+                            const char *source) noexcept {
+    const std::size_t length = BoundedLength(source);
+    if (length > max_uri_length) return false;
+    if (length != 0) std::memcpy(destination, source, length);
+    destination[length] = '\0';
+    return true;
+}
+
+Error CallScheduler::AdmitOutgoing(AgentHandle agent, const char *remote_uri,
+                                   CallHandle *handle,
+                                   bool *promoted) noexcept {
+    return Admit(agent, CallDirection::outgoing, 0, remote_uri, handle,
+                 promoted);
+}
+
+Error CallScheduler::AdmitIncoming(AgentHandle agent, std::uint32_t token,
+                                   const char *remote_uri,
+                                   CallHandle *handle,
+                                   bool *promoted) noexcept {
+    return Admit(agent, CallDirection::incoming, token, remote_uri, handle,
+                 promoted);
+}
+
+Error CallScheduler::Admit(AgentHandle agent, CallDirection direction,
+                           std::uint32_t token, const char *remote_uri,
+                           CallHandle *handle, bool *promoted) noexcept {
+    if (handle == nullptr || agents_ == nullptr) return Error::invalid_argument;
+    if (agents_->Resolve(agent) == nullptr) return Error::invalid_handle;
+    if (remote_uri == nullptr) return Error::invalid_argument;
+
+    const bool can_promote_now = fifo_count_ == 0 && CanPromote(agent);
+    if (!can_promote_now && fifo_count_ >= fifo_capacity)
+        return Error::queue_full;
+
+    CallHandle candidate{};
+    CallContext *context = calls_.Allocate(&candidate);
+    if (context == nullptr) return Error::resource_exhausted;
+    if (!CopyUri(context->remote_uri, remote_uri)) {
+        calls_.Release(candidate);
+        return Error::invalid_argument;
+    }
+
+    context->handle = candidate;
+    context->agent = agent;
+    context->direction = direction;
+    context->runtime_token = token;
+    context->phase = can_promote_now
+                         ? LogicalCallPhase::promoting
+                         : (direction == CallDirection::incoming
+                                ? LogicalCallPhase::queued_incoming
+                                : LogicalCallPhase::queued_outgoing);
+    AppliedCallTransition initiation{};
+    if (context->state_machine.Apply(CallTransition::initiation, &initiation) !=
+        Error::ok) {
+        calls_.Release(candidate);
+        return Error::internal_failure;
+    }
+    ++live_count_;
+    if (can_promote_now) {
+        AgentContext *agent_context = agents_->Resolve(agent);
+        agent_context->promoted_call = candidate;
+        ++promoted_count_;
+        context->phase = direction == CallDirection::incoming
+                             ? LogicalCallPhase::incoming
+                             : LogicalCallPhase::outgoing;
+        if (promoted != nullptr) *promoted = true;
+    } else {
+        AppliedCallTransition waiting{};
+        if (context->state_machine.Apply(CallTransition::wait, &waiting) !=
+            Error::ok) {
+            calls_.Release(candidate);
+            --live_count_;
+            return Error::internal_failure;
+        }
+        fifo_[fifo_count_++] = candidate;
+        if (promoted != nullptr) *promoted = false;
+    }
+    *handle = candidate;
+    return Error::ok;
+}
+
+bool CallScheduler::CanPromote(const AgentHandle &agent) const noexcept {
+    if (agents_ == nullptr || promoted_count_ >= promoted_capacity) return false;
+    const AgentContext *context = agents_->Resolve(agent);
+    return context != nullptr && !context->promoted_call.IsValid();
+}
+
+bool CallScheduler::IsQueued(const CallContext &context) const noexcept {
+    return context.phase == LogicalCallPhase::queued_incoming ||
+           context.phase == LogicalCallPhase::queued_outgoing;
+}
+
+bool CallScheduler::RemoveFromFifo(CallHandle handle) noexcept {
+    for (std::size_t i = 0; i < fifo_count_; ++i) {
+        if (fifo_[i].slot != handle.slot ||
+            fifo_[i].generation != handle.generation)
+            continue;
+        for (std::size_t j = i + 1; j < fifo_count_; ++j)
+            fifo_[j - 1] = fifo_[j];
+        fifo_[--fifo_count_] = CallHandle{};
+        return true;
+    }
+    return false;
+}
+
+bool CallScheduler::PromoteContext(CallContext &context,
+                                   ScheduledTransition *result) noexcept {
+    if (!CanPromote(context.agent)) return false;
+    AgentContext *agent = agents_->Resolve(context.agent);
+    agent->promoted_call = context.handle;
+    ++promoted_count_;
+    context.phase = LogicalCallPhase::promoting;
+
+    if (context.answer_on_promotion) {
+        AppliedCallTransition accepted{};
+        if (context.state_machine.Apply(CallTransition::acceptance, &accepted) !=
+            Error::ok)
+            return false;
+        context.phase = LogicalCallPhase::incoming;
+        FillTransition(context, accepted, result);
+    } else {
+        context.phase = context.direction == CallDirection::incoming
+                             ? LogicalCallPhase::incoming
+                             : LogicalCallPhase::outgoing;
+    }
+    return true;
+}
+
+bool CallScheduler::PromoteHead(ScheduledTransition *result) noexcept {
+    if (fifo_count_ == 0) return false;
+    CallContext *head = calls_.Resolve(fifo_[0]);
+    if (head == nullptr || !CanPromote(head->agent)) return false;
+    const CallHandle handle = fifo_[0];
+    for (std::size_t i = 1; i < fifo_count_; ++i) fifo_[i - 1] = fifo_[i];
+    fifo_[--fifo_count_] = CallHandle{};
+    return PromoteContext(*calls_.Resolve(handle), result);
+}
+
+bool CallScheduler::OnCapacityChanged(ScheduledTransition *result) noexcept {
+    bool promoted_any = false;
+    while (promoted_count_ < promoted_capacity && fifo_count_ != 0) {
+        if (!PromoteHead(result)) break;
+        promoted_any = true;
+    }
+    return promoted_any;
+}
+
+void CallScheduler::FillTransition(const CallContext &context,
+                                   const AppliedCallTransition &transition,
+                                   ScheduledTransition *result) const noexcept {
+    if (result == nullptr) return;
+    result->handle = context.handle;
+    result->transition = transition;
+    result->snapshot = {};
+    result->snapshot.handle = context.handle;
+    result->snapshot.agent = context.agent;
+    result->snapshot.state = transition.after.state;
+    result->snapshot.hold_reason = transition.after.hold_reason;
+    std::memcpy(result->snapshot.remote_uri, context.remote_uri,
+                sizeof(context.remote_uri));
+    result->snapshot.remote_address[0] = '\0';
+    result->snapshot.sip_status = 0;
+    result->handle_invalidated = false;
+}
+
+Error CallScheduler::Apply(CallContext &context, CallTransition cause,
+                           ScheduledTransition *result) noexcept {
+    AppliedCallTransition transition{};
+    const Error error = context.state_machine.Apply(cause, &transition);
+    if (error != Error::ok) return error;
+    FillTransition(context, transition, result);
+    return Error::ok;
+}
+
+void CallScheduler::ClearAgentLease(const CallContext &context) noexcept {
+    if (agents_ == nullptr) return;
+    AgentContext *agent = agents_->Resolve(context.agent);
+    if (agent != nullptr && agent->promoted_call.slot == context.handle.slot &&
+        agent->promoted_call.generation == context.handle.generation) {
+        agent->promoted_call = CallHandle{};
+        if (promoted_count_ != 0) --promoted_count_;
+    }
+}
+
+bool CallScheduler::ReleaseContext(CallContext &context,
+                                   ScheduledTransition *result) noexcept {
+    const CallHandle handle = context.handle;
+    const bool held_lease = context.phase != LogicalCallPhase::queued_incoming &&
+                            context.phase != LogicalCallPhase::queued_outgoing &&
+                            context.phase != LogicalCallPhase::free;
+    if (context.state_machine.Snapshot().state == CallState::terminated) {
+        AppliedCallTransition cleanup{};
+        (void)context.state_machine.Apply(CallTransition::cleanup, &cleanup);
+    }
+    if (held_lease) ClearAgentLease(context);
+    if (!calls_.Release(handle)) return false;
+    if (live_count_ != 0) --live_count_;
+    if (result != nullptr) result->handle_invalidated = true;
+    (void)handle;
+    return true;
+}
+
+void CallScheduler::SetPhaseAfterAcceptance(CallContext &context) noexcept {
+    context.phase = LogicalCallPhase::established;
+}
+
+Error CallScheduler::Answer(CallHandle handle,
+                            ScheduledTransition *result) noexcept {
+    CallContext *context = calls_.Resolve(handle);
+    if (context == nullptr) return Error::invalid_handle;
+    if (IsQueued(*context)) {
+        if (context->direction != CallDirection::incoming)
+            return Error::invalid_state;
+        context->answer_on_promotion = true;
+        return Error::ok;
+    }
+    return OnAcceptance(handle, result);
+}
+
+Error CallScheduler::OnAcceptance(CallHandle handle,
+                                  ScheduledTransition *result) noexcept {
+    CallContext *context = calls_.Resolve(handle);
+    if (context == nullptr) return Error::invalid_handle;
+    const Error error = Apply(*context, CallTransition::acceptance, result);
+    if (error != Error::ok) return error;
+    context->answer_on_promotion = false;
+    SetPhaseAfterAcceptance(*context);
+    return Error::ok;
+}
+
+Error CallScheduler::Reject(CallHandle handle,
+                            ScheduledTransition *result) noexcept {
+    CallContext *context = calls_.Resolve(handle);
+    if (context == nullptr) return Error::invalid_handle;
+    const Error error = Apply(*context, CallTransition::rejection, result);
+    if (error != Error::ok) return error;
+    const bool queued = IsQueued(*context);
+    if (queued) {
+        RemoveFromFifo(handle);
+        if (!ReleaseContext(*context, result)) return Error::internal_failure;
+        (void)OnCapacityChanged(nullptr);
+    } else {
+        context->phase = LogicalCallPhase::disconnecting;
+    }
+    return Error::ok;
+}
+
+Error CallScheduler::Cancel(CallHandle handle,
+                            ScheduledTransition *result) noexcept {
+    return Reject(handle, result);
+}
+
+Error CallScheduler::Hangup(CallHandle handle,
+                            ScheduledTransition *result) noexcept {
+    CallContext *context = calls_.Resolve(handle);
+    if (context == nullptr) return Error::invalid_handle;
+    const Error error = Apply(*context, CallTransition::finish, result);
+    if (error != Error::ok) return error;
+    if (IsQueued(*context)) {
+        RemoveFromFifo(handle);
+        if (!ReleaseContext(*context, result)) return Error::internal_failure;
+        (void)OnCapacityChanged(nullptr);
+    } else {
+        context->phase = LogicalCallPhase::disconnecting;
+    }
+    return Error::ok;
+}
+
+Error CallScheduler::OnTimeout(CallHandle handle,
+                               ScheduledTransition *result) noexcept {
+    CallContext *context = calls_.Resolve(handle);
+    if (context == nullptr) return Error::invalid_handle;
+    const Error error = Apply(*context, CallTransition::timeout, result);
+    if (error != Error::ok) return error;
+    if (context->state_machine.Snapshot().state == CallState::idle) {
+        if (!ReleaseContext(*context, result)) return Error::internal_failure;
+        (void)OnCapacityChanged(nullptr);
+    } else if (IsQueued(*context)) {
+        RemoveFromFifo(handle);
+        context->phase = LogicalCallPhase::disconnecting;
+        if (!ReleaseContext(*context, result)) return Error::internal_failure;
+        (void)OnCapacityChanged(nullptr);
+    } else {
+        context->phase = LogicalCallPhase::disconnecting;
+    }
+    return Error::ok;
+}
+
+Error CallScheduler::SetHeld(CallHandle handle, bool held,
+                             ScheduledTransition *result) noexcept {
+    CallContext *context = calls_.Resolve(handle);
+    if (context == nullptr) return Error::invalid_handle;
+    const CallProjection projection = context->state_machine.Snapshot();
+    const CallTransition cause = held ? CallTransition::hold
+                                      : CallTransition::resume;
+    const Error error = Apply(*context, cause, result);
+    if (error != Error::ok) return error;
+    context->phase = held ? LogicalCallPhase::held
+                          : LogicalCallPhase::established;
+    (void)projection;
+    return Error::ok;
+}
+
+Error CallScheduler::OnTeardownComplete(
+    CallHandle handle, ScheduledTransition *result) noexcept {
+    CallContext *context = calls_.Resolve(handle);
+    if (context == nullptr) return Error::invalid_handle;
+    if (context->phase != LogicalCallPhase::disconnecting)
+        return Error::invalid_state;
+    if (context->state_machine.Snapshot().state != CallState::terminated)
+        return Error::invalid_state;
+    AppliedCallTransition cleanup{};
+    if (context->state_machine.Apply(CallTransition::cleanup, &cleanup) !=
+        Error::ok)
+        return Error::internal_failure;
+    if (result != nullptr) {
+        result->handle = context->handle;
+        result->transition = cleanup;
+        result->snapshot = Snapshot(handle);
+        result->handle_invalidated = false;
+    }
+    if (!ReleaseContext(*context, result)) return Error::internal_failure;
+    if (result != nullptr) result->handle_invalidated = true;
+    (void)OnCapacityChanged(nullptr);
+    return Error::ok;
+}
+
+bool CallScheduler::IsLive(CallHandle handle) const noexcept {
+    return calls_.Resolve(handle) != nullptr;
+}
+
+bool CallScheduler::IsPromoted(CallHandle handle) const noexcept {
+    const CallContext *context = calls_.Resolve(handle);
+    if (context == nullptr) return false;
+    return context->phase != LogicalCallPhase::queued_incoming &&
+           context->phase != LogicalCallPhase::queued_outgoing &&
+           context->phase != LogicalCallPhase::free;
+}
+
+CallSnapshot CallScheduler::Snapshot(CallHandle handle) const noexcept {
+    CallSnapshot snapshot{};
+    const CallContext *context = calls_.Resolve(handle);
+    if (context == nullptr) return snapshot;
+    const CallProjection projection = context->state_machine.Snapshot();
+    snapshot.handle = context->handle;
+    snapshot.agent = context->agent;
+    snapshot.state = projection.state;
+    snapshot.hold_reason = projection.hold_reason;
+    std::memcpy(snapshot.remote_uri, context->remote_uri,
+                sizeof(context->remote_uri));
+    snapshot.remote_address[0] = '\0';
+    return snapshot;
+}
+
+Error CallScheduler::GetSnapshot(CallHandle handle,
+                                 CallSnapshot *snapshot) const noexcept {
+    if (snapshot == nullptr) return Error::invalid_argument;
+    if (!IsLive(handle)) return Error::invalid_handle;
+    *snapshot = Snapshot(handle);
+    return Error::ok;
+}
+
+bool CallScheduler::QueuePosition(CallHandle handle,
+                                  std::size_t *position) const noexcept {
+    if (position == nullptr) return false;
+    for (std::size_t i = 0; i < fifo_count_; ++i) {
+        if (fifo_[i].slot == handle.slot &&
+            fifo_[i].generation == handle.generation) {
+            *position = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace voip
