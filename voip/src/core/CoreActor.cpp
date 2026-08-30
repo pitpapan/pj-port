@@ -40,7 +40,6 @@ void CoreActor::Stop() noexcept {
 
 #if defined(__ZEPHYR__)
 void CoreActor::Entry(void *first, void *, void *) noexcept {
-    running_.store(true);
     static_cast<VoipRuntime *>(first)->Step(
         static_cast<std::uint64_t>(k_uptime_get()));
     // The actor remains in the runtime-owned loop until shutdown.  Keeping
