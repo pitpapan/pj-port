@@ -106,6 +106,7 @@ public:
 
 private:
     using Pool = HandlePool<CallHandle, logical_call_capacity, CallContext>;
+    using Phase = CallContext::LogicalCallPhase;
 
     static bool CopyUri(char (&destination)[max_uri_length + 1],
                         const char *source) noexcept;

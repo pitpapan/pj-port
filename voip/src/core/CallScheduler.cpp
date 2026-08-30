@@ -63,10 +63,10 @@ Error CallScheduler::Admit(AgentHandle agent, CallDirection direction,
     context->direction = direction;
     context->runtime_token = token;
     context->phase = can_promote_now
-                         ? LogicalCallPhase::promoting
+                         ? Phase::promoting
                          : (direction == CallDirection::incoming
-                                ? LogicalCallPhase::queued_incoming
-                                : LogicalCallPhase::queued_outgoing);
+                                ? Phase::queued_incoming
+                                : Phase::queued_outgoing);
     AppliedCallTransition initiation{};
     if (context->state_machine.Apply(CallTransition::initiation, &initiation) !=
         Error::ok) {
@@ -79,8 +79,8 @@ Error CallScheduler::Admit(AgentHandle agent, CallDirection direction,
         agent_context->promoted_call = candidate;
         ++promoted_count_;
         context->phase = direction == CallDirection::incoming
-                             ? LogicalCallPhase::incoming
-                             : LogicalCallPhase::outgoing;
+                             ? Phase::incoming
+                             : Phase::outgoing;
         if (promoted != nullptr) *promoted = true;
     } else {
         AppliedCallTransition waiting{};
@@ -104,8 +104,8 @@ bool CallScheduler::CanPromote(const AgentHandle &agent) const noexcept {
 }
 
 bool CallScheduler::IsQueued(const CallContext &context) const noexcept {
-    return context.phase == LogicalCallPhase::queued_incoming ||
-           context.phase == LogicalCallPhase::queued_outgoing;
+    return context.phase == Phase::queued_incoming ||
+           context.phase == Phase::queued_outgoing;
 }
 
 bool CallScheduler::RemoveFromFifo(CallHandle handle) noexcept {
@@ -127,19 +127,19 @@ bool CallScheduler::PromoteContext(CallContext &context,
     AgentContext *agent = agents_->Resolve(context.agent);
     agent->promoted_call = context.handle;
     ++promoted_count_;
-    context.phase = LogicalCallPhase::promoting;
+    context.phase = Phase::promoting;
 
     if (context.answer_on_promotion) {
         AppliedCallTransition accepted{};
         if (context.state_machine.Apply(CallTransition::acceptance, &accepted) !=
             Error::ok)
             return false;
-        context.phase = LogicalCallPhase::incoming;
+        context.phase = Phase::incoming;
         FillTransition(context, accepted, result);
     } else {
         context.phase = context.direction == CallDirection::incoming
-                             ? LogicalCallPhase::incoming
-                             : LogicalCallPhase::outgoing;
+                             ? Phase::incoming
+                             : Phase::outgoing;
     }
     return true;
 }
@@ -203,9 +203,9 @@ void CallScheduler::ClearAgentLease(const CallContext &context) noexcept {
 bool CallScheduler::ReleaseContext(CallContext &context,
                                    ScheduledTransition *result) noexcept {
     const CallHandle handle = context.handle;
-    const bool held_lease = context.phase != LogicalCallPhase::queued_incoming &&
-                            context.phase != LogicalCallPhase::queued_outgoing &&
-                            context.phase != LogicalCallPhase::free;
+    const bool held_lease = context.phase != Phase::queued_incoming &&
+                            context.phase != Phase::queued_outgoing &&
+                            context.phase != Phase::free;
     if (context.state_machine.Snapshot().state == CallState::terminated) {
         AppliedCallTransition cleanup{};
         (void)context.state_machine.Apply(CallTransition::cleanup, &cleanup);
@@ -219,16 +219,16 @@ bool CallScheduler::ReleaseContext(CallContext &context,
 }
 
 void CallScheduler::SetPhaseAfterAcceptance(CallContext &context) noexcept {
-    context.phase = LogicalCallPhase::established;
+    context.phase = Phase::established;
 }
 
 Error CallScheduler::Answer(CallHandle handle,
                             ScheduledTransition *result) noexcept {
     CallContext *context = calls_.Resolve(handle);
     if (context == nullptr) return Error::invalid_handle;
+    if (context->direction != CallDirection::incoming)
+        return Error::invalid_state;
     if (IsQueued(*context)) {
-        if (context->direction != CallDirection::incoming)
-            return Error::invalid_state;
         context->answer_on_promotion = true;
         return Error::ok;
     }
@@ -258,7 +258,7 @@ Error CallScheduler::Reject(CallHandle handle,
         if (!ReleaseContext(*context, result)) return Error::internal_failure;
         (void)OnCapacityChanged(nullptr);
     } else {
-        context->phase = LogicalCallPhase::disconnecting;
+        context->phase = Phase::disconnecting;
     }
     return Error::ok;
 }
@@ -279,7 +279,7 @@ Error CallScheduler::Hangup(CallHandle handle,
         if (!ReleaseContext(*context, result)) return Error::internal_failure;
         (void)OnCapacityChanged(nullptr);
     } else {
-        context->phase = LogicalCallPhase::disconnecting;
+        context->phase = Phase::disconnecting;
     }
     return Error::ok;
 }
@@ -295,11 +295,11 @@ Error CallScheduler::OnTimeout(CallHandle handle,
         (void)OnCapacityChanged(nullptr);
     } else if (IsQueued(*context)) {
         RemoveFromFifo(handle);
-        context->phase = LogicalCallPhase::disconnecting;
+        context->phase = Phase::disconnecting;
         if (!ReleaseContext(*context, result)) return Error::internal_failure;
         (void)OnCapacityChanged(nullptr);
     } else {
-        context->phase = LogicalCallPhase::disconnecting;
+        context->phase = Phase::disconnecting;
     }
     return Error::ok;
 }
@@ -313,8 +313,7 @@ Error CallScheduler::SetHeld(CallHandle handle, bool held,
                                       : CallTransition::resume;
     const Error error = Apply(*context, cause, result);
     if (error != Error::ok) return error;
-    context->phase = held ? LogicalCallPhase::held
-                          : LogicalCallPhase::established;
+    context->phase = held ? Phase::held : Phase::established;
     (void)projection;
     return Error::ok;
 }
@@ -323,7 +322,7 @@ Error CallScheduler::OnTeardownComplete(
     CallHandle handle, ScheduledTransition *result) noexcept {
     CallContext *context = calls_.Resolve(handle);
     if (context == nullptr) return Error::invalid_handle;
-    if (context->phase != LogicalCallPhase::disconnecting)
+    if (context->phase != Phase::disconnecting)
         return Error::invalid_state;
     if (context->state_machine.Snapshot().state != CallState::terminated)
         return Error::invalid_state;
@@ -350,9 +349,9 @@ bool CallScheduler::IsLive(CallHandle handle) const noexcept {
 bool CallScheduler::IsPromoted(CallHandle handle) const noexcept {
     const CallContext *context = calls_.Resolve(handle);
     if (context == nullptr) return false;
-    return context->phase != LogicalCallPhase::queued_incoming &&
-           context->phase != LogicalCallPhase::queued_outgoing &&
-           context->phase != LogicalCallPhase::free;
+    return context->phase != Phase::queued_incoming &&
+           context->phase != Phase::queued_outgoing &&
+           context->phase != Phase::free;
 }
 
 CallSnapshot CallScheduler::Snapshot(CallHandle handle) const noexcept {
