@@ -13,6 +13,7 @@ VoipRuntime::~VoipRuntime() noexcept {
 }
 
 Error VoipRuntime::Initialize(const ServiceConfig &config) noexcept {
+    CoreLockGuard shutdown_lock(shutdown_mutex_);
     CoreLockGuard lock(mutex_);
     if (initialized_) return Error::invalid_state;
     // Terminal and diagnostic records remain readable after shutdown. A new

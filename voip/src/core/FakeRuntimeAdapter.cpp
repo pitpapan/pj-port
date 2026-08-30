@@ -73,6 +73,8 @@ Error FakeRuntimeAdapter::InitializeAccount(const AgentContext &context) noexcep
         read_ = 0;
         write_ = 0;
         count_ = 0;
+        deferred_count_ = 0;
+        callbacks_deferred_ = false;
     }
     RuntimeNotification notification{};
     RuntimeRequest request{};
@@ -220,7 +222,11 @@ Error FakeRuntimeAdapter::Shutdown() noexcept {
     const Error failure = ConsumeFailure(request.type);
     if (failure != Error::ok) return failure;
     stopped_ = true;
+    read_ = 0;
+    write_ = 0;
     count_ = 0;
+    deferred_count_ = 0;
+    callbacks_deferred_ = false;
     return Error::ok;
 }
 

@@ -3,6 +3,7 @@
 #include "core/FakeRuntimeAdapter.hpp"
 
 #include <cassert>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -1039,6 +1040,101 @@ void test_concurrent_shutdown_callers_are_serialized() {
     assert(shutdowns == 1);
 }
 
+void test_initialize_waits_for_shutdown_coordination() {
+    std::array<Source, 5> sources;
+    std::array<Sink, 5> sinks;
+    std::array<voip::AgentConfig, 5> agents{};
+    voip::ServiceConfig config = Config(agents, sources, sinks);
+    config.queue_timeout_ms = 60000;
+    voip::VoipRuntime runtime;
+    assert(runtime.Initialize(config) == voip::Error::ok);
+    voip::AgentHandle agent{};
+    assert(runtime.GetAgentHandle(1, &agent) == voip::Error::ok);
+    voip::RuntimeNotification incoming{};
+    incoming.type = voip::RuntimeNotification::Type::incoming_call;
+    incoming.agent = agent;
+    incoming.token = 9931;
+    std::strncpy(incoming.remote_uri, "sip:lifecycle-lock@example.test",
+                 voip::max_uri_length);
+    assert(runtime.InjectNotification(incoming) == voip::Error::ok);
+    voip::CallHandle call{};
+    voip::Event event{};
+    for (unsigned i = 0; i < 100; ++i) {
+        if (runtime.WaitForEvent(&event, 20) == voip::Error::ok &&
+            event.type == voip::EventType::incoming_call) {
+            call = event.call;
+            break;
+        }
+    }
+    assert(call.IsValid());
+    runtime.SetAdapterCallbacksDeferred(true);
+    std::atomic<bool> initialize_done{false};
+    voip::Error shutdown_result = voip::Error::internal_failure;
+    voip::Error initialize_result = voip::Error::internal_failure;
+    std::thread shutdown_thread([&] {
+        shutdown_result = runtime.Shutdown();
+    });
+    bool hangup_started = false;
+    for (unsigned i = 0; i < 1000 && !hangup_started; ++i) {
+        for (std::size_t request_index = 0;
+             request_index < runtime.AdapterRequestCount(); ++request_index) {
+            voip::RuntimeRequest request{};
+            if (!runtime.GetAdapterRequest(request_index, &request)) continue;
+            if (request.type == voip::RuntimeRequest::Type::hangup &&
+                request.token == incoming.token) {
+                hangup_started = true;
+                break;
+            }
+        }
+        if (!hangup_started)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    assert(hangup_started);
+    std::thread initialize_thread([&] {
+        initialize_result = runtime.Initialize(config);
+        initialize_done.store(true);
+    });
+    for (unsigned i = 0; i < 100 && !initialize_done.load(); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    assert(!initialize_done.load());
+    runtime.SetAdapterCallbacksDeferred(false);
+    runtime.DrainAdapterCallbacks();
+    shutdown_thread.join();
+    initialize_thread.join();
+    assert(shutdown_result == voip::Error::ok);
+    assert(initialize_result == voip::Error::invalid_state);
+    while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
+    assert(runtime.Initialize(config) == voip::Error::ok);
+    assert(runtime.Shutdown() == voip::Error::ok);
+    while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
+}
+
+void test_fake_callback_state_resets_between_lifecycles() {
+    std::array<Source, 5> sources;
+    std::array<Sink, 5> sinks;
+    std::array<voip::AgentConfig, 5> agents{};
+    const voip::ServiceConfig config = Config(agents, sources, sinks);
+    voip::VoipRuntime runtime;
+    assert(runtime.Initialize(config) == voip::Error::ok);
+    runtime.SetAdapterCallbacksDeferred(true);
+    assert(runtime.Shutdown() == voip::Error::ok);
+    voip::Event event{};
+    while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
+    assert(runtime.Initialize(config) == voip::Error::ok);
+    voip::AgentHandle agent{};
+    assert(runtime.GetAgentHandle(0, &agent) == voip::Error::ok);
+    voip::CallHandle call{};
+    voip::OperationId operation = 0;
+    assert(DialAndGetHandle(runtime, agent, "sip:fresh-adapter-state@example.test",
+                            &call, &operation));
+    runtime.Step(0);
+    voip::CallSnapshot snapshot{};
+    assert(runtime.GetCallSnapshot(call, &snapshot) == voip::Error::ok);
+    assert(snapshot.state == voip::CallState::established);
+    assert(runtime.Shutdown() == voip::Error::ok);
+    while (runtime.TryGetEvent(&event) == voip::Error::ok) {}
+}
+
 void test_shutdown_orders_native_reject_teardown_before_adapter_shutdown() {
     std::array<Source, 5> sources;
     std::array<Sink, 5> sinks;
@@ -1121,6 +1217,8 @@ int main() {
     test_shutdown_waits_for_existing_teardown_callback();
     test_shutdown_waits_for_user_native_terminal_requests();
     test_concurrent_shutdown_callers_are_serialized();
+    test_initialize_waits_for_shutdown_coordination();
+    test_fake_callback_state_resets_between_lifecycles();
     test_shutdown_orders_native_reject_teardown_before_adapter_shutdown();
     std::puts("VoipServiceCoreTest PASSED");
     return 0;
