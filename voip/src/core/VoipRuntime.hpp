@@ -4,7 +4,10 @@
 #include "AgentRegistry.hpp"
 #include "CommandMailbox.hpp"
 #include "CoreActor.hpp"
+#include "RuntimeAdapter.hpp"
+#if !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
 #include "FakeRuntimeAdapter.hpp"
+#endif
 #include "OperationTable.hpp"
 #include "VoipResourceGuard.hpp"
 #include "VoipEventQueue.hpp"
@@ -14,6 +17,12 @@
 #include <cstdint>
 
 namespace voip {
+
+#if !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
+using SelectedRuntimeAdapter = FakeRuntimeAdapter;
+#else
+using SelectedRuntimeAdapter = NullRuntimeAdapter;
+#endif
 
 class VoipRuntime final : public CommandHandleValidator {
 public:
@@ -40,16 +49,20 @@ public:
     void Step(std::uint64_t now_ms) noexcept;
     // Deterministic host/fake-adapter seam for copied native notifications.
     Error InjectNotification(const RuntimeNotification &) noexcept;
+    void FailNextAdapter(RuntimeRequest::Type, Error) noexcept;
     bool Validate(AgentHandle) const noexcept override;
     bool Validate(CallHandle) const noexcept override;
 
 private:
     Error ReserveOperation(OperationId *) noexcept;
+    Error EnqueueControl(VoipCommand &, OperationId *) noexcept;
     void PublishTransition(const ScheduledTransition &) noexcept;
+    bool PublishEvent(const Event &) noexcept;
     void PublishAdmission(CallHandle, bool waiting) noexcept;
     void PublishAgent(const AgentContext &) noexcept;
     void ApplyEffects(const SchedulerEffects &) noexcept;
     void ProcessNotification(const RuntimeNotification &) noexcept;
+    void ProcessCommand(const VoipCommand &) noexcept;
     CallContext *FindCall(std::uint32_t token) noexcept;
     const CallContext *FindCall(CallHandle) const noexcept;
     void ForgetCall(CallHandle) noexcept;
@@ -68,7 +81,7 @@ private:
     OperationTable operations_{};
     VoipEventQueue events_{};
     CallScheduler scheduler_;
-    FakeRuntimeAdapter adapter_{};
+    SelectedRuntimeAdapter adapter_{};
     VoipResourceGuard resources_{};
     CoreActor actor_{};
     std::array<CallHandle, CallScheduler::logical_call_capacity> calls_{};
@@ -79,6 +92,9 @@ private:
     std::uint64_t now_ms_ = 0;
     std::uint32_t queue_timeout_ms_ = 0;
     std::uint32_t answer_timeout_ms_ = 0;
+    CoreEventSignal shutdown_signal_{};
+    bool shutdown_complete_ = false;
+    bool event_publication_failed_ = false;
 };
 
 } // namespace voip

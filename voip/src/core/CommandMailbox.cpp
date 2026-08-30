@@ -99,6 +99,15 @@ bool CommandMailbox::TryPushShutdown() noexcept {
     return true;
 }
 
+bool CommandMailbox::TryPush(const VoipCommand &command) noexcept {
+    CoreLockGuard lock(mutex_);
+    if (count_ == capacity || shutdown_enqueued_) return false;
+    records_[write_] = command;
+    write_ = (write_ + 1) % capacity;
+    ++count_;
+    return true;
+}
+
 bool CommandMailbox::TryPop(VoipCommand *command) noexcept {
     if (command == nullptr) return false;
     CoreLockGuard lock(mutex_);
@@ -116,6 +125,14 @@ std::size_t CommandMailbox::Size() const noexcept {
 
 std::size_t CommandMailbox::Available() const noexcept {
     return capacity - Size();
+}
+
+void CommandMailbox::Reset() noexcept {
+    CoreLockGuard lock(mutex_);
+    read_ = 0;
+    write_ = 0;
+    count_ = 0;
+    shutdown_enqueued_ = false;
 }
 
 } // namespace voip

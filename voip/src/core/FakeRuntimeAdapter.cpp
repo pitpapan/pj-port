@@ -6,6 +6,19 @@
 
 namespace voip {
 
+void FakeRuntimeAdapter::FailNext(RuntimeRequest::Type type, Error error) noexcept {
+    const std::size_t index = static_cast<std::size_t>(type);
+    if (index < failures_.size()) failures_[index] = error;
+}
+
+Error FakeRuntimeAdapter::ConsumeFailure(RuntimeRequest::Type type) noexcept {
+    const std::size_t index = static_cast<std::size_t>(type);
+    if (index >= failures_.size()) return Error::ok;
+    const Error error = failures_[index];
+    failures_[index] = Error::ok;
+    return error;
+}
+
 void FakeRuntimeAdapter::Record(const RuntimeRequest &request) noexcept {
     if (request_count_ < capacity) {
         requests_[request_count_++] = request;
@@ -136,7 +149,13 @@ Error FakeRuntimeAdapter::SetHeld(std::uint32_t token, bool held) noexcept {
     request.token = token;
     request.held = held;
     Record(request);
-    return Error::ok;
+    const Error failure = ConsumeFailure(request.type);
+    if (failure != Error::ok) return failure;
+    RuntimeNotification notification{};
+    notification.type = held ? RuntimeNotification::Type::call_held
+                             : RuntimeNotification::Type::call_resumed;
+    notification.token = token;
+    return Enqueue(notification);
 }
 
 bool FakeRuntimeAdapter::Poll(RuntimeNotification *notification) noexcept {

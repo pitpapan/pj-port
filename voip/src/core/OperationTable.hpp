@@ -27,6 +27,7 @@ public:
     // Only a provisional admission may be rolled back. Accepted operations
     // retain their terminal reservation until Complete succeeds.
     bool RollbackAdmission(OperationId id) noexcept;
+    bool Abandon(OperationId id) noexcept;
 
     std::size_t ActiveCount() const noexcept;
     std::size_t Available() const noexcept;

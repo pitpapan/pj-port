@@ -186,6 +186,18 @@ bool OperationTable::RollbackAdmission(OperationId id) noexcept {
     return false;
 }
 
+bool OperationTable::Abandon(OperationId id) noexcept {
+    if (id == 0) return false;
+    CoreLockGuard lock(mutex_);
+    for (Record &record : records_) {
+        if (record.id_ != id || record.state_ == Record::State::free) continue;
+        const bool cancelled = record.terminal_.Cancel();
+        Reset(record);
+        return cancelled;
+    }
+    return false;
+}
+
 std::size_t OperationTable::ActiveCount() const noexcept {
     CoreLockGuard lock(mutex_);
     std::size_t count = 0;

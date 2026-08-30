@@ -32,11 +32,13 @@ public:
     // delivery. The production adapter supplies the same copied records from
     // its poller; this method never mutates core state.
     Error Inject(const RuntimeNotification &) noexcept;
+    void FailNext(RuntimeRequest::Type, Error) noexcept;
     std::size_t RequestCount() const noexcept { return request_count_; }
     bool GetRequest(std::size_t index, RuntimeRequest *request) const noexcept;
 
 private:
     void Record(const RuntimeRequest &) noexcept;
+    Error ConsumeFailure(RuntimeRequest::Type) noexcept;
     Error Enqueue(const RuntimeNotification &) noexcept;
     std::array<RuntimeNotification, capacity> notifications_{};
     std::size_t read_ = 0;
@@ -46,6 +48,7 @@ private:
     bool stopped_ = false;
     std::array<RuntimeRequest, capacity> requests_{};
     std::size_t request_count_ = 0;
+    std::array<Error, 10> failures_{};
 };
 
 } // namespace voip

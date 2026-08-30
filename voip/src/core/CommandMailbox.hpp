@@ -28,9 +28,11 @@ public:
     // The only direct producer path is service-owned shutdown completion.
     // It cannot carry an operation or caller-owned synchronization object.
     bool TryPushShutdown() noexcept;
+    bool TryPush(const VoipCommand &) noexcept;
     bool TryPop(VoipCommand *command) noexcept;
     std::size_t Size() const noexcept;
     std::size_t Available() const noexcept;
+    void Reset() noexcept;
 
 private:
     mutable CoreMutex mutex_{};
