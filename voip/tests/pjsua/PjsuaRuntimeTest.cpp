@@ -3,6 +3,7 @@
 #include "../../src/pjsua/PjsuaTransportManager.hpp"
 
 #include <cassert>
+#include <initializer_list>
 
 namespace voip::test {
 

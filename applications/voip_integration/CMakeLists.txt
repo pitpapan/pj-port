@@ -9,6 +9,7 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(voip_integration)
 
 target_include_directories(app PRIVATE ../../voip/include)
+target_compile_options(app PRIVATE -std=c++17)
 
 target_sources_ifdef(CONFIG_VOIP_SDK_CONTRACT_TEST app PRIVATE
   src/sdk_contract.cpp

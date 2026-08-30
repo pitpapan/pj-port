@@ -9,12 +9,12 @@ bool ValidFormat(const PcmFormat &format) noexcept {
            format.samples_per_frame != 0 &&
            (format.samples_per_frame * 1000U) % format.sample_rate_hz == 0;
 }
+} // namespace
 
 void PjsuaRuntime::AssertActor() const noexcept {
 #ifndef NDEBUG
     assert(actor_thread_ == std::thread::id{} || actor_thread_ == std::this_thread::get_id());
 #endif
-}
 }
 
 Error PjsuaRuntime::CreateAndInitialize(const pjsua_callback &callbacks,
