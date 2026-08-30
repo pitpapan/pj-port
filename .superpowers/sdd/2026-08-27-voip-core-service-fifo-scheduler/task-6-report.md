@@ -91,6 +91,8 @@ capacity test admitting two promoted calls on different agents plus five FIFO
 entries, asserting 7/2/5 exhaustion and restoration, stale handles, and
 teardown/cancel cleanup.
 
+Coverage commit: `5bd78180d` (`test(voip): expand scheduler lifecycle coverage`).
+
 Verification passed:
 
 ```text
