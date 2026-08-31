@@ -5,7 +5,9 @@
 #include "CommandMailbox.hpp"
 #include "CoreActor.hpp"
 #include "RuntimeAdapter.hpp"
-#if !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
+#if defined(CONFIG_VOIP_PJSUA)
+#include "../pjsua/PjsuaRuntimeAdapter.hpp"
+#elif !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
 #include "FakeRuntimeAdapter.hpp"
 #endif
 #include "OperationTable.hpp"
@@ -18,7 +20,9 @@
 
 namespace voip {
 
-#if !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
+#if defined(CONFIG_VOIP_PJSUA)
+using SelectedRuntimeAdapter = PjsuaRuntimeAdapter;
+#elif !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
 using SelectedRuntimeAdapter = FakeRuntimeAdapter;
 #else
 using SelectedRuntimeAdapter = NullRuntimeAdapter;

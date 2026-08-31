@@ -71,20 +71,4 @@ config VOIP_PJSUA_PLAN3_COMPONENT_TEST
 	bool "PJSUA Plan 3 native runtime component validation"
 	depends on PJSUA && PJSIP_TCP_TRANSPORT
 
-config VOIP_SIP_TLS
-	bool "VoIP SIP TLS"
-	depends on PJSIP
-	default n
-	help
-	  Reserved signaling-security policy gate; TLS remains disabled in the
-	  initial PJSUA-LIB profile.
-
-config VOIP_SRTP
-	bool "VoIP SRTP media"
-	depends on PJMEDIA
-	default n
-	help
-	  Reserved media-security policy gate; SRTP remains disabled in the
-	  initial PJSUA-LIB profile.
-
 endmenu

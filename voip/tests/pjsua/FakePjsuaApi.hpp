@@ -35,6 +35,19 @@ public:
             ? registration_by_account_[static_cast<std::size_t>(id)] : 0;
     }
     void FailRegistration(pj_status_t status) noexcept { registration_failure_ = status; }
+    void FailUnregistration(pj_status_t status) noexcept { unregistration_failure_ = status; }
+    void SetUnregistrationCallbacksDeferred(bool deferred) noexcept {
+        defer_unregistration_callbacks_ = deferred;
+    }
+    void DeliverUnregistrationCallbacks() noexcept {
+        while (pending_unregistration_count_ != 0) {
+            const pjsua_acc_id id = pending_unregistrations_[0];
+            for (std::size_t i = 1; i < pending_unregistration_count_; ++i)
+                pending_unregistrations_[i - 1] = pending_unregistrations_[i];
+            --pending_unregistration_count_;
+            DeliverUnregistrationCallback(id);
+        }
+    }
     const pjsua_acc_config &AccountConfig(std::size_t index) const noexcept { return account_configs_[index]; }
     pjsua_acc_id DeletedAccount(std::size_t index) const noexcept { return deleted_accounts_[index]; }
     pjsua_acc_id ClearedAccount(std::size_t index) const noexcept { return cleared_accounts_[index]; }
@@ -44,7 +57,9 @@ public:
     }
 private:
     static FakePjsuaApi *active_; Stage failed_ = Stage::arena; bool has_failure_ = false;
-    char sequence_[160]{}; std::size_t used_ = 0;
+    // Task 5 includes five account add/register/unregister/delete records;
+    // retain the complete ordering trace without overwriting fake state.
+    char sequence_[512]{}; std::size_t used_ = 0;
     pjsua_config ua_{}; pjsua_media_config media_{}; pjsua_logging_config log_{};
     unsigned answer_count_ = 0; unsigned hangup_count_ = 0;
     unsigned answer_status_ = 0; unsigned hangup_status_ = 0;
@@ -55,8 +70,13 @@ private:
     std::array<void *, 5> account_user_data_{};
     std::size_t account_ids_count_ = account_ids_.size();
     std::size_t account_add_count_ = 0, account_delete_count_ = 0, account_clear_count_ = 0, account_get_user_data_count_ = 0;
-    std::size_t registration_count_ = 0, fail_account_add_ = 0; pj_status_t registration_failure_ = PJ_SUCCESS;
+    std::size_t registration_count_ = 0, fail_account_add_ = 0;
+    pj_status_t registration_failure_ = PJ_SUCCESS;
+    pj_status_t unregistration_failure_ = PJ_SUCCESS;
     std::array<std::size_t, 5> registration_by_account_{};
+    std::array<pjsua_acc_id, 5> pending_unregistrations_{};
+    std::size_t pending_unregistration_count_ = 0;
+    bool defer_unregistration_callbacks_ = false;
     void Record(const char *word) noexcept { if (used_ != 0) sequence_[used_++] = ','; while (*word) sequence_[used_++] = *word++; sequence_[used_] = 0; }
     bool Failed(Stage s) const noexcept { return has_failure_ && failed_ == s; }
     static pj_status_t ArenaInstall() { active_->Record("arena"); return active_->Failed(Stage::arena) ? PJ_EUNKNOWN : PJ_SUCCESS; }
@@ -91,12 +111,32 @@ private:
         return active_->account_user_data_[static_cast<std::size_t>(id)];
     }
     static pj_status_t AccountDelete(pjsua_acc_id id) { active_->Record("del"); active_->deleted_accounts_[active_->account_delete_count_++] = id; return PJ_SUCCESS; }
-    static pj_status_t AccountSetRegistration(pjsua_acc_id id, pj_bool_t) {
+    void DeliverUnregistrationCallback(pjsua_acc_id id) noexcept {
+        if (ua_.cb.on_reg_state2 == nullptr) return;
+        pjsip_regc_cbparam params{};
+        params.status = PJ_SUCCESS;
+        params.code = 200;
+        params.is_unreg = PJ_TRUE;
+        pjsua_reg_info info{};
+        info.renew = PJ_FALSE;
+        info.cbparam = &params;
+        ua_.cb.on_reg_state2(id, &info);
+    }
+    static pj_status_t AccountSetRegistration(pjsua_acc_id id, pj_bool_t renew) {
         active_->Record("reg");
         ++active_->registration_count_;
         if (id >= 0 && static_cast<std::size_t>(id) < active_->registration_by_account_.size())
             ++active_->registration_by_account_[static_cast<std::size_t>(id)];
-        return active_->registration_failure_;
+        if (renew != PJ_FALSE) return active_->registration_failure_;
+        if (active_->unregistration_failure_ != PJ_SUCCESS)
+            return active_->unregistration_failure_;
+        if (active_->defer_unregistration_callbacks_) {
+            if (active_->pending_unregistration_count_ < active_->pending_unregistrations_.size())
+                active_->pending_unregistrations_[active_->pending_unregistration_count_++] = id;
+        } else {
+            active_->DeliverUnregistrationCallback(id);
+        }
+        return PJ_SUCCESS;
     }
     static pj_status_t CallAnswer(pjsua_call_id, unsigned status, const pj_str_t *, const pjsua_msg_data *) { ++active_->answer_count_; active_->answer_status_ = status; active_->Record("answer"); return PJ_SUCCESS; }
     static pj_status_t CallHangup(pjsua_call_id, unsigned status, const pj_str_t *, const pjsua_msg_data *) { ++active_->hangup_count_; active_->hangup_status_ = status; active_->Record("hangup"); return PJ_SUCCESS; }

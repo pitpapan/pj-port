@@ -27,6 +27,11 @@ public:
 
     Error Initialize(const AgentRegistry &, pjsua_transport_id) noexcept;
     Error StartInitialRegistration() noexcept;
+    // Stops future refresh/retry intent and requests unregister only for
+    // accounts which could still own a registration. The adapter retains the
+    // contexts until its bounded callback-drain policy completes.
+    Error BeginShutdown() noexcept;
+    std::size_t PendingUnregistrations() const noexcept;
     Error Pump(std::uint64_t now_ms) noexcept;
     Error Shutdown() noexcept;
     std::size_t Count() const noexcept;
@@ -52,6 +57,8 @@ private:
     std::size_t count_{};
     std::uint64_t now_ms_{};
     std::thread::id actor_thread_{};
+    std::size_t pending_unregistrations_{};
+    bool shutting_down_{};
 
     void AssertActor() const noexcept;
     void Clear() noexcept;

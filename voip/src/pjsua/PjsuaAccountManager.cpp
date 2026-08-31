@@ -109,6 +109,8 @@ void PjsuaAccountManager::Clear() noexcept {
     notification_head_ = 0;
     notification_size_ = 0;
     now_ms_ = 0;
+    pending_unregistrations_ = 0;
+    shutting_down_ = false;
 }
 
 void PjsuaAccountManager::Rollback() noexcept {
@@ -188,12 +190,52 @@ Error PjsuaAccountManager::Initialize(const AgentRegistry &registry,
 Error PjsuaAccountManager::StartInitialRegistration() noexcept {
     AssertActor();
     if (count_ == 0) return Error::invalid_state;
-    for (const PjsuaAccountContext &context : contexts_) {
-        if (context.occupied && context.register_on_start &&
-            PjsuaStatus(api_.acc_set_registration(context.account_id, PJ_TRUE)) != Error::ok)
-            return Error::internal_failure;
+    for (PjsuaAccountContext &context : contexts_) {
+        if (!context.occupied || !context.register_on_start) continue;
+        const pj_status_t status = api_.acc_set_registration(context.account_id, PJ_TRUE);
+        if (status != PJ_SUCCESS) {
+            PjsuaRegistrationRecord failure{};
+            failure.account = context.account_id;
+            failure.native_status = status;
+            failure.renew = true;
+            std::strncpy(failure.reason, "registration start failed", max_reason_length);
+            OnRegistrationState(failure);
+        }
     }
     return Error::ok;
+}
+
+Error PjsuaAccountManager::BeginShutdown() noexcept {
+    AssertActor();
+    shutting_down_ = true;
+    for (PjsuaAccountContext &context : contexts_) {
+        if (!context.occupied) continue;
+        const RegistrationState previous = context.registration;
+        context.register_on_start = false;
+        context.retry = {};
+        context.refresh_due_ms = 0;
+        if (previous == RegistrationState::disabled ||
+            previous == RegistrationState::authentication_failed ||
+            previous == RegistrationState::transport_failed)
+            continue;
+        context.registration = RegistrationState::unregistering;
+        ++pending_unregistrations_;
+        Notify(context, RegistrationState::unregistering, Error::ok, 0, "");
+        // Count before entering PJSUA: a fake or future native implementation
+        // may synchronously invoke on_reg_state2() from this call.
+        if (api_.acc_set_registration(context.account_id, PJ_FALSE) != PJ_SUCCESS) {
+            // A failed request cannot produce the completion we just made
+            // pending. Leave the context alive for ordered account deletion,
+            // but never wait for an impossible callback.
+            --pending_unregistrations_;
+        }
+    }
+    return Error::ok;
+}
+
+std::size_t PjsuaAccountManager::PendingUnregistrations() const noexcept {
+    AssertActor();
+    return pending_unregistrations_;
 }
 
 std::uint64_t PjsuaAccountManager::AddSaturated(std::uint64_t base,
@@ -324,6 +366,16 @@ void PjsuaAccountManager::OnRegistrationState(const PjsuaRegistrationRecord &rec
     AssertActor();
     PjsuaAccountContext *context = Resolve(record.account);
     if (context == nullptr) return;
+    if (shutting_down_) {
+        if (record.unregistration || !record.renew) {
+            if (pending_unregistrations_ != 0) --pending_unregistrations_;
+            context->registration = RegistrationState::disabled;
+            Notify(*context, RegistrationState::disabled, Error::ok,
+                   record.sip_status > 0 ? static_cast<std::uint16_t>(record.sip_status) : 0,
+                   record.reason);
+        }
+        return;
+    }
     if (!context->register_on_start) {
         context->retry = {};
         context->refresh_due_ms = 0;

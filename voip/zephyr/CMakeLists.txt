@@ -43,4 +43,12 @@ if(CONFIG_VOIP_SERVICE)
   zephyr_library_sources_ifdef(CONFIG_VOIP_SERVICE_FAKE_ADAPTER
     ../src/core/FakeRuntimeAdapter.cpp
   )
+  zephyr_library_sources_ifdef(CONFIG_VOIP_PJSUA
+    ../src/pjsua/PjsuaApi.cpp
+    ../src/pjsua/PjsuaRuntime.cpp
+    ../src/pjsua/PjsuaTransportManager.cpp
+    ../src/pjsua/PjsuaCallbackRouter.cpp
+    ../src/pjsua/PjsuaAccountManager.cpp
+    ../src/pjsua/PjsuaRuntimeAdapter.cpp
+  )
 endif()
