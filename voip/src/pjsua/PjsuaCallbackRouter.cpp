@@ -1,5 +1,6 @@
 #include "PjsuaCallbackRouter.hpp"
 #include <cassert>
+#include <cstring>
 namespace voip {
 PjsuaCallbackRouter *PjsuaCallbackRouter::active_ = nullptr;
 void PjsuaCallbackRouter::AssertActor() const noexcept {
@@ -43,12 +44,34 @@ void PjsuaCallbackRouter::GuardIncoming(pjsua_call_id call) noexcept {
     (void)api_.call_answer(call, 486, nullptr, nullptr);
     (void)api_.call_hangup(call, 486, nullptr, nullptr);
 }
-void PjsuaCallbackRouter::ForwardStarted(pjsua_acc_id account, pjsua_reg_info *info) noexcept {
-    AssertActor();
-    sink_.OnRegistrationStarted({account, info != nullptr && info->renew != PJ_FALSE});
+namespace {
+PjsuaRegistrationRecord CopyRegistration(pjsua_acc_id account,
+                                         const pjsua_reg_info *info) noexcept {
+    PjsuaRegistrationRecord result{};
+    result.account = account;
+    if (info == nullptr) return result;
+    result.renew = info->renew != PJ_FALSE;
+    const pjsip_regc_cbparam *param = info->cbparam;
+    if (param == nullptr) return result;
+    result.native_status = param->status;
+    result.sip_status = param->code;
+    result.unregistration = param->is_unreg != PJ_FALSE;
+    result.expiration = param->expiration;
+    if (param->reason.ptr != nullptr && param->reason.slen > 0) {
+        const std::size_t length = static_cast<std::size_t>(param->reason.slen) > max_reason_length
+            ? max_reason_length : static_cast<std::size_t>(param->reason.slen);
+        std::memcpy(result.reason, param->reason.ptr, length);
+        result.reason[length] = '\0';
+    }
+    return result;
 }
-void PjsuaCallbackRouter::ForwardState(pjsua_acc_id account, pjsua_reg_info *info) noexcept {
+}
+void PjsuaCallbackRouter::ForwardStarted(pjsua_acc_id account, const pjsua_reg_info *info) noexcept {
     AssertActor();
-    sink_.OnRegistrationState({account, info != nullptr && info->renew != PJ_FALSE});
+    sink_.OnRegistrationStarted(CopyRegistration(account, info));
+}
+void PjsuaCallbackRouter::ForwardState(pjsua_acc_id account, const pjsua_reg_info *info) noexcept {
+    AssertActor();
+    sink_.OnRegistrationState(CopyRegistration(account, info));
 }
 } // namespace voip

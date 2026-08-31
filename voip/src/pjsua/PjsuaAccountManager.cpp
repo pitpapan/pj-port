@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstring>
+#include <limits>
 
 namespace voip {
 namespace {
@@ -105,6 +106,9 @@ void PjsuaAccountManager::Clear() noexcept {
     for (PjsuaAccountContext &context : contexts_) context = PjsuaAccountContext{};
     for (NativeLookup &entry : lookup_) entry = NativeLookup{};
     count_ = 0;
+    notification_head_ = 0;
+    notification_size_ = 0;
+    now_ms_ = 0;
 }
 
 void PjsuaAccountManager::Rollback() noexcept {
@@ -163,6 +167,7 @@ Error PjsuaAccountManager::Initialize(const AgentRegistry &registry,
         config.reg_retry_interval = 0;
         config.reg_first_retry_interval = 0;
         config.reg_retry_random_interval = 0;
+        config.reg_delay_before_refresh = 1;
 
         pjsua_acc_id native_id = PJSUA_INVALID_ID;
         if (PjsuaStatus(api_.acc_add(&config, PJ_FALSE, &native_id)) != Error::ok) {
@@ -187,6 +192,190 @@ Error PjsuaAccountManager::StartInitialRegistration() noexcept {
         if (context.occupied && context.register_on_start &&
             PjsuaStatus(api_.acc_set_registration(context.account_id, PJ_TRUE)) != Error::ok)
             return Error::internal_failure;
+    }
+    return Error::ok;
+}
+
+std::uint64_t PjsuaAccountManager::AddSaturated(std::uint64_t base,
+                                                std::uint64_t increment) noexcept {
+    return increment > std::numeric_limits<std::uint64_t>::max() - base
+        ? std::numeric_limits<std::uint64_t>::max() : base + increment;
+}
+
+bool PjsuaAccountManager::Recoverable(const PjsuaRegistrationRecord &record) noexcept {
+    if (record.native_status != PJ_SUCCESS) return true;
+    return record.sip_status == 408 || record.sip_status == 480 ||
+           (record.sip_status >= 500 && record.sip_status < 700);
+}
+
+void PjsuaAccountManager::Notify(const PjsuaAccountContext &context,
+                                 RegistrationState registration, Error error,
+                                 std::uint16_t sip_status, const char *reason) noexcept {
+    const bool guaranteed = IsGuaranteed(registration);
+    if (guaranteed) {
+        // Keep at most one pending failure and one retry-wait record per agent.
+        // A new retry cycle replaces its older pair so the bounded queue cannot
+        // be exhausted by unobserved cycles of a single account.
+        for (std::size_t offset = 0; offset < notification_size_; ++offset) {
+            const PjsuaRegistrationNotification &existing =
+                notifications_[(notification_head_ + offset) % notification_capacity];
+            if (existing.agent.slot == context.agent.slot &&
+                existing.agent.generation == context.agent.generation &&
+                ((registration == RegistrationState::retry_wait &&
+                  existing.registration == RegistrationState::retry_wait) ||
+                 (IsFailure(registration) && IsFailure(existing.registration)))) {
+                RemoveNotification(offset);
+                break;
+            }
+        }
+        while (notification_size_ == notification_capacity) {
+            bool removed = false;
+            for (std::size_t offset = 0; offset < notification_size_; ++offset) {
+                const RegistrationState existing =
+                    notifications_[(notification_head_ + offset) % notification_capacity].registration;
+                if (!IsGuaranteed(existing)) {
+                    RemoveNotification(offset);
+                    removed = true;
+                    break;
+                }
+            }
+            // The coalescing above bounds guaranteed records to two per agent.
+            // This is defensive if a future state is classified incorrectly.
+            if (!removed) RemoveNotification(0);
+        }
+    } else if (notification_size_ == notification_capacity) {
+        return;
+    }
+    PjsuaRegistrationNotification &notification =
+        notifications_[(notification_head_ + notification_size_) % notification_capacity];
+    notification = {};
+    notification.agent = context.agent;
+    notification.registration = registration;
+    notification.status.error = error;
+    notification.status.sip_status = sip_status;
+    if (reason != nullptr) std::strncpy(notification.status.reason, reason, max_reason_length);
+    ++notification_size_;
+}
+
+bool PjsuaAccountManager::IsFailure(RegistrationState registration) noexcept {
+    return registration == RegistrationState::transport_failed ||
+           registration == RegistrationState::authentication_failed;
+}
+
+bool PjsuaAccountManager::IsGuaranteed(RegistrationState registration) noexcept {
+    return IsFailure(registration) || registration == RegistrationState::retry_wait;
+}
+
+void PjsuaAccountManager::RemoveNotification(std::size_t offset) noexcept {
+    if (offset >= notification_size_) return;
+    for (std::size_t index = offset; index + 1 < notification_size_; ++index)
+        notifications_[(notification_head_ + index) % notification_capacity] =
+            notifications_[(notification_head_ + index + 1) % notification_capacity];
+    --notification_size_;
+}
+
+void PjsuaAccountManager::RemoveRetryWait(AgentHandle agent) noexcept {
+    for (std::size_t offset = 0; offset < notification_size_; ++offset) {
+        const PjsuaRegistrationNotification &notification =
+            notifications_[(notification_head_ + offset) % notification_capacity];
+        if (notification.registration == RegistrationState::retry_wait &&
+            notification.agent.slot == agent.slot &&
+            notification.agent.generation == agent.generation) {
+            RemoveNotification(offset);
+            return;
+        }
+    }
+}
+
+bool PjsuaAccountManager::TryGetNotification(PjsuaRegistrationNotification *notification) noexcept {
+    AssertActor();
+    if (notification == nullptr || notification_size_ == 0) return false;
+    *notification = notifications_[notification_head_];
+    notification_head_ = (notification_head_ + 1) % notification_capacity;
+    --notification_size_;
+    return true;
+}
+
+void PjsuaAccountManager::OnRegistrationStarted(const PjsuaRegistrationRecord &record) noexcept {
+    AssertActor();
+    PjsuaAccountContext *context = Resolve(record.account);
+    if (context == nullptr || !context->register_on_start) return;
+    context->registration = (record.unregistration || !record.renew)
+        ? RegistrationState::unregistering : RegistrationState::registering;
+    Notify(*context, context->registration, Error::ok, 0, "");
+}
+
+void PjsuaAccountManager::ScheduleRetry(PjsuaAccountContext &context,
+                                        const PjsuaRegistrationRecord &record) noexcept {
+    static constexpr std::uint64_t base_delays_ms[] = {1000, 2000, 4000, 8000, 16000, 30000, 30000};
+    const std::size_t index = context.retry.attempt < 7 ? context.retry.attempt : 6;
+    const std::uint64_t jitter = static_cast<std::uint64_t>(context.agent.slot) * 50;
+    context.retry.due_ms = AddSaturated(now_ms_, AddSaturated(base_delays_ms[index], jitter));
+    context.retry.scheduled = true;
+    context.registration = RegistrationState::retry_wait;
+    RemoveRetryWait(context.agent);
+    Notify(context, RegistrationState::retry_wait, Error::signaling_failed,
+           record.sip_status > 0 ? static_cast<std::uint16_t>(record.sip_status) : 0,
+           record.reason);
+}
+
+void PjsuaAccountManager::OnRegistrationState(const PjsuaRegistrationRecord &record) noexcept {
+    AssertActor();
+    PjsuaAccountContext *context = Resolve(record.account);
+    if (context == nullptr) return;
+    const std::uint16_t sip = record.sip_status > 0 ? static_cast<std::uint16_t>(record.sip_status) : 0;
+    if (record.native_status == PJ_SUCCESS && record.sip_status >= 200 && record.sip_status < 300) {
+        context->retry = {};
+        if (record.unregistration || !record.renew || record.expiration == 0) {
+            context->registration = RegistrationState::disabled;
+            context->refresh_due_ms = 0;
+            Notify(*context, RegistrationState::disabled, Error::ok, sip, record.reason);
+        } else {
+            context->registration = RegistrationState::registered;
+            context->refresh_due_ms = AddSaturated(now_ms_, record.expiration > 1
+                ? static_cast<std::uint64_t>(record.expiration - 1) * 1000 : 0);
+            Notify(*context, RegistrationState::registered, Error::ok, sip, record.reason);
+        }
+        return;
+    }
+    if (record.sip_status == 401 || record.sip_status == 407 || record.sip_status == 403) {
+        context->retry = {};
+        context->refresh_due_ms = 0;
+        context->registration = RegistrationState::authentication_failed;
+        Notify(*context, RegistrationState::authentication_failed, Error::authentication_failed, sip, record.reason);
+        return;
+    }
+    const Error error = Recoverable(record) ? Error::signaling_failed : Error::remote_rejected;
+    if (!Recoverable(record)) context->retry = {};
+    context->refresh_due_ms = 0;
+    context->registration = RegistrationState::transport_failed;
+    Notify(*context, RegistrationState::transport_failed, error, sip, record.reason);
+    if (Recoverable(record)) ScheduleRetry(*context, record);
+}
+
+Error PjsuaAccountManager::Pump(std::uint64_t now_ms) noexcept {
+    AssertActor();
+    now_ms_ = now_ms;
+    for (PjsuaAccountContext &context : contexts_) {
+        if (!context.occupied) continue;
+        if (context.refresh_due_ms != 0 && now_ms >= context.refresh_due_ms) {
+            context.refresh_due_ms = 0;
+            context.registration = RegistrationState::refreshing;
+            Notify(context, RegistrationState::refreshing, Error::ok, 0, "");
+        }
+        if (!context.retry.scheduled || now_ms < context.retry.due_ms) continue;
+        context.retry.scheduled = false;
+        if (context.retry.attempt != std::numeric_limits<std::uint8_t>::max()) ++context.retry.attempt;
+        context.registration = RegistrationState::registering;
+        Notify(context, RegistrationState::registering, Error::ok, 0, "");
+        const pj_status_t status = api_.acc_set_registration(context.account_id, PJ_TRUE);
+        if (status != PJ_SUCCESS) {
+            PjsuaRegistrationRecord failure{};
+            failure.account = context.account_id;
+            failure.native_status = status;
+            std::strncpy(failure.reason, "registration start failed", max_reason_length);
+            OnRegistrationState(failure);
+        }
     }
     return Error::ok;
 }

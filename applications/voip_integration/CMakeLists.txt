@@ -61,6 +61,7 @@ target_sources_ifdef(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST app PRIVATE
   ../../voip/tests/pjsua/PjsuaRuntimeTest.cpp
   ../../voip/tests/pjsua/PjsuaCallbackRouterTest.cpp
   ../../voip/tests/pjsua/PjsuaAccountManagerTest.cpp
+  ../../voip/tests/pjsua/PjsuaRegistrationStateTest.cpp
   ../../voip/src/pjsua/PjsuaApi.cpp
   ../../voip/src/pjsua/PjsuaRuntime.cpp
   ../../voip/src/pjsua/PjsuaTransportManager.cpp
