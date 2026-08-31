@@ -18,7 +18,7 @@ struct Fixture {
 }
 
 void RunPjsuaRuntimeAdapterTests() {
-    constexpr unsigned adapter_limit = 6;
+    constexpr unsigned adapter_limit = 7;
     Fixture fixture; AgentRegistry registry; assert(registry.Initialize(fixture.config) == Error::ok);
     static FakePjsuaApi fake; fake.Activate(); PjsuaRuntimeAdapter adapter(fake.Api());
     auto initial_lifecycle = [&]() __attribute__((noinline)) {
@@ -147,6 +147,73 @@ void RunPjsuaRuntimeAdapterTests() {
     assert(pressure.Shutdown() == Error::ok);
     };
     if (adapter_limit >= 6) notification_pressure();
+
+    auto shutdown_state_matrix = [&]() __attribute__((noinline)) {
+        struct Scenario {
+            RegistrationState state;
+            pjsua_acc_id selected_native_id;
+            std::size_t selected_unregister_delta;
+            std::size_t total_unregister_delta;
+        };
+        const Scenario scenarios[] = {
+            {RegistrationState::disabled, 3, 0, 4},
+            {RegistrationState::registering, 2, 1, 4},
+            {RegistrationState::registered, 2, 1, 4},
+            {RegistrationState::retry_wait, 2, 1, 4},
+            {RegistrationState::authentication_failed, 2, 0, 3},
+            {RegistrationState::transport_failed, 2, 0, 3},
+        };
+        for (const Scenario &scenario : scenarios) {
+            fake.Reset();
+            PjsuaRuntimeAdapter matrix(fake.Api());
+            assert(matrix.Initialize(registry, fixture.config.security,
+                                     fixture.config.conference_format) == Error::ok);
+            // IDs 2 and 3 belong respectively to the first enabled and the
+            // configured-disabled account. State is reached only through the
+            // installed PJSUA callback router.
+            switch (scenario.state) {
+            case RegistrationState::disabled: break;
+            case RegistrationState::registering:
+                fake.DeliverRegistrationStarted(scenario.selected_native_id, true); break;
+            case RegistrationState::registered:
+                fake.DeliverRegistrationState(scenario.selected_native_id, PJ_SUCCESS, 200, true, false, 20); break;
+            case RegistrationState::retry_wait:
+                fake.DeliverRegistrationState(scenario.selected_native_id, PJ_EUNKNOWN, 0, true, false, 0); break;
+            case RegistrationState::authentication_failed:
+                fake.DeliverRegistrationState(scenario.selected_native_id, PJ_SUCCESS, 401, true, false, 0); break;
+            case RegistrationState::transport_failed:
+                fake.DeliverRegistrationState(scenario.selected_native_id, PJ_SUCCESS, 404, true, false, 0); break;
+            default: assert(false); break;
+            }
+            const std::size_t all_before = fake.RegistrationCount();
+            const std::size_t selected_before = fake.RegistrationCount(scenario.selected_native_id);
+            fake.SetUnregistrationCallbacksDeferred(true);
+            assert(matrix.Shutdown() == Error::busy);
+            assert(fake.RegistrationCount() == all_before + scenario.total_unregister_delta);
+            assert(fake.RegistrationCount(scenario.selected_native_id) == selected_before + scenario.selected_unregister_delta);
+            assert(matrix.Shutdown() == Error::busy);
+            assert(fake.PendingUnregistrationCount() == scenario.total_unregister_delta);
+
+            if (scenario.selected_unregister_delta != 0) {
+                // Completion accounting is token-specific: out-of-order,
+                // duplicate, and stale callbacks cannot consume a different
+                // account's teardown token.
+                fake.DeliverPendingUnregistration(4);
+                assert(matrix.Pump(200, 0) == Error::ok);
+                assert(fake.PendingUnregistrationCount() == scenario.total_unregister_delta - 1);
+                fake.DeliverRegistrationState(4, PJ_SUCCESS, 200, false, true, 0);
+                fake.DeliverRegistrationState(PJSUA_INVALID_ID, PJ_SUCCESS, 200, false, true, 0);
+                assert(matrix.Shutdown() == Error::busy);
+            }
+            fake.DeliverUnregistrationCallbacks();
+            assert(matrix.Pump(201, 0) == Error::ok);
+            assert(matrix.Shutdown() == Error::ok);
+            assert(fake.AccountClearCount() == 5 && fake.AccountDeleteCount() == 5);
+            assert(fake.TeardownSequenceEquals("clear,del,clear,del,clear,del,clear,del,clear,del,close,destroy,reset"));
+            assert(PjsuaCallbackRouter::ActiveForTest() == nullptr);
+        }
+    };
+    if (adapter_limit >= 7) shutdown_state_matrix();
     fake.Deactivate();
     printk("PjsuaRuntimeAdapterTest PASSED\n");
 }

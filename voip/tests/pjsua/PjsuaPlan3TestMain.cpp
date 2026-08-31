@@ -14,7 +14,7 @@ void AssertDetached() {
 
 int main() {
     constexpr unsigned test_first = 1;
-    constexpr unsigned test_limit = 6;
+    constexpr unsigned test_limit = 7;
     if (test_first <= 1 && test_limit >= 1) { voip::test::RunPjsuaPublicServiceTests(); AssertDetached(); }
     if (test_first <= 2 && test_limit >= 2) { voip::test::RunPjsuaRuntimeTests(); AssertDetached(); }
     if (test_first <= 3 && test_limit >= 3) { voip::test::RunPjsuaCallbackRouterTests(); AssertDetached(); }

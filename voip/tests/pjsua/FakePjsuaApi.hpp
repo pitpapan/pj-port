@@ -5,6 +5,7 @@
 #include <cstring>
 #include <array>
 #include <cassert>
+#include <atomic>
 
 namespace voip::test {
 class FakePjsuaApi final {
@@ -19,6 +20,8 @@ public:
         has_failure_ = false;
         std::memset(sequence_, 0, sizeof(sequence_));
         used_ = 0;
+        std::memset(teardown_sequence_, 0, sizeof(teardown_sequence_));
+        teardown_used_ = 0;
         std::memset(&ua_, 0, sizeof(ua_));
         std::memset(&media_, 0, sizeof(media_));
         std::memset(&log_, 0, sizeof(log_));
@@ -48,11 +51,17 @@ public:
         pending_unregistrations_.fill(PJSUA_INVALID_ID);
         pending_unregistration_count_ = 0;
         defer_unregistration_callbacks_ = false;
+        release_unregistration_callbacks_on_next_pump_.store(false);
+        unregistration_callbacks_delivered_from_pump_ = 0;
+        pump_count_ = 0;
         active_ = this;
     }
     static const FakePjsuaApi *ActiveForTest() noexcept { return active_; }
     void Fail(Stage stage) noexcept { failed_ = stage; has_failure_ = true; }
     bool SequenceEquals(const char *expected) const noexcept { return std::strcmp(sequence_, expected) == 0; }
+    bool TeardownSequenceEquals(const char *expected) const noexcept {
+        return std::strcmp(teardown_sequence_, expected) == 0;
+    }
     const PjsuaApi &Api() const noexcept { return api_; }
     const pjsua_config &UaConfig() const noexcept { return ua_; }
     const pjsua_media_config &MediaConfig() const noexcept { return media_; }
@@ -87,6 +96,19 @@ public:
     void SetUnregistrationCallbacksDeferred(bool deferred) noexcept {
         defer_unregistration_callbacks_ = deferred;
     }
+    // This is intentionally only a release flag.  It never invokes a PJSUA
+    // callback on the application/helper thread; HandleEvents() consumes it.
+    void ReleaseUnregistrationCallbacksOnNextPump() noexcept {
+        release_unregistration_callbacks_on_next_pump_.store(true,
+                                                               std::memory_order_release);
+    }
+    std::size_t PendingUnregistrationCount() const noexcept {
+        return pending_unregistration_count_;
+    }
+    std::size_t UnregistrationCallbacksDeliveredFromPump() const noexcept {
+        return unregistration_callbacks_delivered_from_pump_;
+    }
+    std::size_t PumpCount() const noexcept { return pump_count_; }
     void DeliverUnregistrationCallbacks() noexcept {
         while (pending_unregistration_count_ != 0) {
             const pjsua_acc_id id = pending_unregistrations_[0];
@@ -95,6 +117,39 @@ public:
             --pending_unregistration_count_;
             DeliverUnregistrationCallback(id);
         }
+    }
+    void DeliverPendingUnregistration(pjsua_acc_id id) noexcept {
+        for (std::size_t index = 0; index < pending_unregistration_count_; ++index) {
+            if (pending_unregistrations_[index] != id) continue;
+            for (std::size_t next = index + 1; next < pending_unregistration_count_; ++next)
+                pending_unregistrations_[next - 1] = pending_unregistrations_[next];
+            --pending_unregistration_count_;
+            DeliverUnregistrationCallback(id);
+            return;
+        }
+    }
+    void DeliverRegistrationStarted(pjsua_acc_id id, bool renew) noexcept {
+        if (ua_.cb.on_reg_started2 == nullptr) return;
+        pjsua_reg_info info{};
+        info.renew = renew ? PJ_TRUE : PJ_FALSE;
+        ua_.cb.on_reg_started2(id, &info);
+    }
+    void DeliverRegistrationState(pjsua_acc_id id, pj_status_t status, int code,
+                                  bool renew, bool unregistration,
+                                  unsigned expiration) noexcept {
+        if (ua_.cb.on_reg_state2 == nullptr) return;
+        pjsip_regc_cbparam params{};
+        params.status = status;
+        params.code = code;
+        params.is_unreg = unregistration ? PJ_TRUE : PJ_FALSE;
+        params.expiration = expiration;
+        static char reason[] = "test";
+        params.reason.ptr = reason;
+        params.reason.slen = 4;
+        pjsua_reg_info info{};
+        info.renew = renew ? PJ_TRUE : PJ_FALSE;
+        info.cbparam = &params;
+        ua_.cb.on_reg_state2(id, &info);
     }
     void DeliverRegistrationFailure(pjsua_acc_id id, pj_status_t status) noexcept {
         if (ua_.cb.on_reg_state2 == nullptr) return;
@@ -122,6 +177,7 @@ private:
     // Task 5 includes five account add/register/unregister/delete records;
     // retain the complete ordering trace without overwriting fake state.
     char sequence_[512]{}; std::size_t used_ = 0;
+    char teardown_sequence_[256]{}; std::size_t teardown_used_ = 0;
     pjsua_config ua_{}; pjsua_media_config media_{}; pjsua_logging_config log_{};
     unsigned answer_count_ = 0; unsigned hangup_count_ = 0;
     unsigned answer_status_ = 0; unsigned hangup_status_ = 0;
@@ -146,18 +202,29 @@ private:
     std::array<pjsua_acc_id, 5> pending_unregistrations_{};
     std::size_t pending_unregistration_count_ = 0;
     bool defer_unregistration_callbacks_ = false;
+    std::atomic<bool> release_unregistration_callbacks_on_next_pump_{false};
+    std::size_t unregistration_callbacks_delivered_from_pump_ = 0;
+    std::size_t pump_count_ = 0;
     static FakePjsuaApi &Active() noexcept { assert(active_ != nullptr); return *active_; }
     void Record(const char *word) noexcept {
         const std::size_t word_length = std::strlen(word);
         const std::size_t separator_length = used_ == 0 ? 0 : 1;
-        assert(used_ + separator_length + word_length < sizeof(sequence_));
+        if (used_ + separator_length + word_length >= sizeof(sequence_)) return;
         if (used_ != 0) sequence_[used_++] = ',';
         while (*word) sequence_[used_++] = *word++;
         sequence_[used_] = 0;
     }
+    void RecordTeardown(const char *word) noexcept {
+        const std::size_t word_length = std::strlen(word);
+        const std::size_t separator_length = teardown_used_ == 0 ? 0 : 1;
+        assert(teardown_used_ + separator_length + word_length < sizeof(teardown_sequence_));
+        if (teardown_used_ != 0) teardown_sequence_[teardown_used_++] = ',';
+        while (*word) teardown_sequence_[teardown_used_++] = *word++;
+        teardown_sequence_[teardown_used_] = 0;
+    }
     bool Failed(Stage s) const noexcept { return has_failure_ && failed_ == s; }
     static pj_status_t ArenaInstall() { Active().Record("arena"); return Active().Failed(Stage::arena) ? PJ_EUNKNOWN : PJ_SUCCESS; }
-    static pj_status_t ArenaReset() { Active().Record("reset"); return PJ_SUCCESS; }
+    static pj_status_t ArenaReset() { Active().Record("reset"); Active().RecordTeardown("reset"); return PJ_SUCCESS; }
     static pj_status_t Create() { Active().Record("create"); return Active().Failed(Stage::create) ? PJ_EUNKNOWN : PJ_SUCCESS; }
     static void ConfigDefault(pjsua_config *x) { std::memset(x, 0, sizeof(*x)); Active().Record("defaults"); }
     static void LogDefault(pjsua_logging_config *x) { std::memset(x, 0, sizeof(*x)); (void)Active(); }
@@ -166,11 +233,23 @@ private:
     static pj_status_t Init(const pjsua_config *ua, const pjsua_logging_config *log, const pjsua_media_config *media) { Active().ua_ = *ua; Active().log_ = *log; Active().media_ = *media; Active().Record("init"); return Active().Failed(Stage::init) ? PJ_EUNKNOWN : PJ_SUCCESS; }
     static pjmedia_port *NoSound() { Active().Record("nosnd"); return Active().Failed(Stage::no_sound) ? nullptr : reinterpret_cast<pjmedia_port *>(1); }
     static pj_status_t TransportCreate(pjsip_transport_type_e, const pjsua_transport_config *, pjsua_transport_id *id) { Active().Record("tcp"); if (Active().Failed(Stage::transport)) return PJ_EUNKNOWN; *id = 4; return PJ_SUCCESS; }
-    static pj_status_t TransportClose(pjsua_transport_id, pj_bool_t) { Active().Record("close"); return PJ_SUCCESS; }
+    static pj_status_t TransportClose(pjsua_transport_id, pj_bool_t) { Active().Record("close"); Active().RecordTeardown("close"); return PJ_SUCCESS; }
     static pj_status_t Start() { Active().Record("start"); return Active().Failed(Stage::start) ? PJ_EUNKNOWN : PJ_SUCCESS; }
-    static int Pump(unsigned) { Active().Record("pump"); return 0; }
+    static int Pump(unsigned) {
+        FakePjsuaApi &fake = Active();
+        ++fake.pump_count_;
+        fake.Record("pump");
+        if (fake.release_unregistration_callbacks_on_next_pump_.exchange(
+                false, std::memory_order_acq_rel)) {
+            const std::size_t pending = fake.pending_unregistration_count_;
+            fake.DeliverUnregistrationCallbacks();
+            fake.unregistration_callbacks_delivered_from_pump_ += pending;
+        }
+        return 0;
+    }
     static pj_status_t Destroy() {
         Active().Record("destroy");
+        Active().RecordTeardown("destroy");
         Active().account_add_slot_ = 0;
         Active().account_delete_slot_ = 0;
         Active().account_clear_slot_ = 0;
@@ -190,13 +269,13 @@ private:
             Active().account_user_data_[static_cast<std::size_t>(*id)] = config->user_data;
         return PJ_SUCCESS;
     }
-    static pj_status_t AccountSetUserData(pjsua_acc_id id, void *value) { Active().Record("clear"); ++Active().account_clear_count_; assert(Active().account_clear_slot_ < Active().cleared_accounts_.size()); Active().cleared_accounts_[Active().account_clear_slot_++] = id; Active().SetAccountUserData(id, value); return PJ_SUCCESS; }
+    static pj_status_t AccountSetUserData(pjsua_acc_id id, void *value) { Active().Record("clear"); Active().RecordTeardown("clear"); ++Active().account_clear_count_; assert(Active().account_clear_slot_ < Active().cleared_accounts_.size()); Active().cleared_accounts_[Active().account_clear_slot_++] = id; Active().SetAccountUserData(id, value); return PJ_SUCCESS; }
     static void *AccountGetUserData(pjsua_acc_id id) {
         ++Active().account_get_user_data_count_;
         if (id < 0 || static_cast<std::size_t>(id) >= Active().account_user_data_.size()) return nullptr;
         return Active().account_user_data_[static_cast<std::size_t>(id)];
     }
-    static pj_status_t AccountDelete(pjsua_acc_id id) { Active().Record("del"); ++Active().account_delete_count_; assert(Active().account_delete_slot_ < Active().deleted_accounts_.size()); Active().deleted_accounts_[Active().account_delete_slot_++] = id; return PJ_SUCCESS; }
+    static pj_status_t AccountDelete(pjsua_acc_id id) { Active().Record("del"); Active().RecordTeardown("del"); ++Active().account_delete_count_; assert(Active().account_delete_slot_ < Active().deleted_accounts_.size()); Active().deleted_accounts_[Active().account_delete_slot_++] = id; return PJ_SUCCESS; }
     void DeliverUnregistrationCallback(pjsua_acc_id id) noexcept {
         if (ua_.cb.on_reg_state2 == nullptr) return;
         pjsip_regc_cbparam params{};

@@ -1,5 +1,6 @@
 #include "FakePjsuaApi.hpp"
 #include "../../src/pjsua/PjsuaApi.hpp"
+#include "../../src/pjsua/PjsuaCallbackRouter.hpp"
 #include <voip/VoipService.hpp>
 
 #include <cassert>
@@ -43,6 +44,32 @@ void RunPjsuaPublicServiceTests() {
     assert(second->Shutdown() == Error::ok); Drain(*second);
     second->~VoipService();
     first->~VoipService();
+
+    // A selected public service retains its callback-reachable adapter after
+    // the bounded public wait.  The release signal is application-thread
+    // safe, but the fake only delivers its deferred PJSUA callbacks from the
+    // actor's next handle_events()/Pump call.
+    fake.Reset();
+    VoipService *timed = ::new (first_storage.bytes) VoipService();
+    assert(timed->Initialize(fixture.config) == Error::ok);
+    fake.SetUnregistrationCallbacksDeferred(true);
+    assert(timed->Shutdown() == Error::shutdown_timeout);
+    assert(fake.AccountClearCount() == 0 && fake.AccountDeleteCount() == 0);
+    assert(PjsuaCallbackRouter::ActiveForTest() != nullptr);
+    fake.ReleaseUnregistrationCallbacksOnNextPump();
+    timed->~VoipService();
+    assert(fake.AccountClearCount() == 5 && fake.AccountDeleteCount() == 5);
+    assert(fake.UnregistrationCallbacksDeliveredFromPump() == 4);
+    assert(fake.PumpCount() != 0);
+    assert(fake.TeardownSequenceEquals("clear,del,clear,del,clear,del,clear,del,clear,del,close,destroy,reset"));
+    assert(PjsuaCallbackRouter::ActiveForTest() == nullptr);
+
+    fake.Reset();
+    VoipService *resumed = ::new (second_storage.bytes) VoipService();
+    assert(resumed->Initialize(fixture.config) == Error::ok);
+    assert(resumed->Shutdown() == Error::ok);
+    Drain(*resumed);
+    resumed->~VoipService();
     SetNativePjsuaApiForComponentTest(nullptr);
     printk("PjsuaPublicServiceTest PASSED\n");
 }
