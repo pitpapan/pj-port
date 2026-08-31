@@ -82,6 +82,15 @@ Error PjsuaRuntimeAdapter::Hangup(std::uint32_t) noexcept { return Error::unsupp
 Error PjsuaRuntimeAdapter::SetHeld(std::uint32_t, bool) noexcept { return Error::unsupported_configuration; }
 Error PjsuaRuntimeAdapter::BeginCallTeardown(std::uint32_t) noexcept { return Error::unsupported_configuration; }
 
+#if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
+void PjsuaRuntimeAdapter::FillNotificationRingForTest() noexcept {
+    RuntimeNotification notification{};
+    notification.type = RuntimeNotification::Type::registration_state;
+    notification.registration = RegistrationState::registering;
+    while (Enqueue(notification)) {}
+}
+#endif
+
 Error PjsuaRuntimeAdapter::Shutdown() noexcept {
     if (!initialized_) return Error::ok;
     if (!shutdown_started_) {

@@ -35,6 +35,13 @@ public:
             ? registration_by_account_[static_cast<std::size_t>(id)] : 0;
     }
     void FailRegistration(pj_status_t status) noexcept { registration_failure_ = status; }
+    // Composition tests need one failing REGISTER without masking later
+    // accounts.  Native IDs are deliberately scrambled, so this is keyed by
+    // returned PJSUA account ID rather than configuration position.
+    void FailRegistrationFor(pjsua_acc_id id, pj_status_t status) noexcept {
+        if (id >= 0 && static_cast<std::size_t>(id) < registration_failure_by_account_.size())
+            registration_failure_by_account_[static_cast<std::size_t>(id)] = status;
+    }
     void FailUnregistration(pj_status_t status) noexcept { unregistration_failure_ = status; }
     void SetUnregistrationCallbacksDeferred(bool deferred) noexcept {
         defer_unregistration_callbacks_ = deferred;
@@ -47,6 +54,20 @@ public:
             --pending_unregistration_count_;
             DeliverUnregistrationCallback(id);
         }
+    }
+    void DeliverRegistrationFailure(pjsua_acc_id id, pj_status_t status) noexcept {
+        if (ua_.cb.on_reg_state2 == nullptr) return;
+        pjsip_regc_cbparam params{};
+        params.status = status;
+        params.code = 408;
+        params.is_unreg = PJ_FALSE;
+        static char reason[] = "timeout";
+        params.reason.ptr = reason;
+        params.reason.slen = 7;
+        pjsua_reg_info info{};
+        info.renew = PJ_TRUE;
+        info.cbparam = &params;
+        ua_.cb.on_reg_state2(id, &info);
     }
     const pjsua_acc_config &AccountConfig(std::size_t index) const noexcept { return account_configs_[index]; }
     pjsua_acc_id DeletedAccount(std::size_t index) const noexcept { return deleted_accounts_[index]; }
@@ -72,6 +93,9 @@ private:
     std::size_t account_add_count_ = 0, account_delete_count_ = 0, account_clear_count_ = 0, account_get_user_data_count_ = 0;
     std::size_t registration_count_ = 0, fail_account_add_ = 0;
     pj_status_t registration_failure_ = PJ_SUCCESS;
+    std::array<pj_status_t, 5> registration_failure_by_account_{{PJ_SUCCESS, PJ_SUCCESS,
+                                                                   PJ_SUCCESS, PJ_SUCCESS,
+                                                                   PJ_SUCCESS}};
     pj_status_t unregistration_failure_ = PJ_SUCCESS;
     std::array<std::size_t, 5> registration_by_account_{};
     std::array<pjsua_acc_id, 5> pending_unregistrations_{};
@@ -127,7 +151,12 @@ private:
         ++active_->registration_count_;
         if (id >= 0 && static_cast<std::size_t>(id) < active_->registration_by_account_.size())
             ++active_->registration_by_account_[static_cast<std::size_t>(id)];
-        if (renew != PJ_FALSE) return active_->registration_failure_;
+        if (renew != PJ_FALSE) {
+            if (id >= 0 && static_cast<std::size_t>(id) < active_->registration_failure_by_account_.size() &&
+                active_->registration_failure_by_account_[static_cast<std::size_t>(id)] != PJ_SUCCESS)
+                return active_->registration_failure_by_account_[static_cast<std::size_t>(id)];
+            return active_->registration_failure_;
+        }
         if (active_->unregistration_failure_ != PJ_SUCCESS)
             return active_->unregistration_failure_;
         if (active_->defer_unregistration_callbacks_) {

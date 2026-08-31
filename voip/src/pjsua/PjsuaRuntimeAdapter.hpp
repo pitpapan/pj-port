@@ -30,6 +30,11 @@ public:
     bool TryGetNotification(RuntimeNotification *) noexcept override;
     Error BeginCallTeardown(std::uint32_t) noexcept override;
     Error Shutdown() noexcept override;
+#if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
+    // Narrow component-only seam used to prove that a full adapter staging
+    // ring never consumes a manager record before capacity is available.
+    void FillNotificationRingForTest() noexcept;
+#endif
 
 private:
     void Rollback() noexcept;
