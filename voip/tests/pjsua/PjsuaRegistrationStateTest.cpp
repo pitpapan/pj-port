@@ -49,6 +49,25 @@ void Drain(PjsuaAccountManager &accounts) {
     PjsuaRegistrationNotification notification{};
     while (accounts.TryGetNotification(&notification)) {}
 }
+
+void DrainOnly(PjsuaAccountManager &accounts, AgentHandle first,
+               AgentHandle second) {
+    PjsuaRegistrationNotification notification{};
+    while (accounts.TryGetNotification(&notification)) {
+        assert((notification.agent.slot == first.slot &&
+                notification.agent.generation == first.generation) ||
+               (notification.agent.slot == second.slot &&
+                notification.agent.generation == second.generation));
+    }
+}
+
+void ExpectUnchanged(const PjsuaAccountContext &actual,
+                     const PjsuaAccountContext &expected) {
+    assert(actual.registration == expected.registration);
+    assert(actual.retry.attempt == expected.retry.attempt);
+    assert(actual.retry.due_ms == expected.retry.due_ms);
+    assert(actual.retry.scheduled == expected.retry.scheduled);
+}
 }
 
 void RunPjsuaRegistrationStateTests() {
@@ -117,7 +136,7 @@ void RunPjsuaRegistrationStateTests() {
     }
     Drain(accounts);
 
-    for (std::uint8_t slot = 0; slot < 5; ++slot) {
+    for (std::uint8_t slot = 0; slot < 4; ++slot) {
         AgentHandle handle{}; assert(registry.GetAgentHandle(slot, &handle) == Error::ok);
         pjsua_acc_id id{}; assert(accounts.NativeId(handle, &id) == Error::ok);
         PjsuaAccountContext *slot_context = accounts.Resolve(id); assert(slot_context != nullptr);
@@ -135,24 +154,62 @@ void RunPjsuaRegistrationStateTests() {
     zero->retry = {4, 50000, true};
     two->retry = {4, 50000, true};
     four->retry = {4, 50000, true};
-    const RetryState zero_retry = zero->retry, two_retry = two->retry, four_retry = four->retry;
+    const PjsuaAccountContext zero_before = *zero;
+    const PjsuaAccountContext two_before = *two;
+    const PjsuaAccountContext four_before = *four;
     Drain(accounts);
     accounts.OnRegistrationState(Record(one->account_id, PJ_EUNKNOWN, 0, "one", true, false, 0));
     accounts.OnRegistrationState(Record(three->account_id, PJ_EUNKNOWN, 0, "three", true, false, 0));
-    Drain(accounts);
+    DrainOnly(accounts, one->agent, three->agent);
     const std::size_t zero_calls = fake.RegistrationCount(zero->account_id);
     const std::size_t two_calls = fake.RegistrationCount(two->account_id);
     const std::size_t four_calls = fake.RegistrationCount(four->account_id);
     assert(accounts.Pump(one->retry.due_ms) == Error::ok);
-    Drain(accounts);
+    DrainOnly(accounts, one->agent, three->agent);
     assert(accounts.Pump(three->retry.due_ms) == Error::ok);
-    Drain(accounts);
-    assert(zero->retry.attempt == zero_retry.attempt && zero->retry.due_ms == zero_retry.due_ms);
-    assert(two->retry.attempt == two_retry.attempt && two->retry.due_ms == two_retry.due_ms);
-    assert(four->retry.attempt == four_retry.attempt && four->retry.due_ms == four_retry.due_ms);
+    DrainOnly(accounts, one->agent, three->agent);
+    ExpectUnchanged(*zero, zero_before);
+    ExpectUnchanged(*two, two_before);
+    ExpectUnchanged(*four, four_before);
     assert(fake.RegistrationCount(zero->account_id) == zero_calls &&
            fake.RegistrationCount(two->account_id) == two_calls &&
            fake.RegistrationCount(four->account_id) == four_calls);
+
+    // A late recoverable callback for a configured-disabled account is stale:
+    // it must not publish state or schedule work that could re-register it.
+    for (pjsua_acc_id id : {2, 0, 4, 1, 3}) accounts.Resolve(id)->retry = {};
+    PjsuaAccountContext *disabled = accounts.Resolve(3); assert(disabled != nullptr);
+    assert(!disabled->register_on_start);
+    disabled->registration = RegistrationState::disabled;
+    disabled->retry = {};
+    const std::size_t disabled_calls = fake.RegistrationCount(disabled->account_id);
+    accounts.OnRegistrationState(Record(disabled->account_id, PJ_EUNKNOWN, 0,
+                                       "late disabled", true, false, 0));
+    assert(disabled->registration == RegistrationState::disabled);
+    assert(disabled->retry.attempt == 0 && disabled->retry.due_ms == 0 &&
+           !disabled->retry.scheduled);
+    PjsuaRegistrationNotification no_notification{};
+    assert(!accounts.TryGetNotification(&no_notification));
+    assert(accounts.Pump(60000) == Error::ok);
+    assert(disabled->registration == RegistrationState::disabled);
+    assert(disabled->retry.attempt == 0 && disabled->retry.due_ms == 0 &&
+           !disabled->retry.scheduled);
+    assert(fake.RegistrationCount(disabled->account_id) == disabled_calls);
+    assert(!accounts.TryGetNotification(&no_notification));
+
+    // A failed explicit unregistration remains observable, but is terminal for
+    // automatic registration: the manager must never arm a fresh retry.
+    context->retry = {};
+    accounts.OnRegistrationState(Record(context->account_id, PJ_EUNKNOWN, 0,
+                                       "unregistration failed", false, true, 0));
+    PjsuaRegistrationNotification teardown{};
+    assert(accounts.TryGetNotification(&teardown));
+    assert(teardown.registration == RegistrationState::transport_failed &&
+           teardown.status.error == Error::signaling_failed &&
+           teardown.status.sip_status == 0 &&
+           std::strcmp(teardown.status.reason, "unregistration failed") == 0);
+    assert(context->retry.attempt == 0 && context->retry.due_ms == 0 &&
+           !context->retry.scheduled);
 
     for (pjsua_acc_id id : {2, 0, 4, 1, 3}) accounts.Resolve(id)->retry = {};
     assert(accounts.Pump(std::numeric_limits<std::uint64_t>::max() - 10) == Error::ok);

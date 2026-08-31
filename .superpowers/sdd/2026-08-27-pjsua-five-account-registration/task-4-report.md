@@ -31,6 +31,15 @@ by the isolation fixture; the independent saturation case now clears all five
 fixture retry states before advancing time to `UINT64_MAX`. All temporary
 checkpoints were removed.
 
+The independent review then found two lifecycle gaps. A late recoverable
+callback for the configured-disabled fifth context could arm a retry, and a
+recoverable callback copied from explicit unregistration could do the same.
+The manager now clears stale disabled-context state without emitting a
+notification, and clears retry/refresh state for copied teardown records before
+publishing a terminal failure without retrying. The immediate native retry
+failure record is explicitly marked as a renewal so valid enabled-agent retry
+cycles continue at the next exact deadline.
+
 ## Validation evidence
 
 Fresh component execution from the main west workspace:
@@ -65,12 +74,16 @@ All ten host unit tests passed: `PublicContractTest`, `HandlePoolTest`,
 - Callback copy/mutation/truncation/null: covered by `PjsuaCallbackRouterTest`.
 - 480; auth, permanent 4xx, transport/PJ, and recoverable 5xx/6xx mappings:
   covered by the table-driven registration-state test.
-- Exact `1/2/4/8/16/30/30` retry schedule, slot jitter, deadline attempt
-  advancement, refresh projection, immediate native failure, isolation, and
-  saturated due-time arithmetic: covered by the registration-state test.
-- The disabled-account check covers initial native registration only. A late
-  failure callback for an already-disabled account can still schedule a retry;
-  this is a remaining Task 4 concern.
+- Exact `1/2/4/8/16/30/30` retry schedule, enabled-slot jitter, deadline
+  attempt advancement, refresh projection, immediate native failure, isolation,
+  and saturated due-time arithmetic: covered by the registration-state test.
+- A late recoverable callback for configured-disabled agent 4 remains disabled,
+  clears retry state, publishes no notification, and cannot produce a native
+  registration call after time advances. A copied failed unregistration remains
+  observable as `transport_failed` but cannot arm a retry.
+- The agents 1/3 isolation check drains every emitted notification and permits
+  only their handles; it also preserves registration snapshots, retry records,
+  and native registration counts for agents 0/2/4.
 - Notifications remain an account-manager seam and are not yet drained into
   `VoipRuntime`; connecting that seam is deferred to Task 5 and is outside this
   Task 4 repair.

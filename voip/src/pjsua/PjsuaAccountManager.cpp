@@ -307,6 +307,7 @@ void PjsuaAccountManager::OnRegistrationStarted(const PjsuaRegistrationRecord &r
 
 void PjsuaAccountManager::ScheduleRetry(PjsuaAccountContext &context,
                                         const PjsuaRegistrationRecord &record) noexcept {
+    if (!context.register_on_start || record.unregistration || !record.renew) return;
     static constexpr std::uint64_t base_delays_ms[] = {1000, 2000, 4000, 8000, 16000, 30000, 30000};
     const std::size_t index = context.retry.attempt < 7 ? context.retry.attempt : 6;
     const std::uint64_t jitter = static_cast<std::uint64_t>(context.agent.slot) * 50;
@@ -323,6 +324,19 @@ void PjsuaAccountManager::OnRegistrationState(const PjsuaRegistrationRecord &rec
     AssertActor();
     PjsuaAccountContext *context = Resolve(record.account);
     if (context == nullptr) return;
+    if (!context->register_on_start) {
+        context->retry = {};
+        context->refresh_due_ms = 0;
+        context->registration = RegistrationState::disabled;
+        RemoveRetryWait(context->agent);
+        return;
+    }
+    const bool ending_registration = record.unregistration || !record.renew;
+    if (ending_registration) {
+        context->retry = {};
+        context->refresh_due_ms = 0;
+        RemoveRetryWait(context->agent);
+    }
     const std::uint16_t sip = record.sip_status > 0 ? static_cast<std::uint16_t>(record.sip_status) : 0;
     if (record.native_status == PJ_SUCCESS && record.sip_status >= 200 && record.sip_status < 300) {
         context->retry = {};
@@ -373,6 +387,7 @@ Error PjsuaAccountManager::Pump(std::uint64_t now_ms) noexcept {
             PjsuaRegistrationRecord failure{};
             failure.account = context.account_id;
             failure.native_status = status;
+            failure.renew = true;
             std::strncpy(failure.reason, "registration start failed", max_reason_length);
             OnRegistrationState(failure);
         }
