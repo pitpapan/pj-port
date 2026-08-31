@@ -178,3 +178,14 @@ include path/C++17 option to `CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST`.
 4. The controller ran the full host suite after terminating the stale QEMU;
    all 10/10 host test binaries passed. This worker did not rerun it, per the
    controller instruction, to avoid reintroducing shared-host contention.
+
+## Follow-up review minor
+
+The fake callback API now captures the SIP status supplied to both injected
+`call_answer` and `call_hangup`. The callback-router test requires each status
+to be exactly `486` before and after quiescence, in addition to the existing
+per-call count checks. The RED component build failed as intended because the
+new status accessors did not yet exist. After adding only the fake status
+capture, the component profile built and the bounded QEMU run printed
+`PJSUA PLAN 3 COMPONENT RESULT: PASSED`. The timeout then terminated the idle
+QEMU; no matching process or stale `qemu.pid` remained.

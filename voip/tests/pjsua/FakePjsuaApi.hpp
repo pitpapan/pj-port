@@ -17,11 +17,14 @@ public:
     const pjsua_logging_config &LoggingConfig() const noexcept { return log_; }
     unsigned AnswerCount() const noexcept { return answer_count_; }
     unsigned HangupCount() const noexcept { return hangup_count_; }
+    unsigned AnswerStatus() const noexcept { return answer_status_; }
+    unsigned HangupStatus() const noexcept { return hangup_status_; }
 private:
     static FakePjsuaApi *active_; Stage failed_ = Stage::arena; bool has_failure_ = false;
     char sequence_[160]{}; std::size_t used_ = 0;
     pjsua_config ua_{}; pjsua_media_config media_{}; pjsua_logging_config log_{};
     unsigned answer_count_ = 0; unsigned hangup_count_ = 0;
+    unsigned answer_status_ = 0; unsigned hangup_status_ = 0;
     void Record(const char *word) noexcept { if (used_ != 0) sequence_[used_++] = ','; while (*word) sequence_[used_++] = *word++; sequence_[used_] = 0; }
     bool Failed(Stage s) const noexcept { return has_failure_ && failed_ == s; }
     static pj_status_t ArenaInstall() { active_->Record("arena"); return active_->Failed(Stage::arena) ? PJ_EUNKNOWN : PJ_SUCCESS; }
@@ -38,8 +41,8 @@ private:
     static pj_status_t Start() { active_->Record("start"); return active_->Failed(Stage::start) ? PJ_EUNKNOWN : PJ_SUCCESS; }
     static int Pump(unsigned) { active_->Record("pump"); return 0; }
     static pj_status_t Destroy() { active_->Record("destroy"); return PJ_SUCCESS; }
-    static pj_status_t CallAnswer(pjsua_call_id, unsigned, const pj_str_t *, const pjsua_msg_data *) { ++active_->answer_count_; active_->Record("answer"); return PJ_SUCCESS; }
-    static pj_status_t CallHangup(pjsua_call_id, unsigned, const pj_str_t *, const pjsua_msg_data *) { ++active_->hangup_count_; active_->Record("hangup"); return PJ_SUCCESS; }
+    static pj_status_t CallAnswer(pjsua_call_id, unsigned status, const pj_str_t *, const pjsua_msg_data *) { ++active_->answer_count_; active_->answer_status_ = status; active_->Record("answer"); return PJ_SUCCESS; }
+    static pj_status_t CallHangup(pjsua_call_id, unsigned status, const pj_str_t *, const pjsua_msg_data *) { ++active_->hangup_count_; active_->hangup_status_ = status; active_->Record("hangup"); return PJ_SUCCESS; }
     PjsuaApi api_{ArenaInstall, ArenaReset, Create, ConfigDefault, LogDefault, MediaDefault, TransportDefault, Init, NoSound, TransportCreate, TransportClose, Start, Pump, Destroy, CallAnswer, CallHangup};
 };
 inline FakePjsuaApi *FakePjsuaApi::active_ = nullptr;
