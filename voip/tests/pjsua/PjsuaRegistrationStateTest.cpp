@@ -105,11 +105,14 @@ void RunPjsuaRegistrationStateTests() {
     std::uint64_t due = 0;
     for (std::size_t attempt = 0; attempt < 7; ++attempt) {
         assert(accounts.Pump(due) == Error::ok);
+        if (attempt != 0)
+            Expect(accounts, RegistrationState::registering, Error::ok, 0, "");
         accounts.OnRegistrationState(Record(2, PJ_EUNKNOWN, 0, "Transport", true, false, 0));
         Expect(accounts, RegistrationState::transport_failed, Error::signaling_failed, 0, "Transport");
         Expect(accounts, RegistrationState::retry_wait, Error::signaling_failed, 0, "Transport");
         assert(context->retry.attempt == attempt &&
-               context->retry.due_ms == due + bases[attempt] + 2 * 50);
+               context->retry.due_ms == due + bases[attempt] +
+                   static_cast<std::uint64_t>(context->agent.slot) * 50);
         due = context->retry.due_ms;
     }
     Drain(accounts);
@@ -151,7 +154,7 @@ void RunPjsuaRegistrationStateTests() {
            fake.RegistrationCount(two->account_id) == two_calls &&
            fake.RegistrationCount(four->account_id) == four_calls);
 
-    context->retry = {};
+    for (pjsua_acc_id id : {2, 0, 4, 1, 3}) accounts.Resolve(id)->retry = {};
     assert(accounts.Pump(std::numeric_limits<std::uint64_t>::max() - 10) == Error::ok);
     accounts.OnRegistrationState(Record(2, PJ_EUNKNOWN, 0, "saturate", true, false, 0));
     Expect(accounts, RegistrationState::transport_failed, Error::signaling_failed, 0, "saturate");
