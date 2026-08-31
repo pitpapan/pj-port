@@ -9,7 +9,7 @@ class PjsuaTransportManager final {
 public:
     explicit PjsuaTransportManager(const PjsuaApi &api = NativePjsuaApi()) noexcept : api_(api) {}
     Error Initialize(SignalingTransportPolicy) noexcept;
-    pjsua_transport_id Id() const noexcept { return id_; }
+    pjsua_transport_id Id() const noexcept;
     Error Shutdown() noexcept;
 private:
     const PjsuaApi &api_; pjsua_transport_id id_ = PJSUA_INVALID_ID;

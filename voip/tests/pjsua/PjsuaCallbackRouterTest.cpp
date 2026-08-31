@@ -26,11 +26,16 @@ void RunPjsuaCallbackRouterTests() {
     assert(sink.started == 1 && sink.state == 1);
     callbacks.on_incoming_call(0, 7, nullptr);
     assert(fake.SequenceEquals("answer,hangup"));
+    assert(fake.AnswerCount() == 1 && fake.HangupCount() == 1);
     first.BeginQuiescence();
     callbacks.on_reg_state2(0, &info);
     assert(sink.state == 2);
     callbacks.on_incoming_call(0, 8, nullptr);
-    assert(fake.SequenceEquals("answer,hangup"));
+    assert(fake.AnswerCount() == 2 && fake.HangupCount() == 2);
+    first.Detach();
+    assert(second.Attach(&callbacks) == Error::invalid_state);
+    callbacks.on_reg_started2(0, &info);
+    assert(sink.started == 2);
     first.MarkNativeDestroyed();
     first.Detach();
     assert(second.Attach(&callbacks) == Error::ok);

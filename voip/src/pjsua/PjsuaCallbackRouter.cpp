@@ -28,7 +28,7 @@ void PjsuaCallbackRouter::MarkNativeDestroyed() noexcept {
 }
 void PjsuaCallbackRouter::Detach() noexcept {
     AssertActor();
-    assert(native_destroyed_);
+    if (!native_destroyed_) return;
     if (active_ == this) active_ = nullptr;
     attached_ = false;
     actor_thread_ = {};
@@ -36,7 +36,7 @@ void PjsuaCallbackRouter::Detach() noexcept {
 void PjsuaCallbackRouter::OnRegistrationStarted(pjsua_acc_id account, pjsua_reg_info *info) noexcept { if (active_ != nullptr) active_->ForwardStarted(account, info); }
 void PjsuaCallbackRouter::OnRegistrationState(pjsua_acc_id account, pjsua_reg_info *info) noexcept { if (active_ != nullptr) active_->ForwardState(account, info); }
 void PjsuaCallbackRouter::OnIncomingCall(pjsua_acc_id, pjsua_call_id call, pjsip_rx_data *) noexcept {
-    if (active_ != nullptr && !active_->quiescent_) active_->GuardIncoming(call);
+    if (active_ != nullptr) active_->GuardIncoming(call);
 }
 void PjsuaCallbackRouter::GuardIncoming(pjsua_call_id call) noexcept {
     AssertActor();

@@ -24,7 +24,10 @@ void RunPjsuaRuntimeTests() {
     assert(transport.Initialize(SignalingTransportPolicy::tcp_plain) == Error::ok);
     assert(runtime.Start() == Error::ok);
     assert(runtime.Pump(17) == Error::ok);
+    assert(transport.Id() == 4);
     assert(transport.Shutdown() == Error::ok);
+    assert(transport.Shutdown() == Error::ok);
+    assert(runtime.Destroy() == Error::ok);
     assert(runtime.Destroy() == Error::ok);
     assert(fake.SequenceEquals("arena,create,defaults,init,nosnd,tcp,start,pump,close,destroy,reset"));
 

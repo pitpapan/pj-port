@@ -6,6 +6,10 @@ void PjsuaTransportManager::AssertActor() const noexcept {
     assert(actor_thread_ == std::thread::id{} || actor_thread_ == std::this_thread::get_id());
 #endif
 }
+pjsua_transport_id PjsuaTransportManager::Id() const noexcept {
+    AssertActor();
+    return id_;
+}
 Error PjsuaTransportManager::Initialize(SignalingTransportPolicy policy) noexcept {
     AssertActor(); if (actor_thread_ == std::thread::id{}) actor_thread_ = std::this_thread::get_id();
     if (policy != SignalingTransportPolicy::tcp_plain) return Error::unsupported_configuration;
