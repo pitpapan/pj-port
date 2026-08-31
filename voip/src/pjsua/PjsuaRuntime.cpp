@@ -42,7 +42,7 @@ Error PjsuaRuntime::CreateAndInitialize(const pjsua_callback &callbacks,
 Error PjsuaRuntime::Start() noexcept {
     AssertActor();
     if (!initialized_ || started_) return Error::invalid_state;
-    if (PjsuaStatus(api_.start()) != Error::ok) { (void)Destroy(); return Error::internal_failure; }
+    if (PjsuaStatus(api_.start()) != Error::ok) return Error::internal_failure;
     started_ = true; return Error::ok;
 }
 Error PjsuaRuntime::Pump(std::uint32_t timeout_ms) noexcept {

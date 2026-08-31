@@ -3,6 +3,7 @@
 
 #include "PjsuaApi.hpp"
 #include <array>
+#include <thread>
 
 namespace voip {
 struct PjsuaRegistrationRecord { pjsua_acc_id account = PJSUA_INVALID_ID; bool renew = false; };
@@ -14,9 +15,12 @@ public:
 };
 class PjsuaCallbackRouter final {
 public:
-    explicit PjsuaCallbackRouter(PjsuaCallbackSink &sink) noexcept : sink_(sink) {}
+    explicit PjsuaCallbackRouter(PjsuaCallbackSink &sink,
+                                 const PjsuaApi &api = NativePjsuaApi()) noexcept
+        : sink_(sink), api_(api) {}
     Error Attach(pjsua_callback *) noexcept;
-    void BeginQuiescence() noexcept { quiescent_ = true; }
+    void BeginQuiescence() noexcept;
+    void MarkNativeDestroyed() noexcept;
     void Detach() noexcept;
 private:
     static void OnRegistrationStarted(pjsua_acc_id, pjsua_reg_info *) noexcept;
@@ -24,7 +28,11 @@ private:
     static void OnIncomingCall(pjsua_acc_id, pjsua_call_id, pjsip_rx_data *) noexcept;
     void ForwardStarted(pjsua_acc_id, pjsua_reg_info *) noexcept;
     void ForwardState(pjsua_acc_id, pjsua_reg_info *) noexcept;
-    PjsuaCallbackSink &sink_; bool quiescent_ = false; bool attached_ = false;
+    void GuardIncoming(pjsua_call_id) noexcept;
+    void AssertActor() const noexcept;
+    PjsuaCallbackSink &sink_; const PjsuaApi &api_;
+    bool quiescent_ = false; bool attached_ = false; bool native_destroyed_ = false;
+    std::thread::id actor_thread_{};
     static PjsuaCallbackRouter *active_;
 };
 } // namespace voip

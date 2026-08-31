@@ -52,6 +52,20 @@ void RunPjsuaRuntimeTests() {
         assert(failing_transport.Shutdown() == Error::ok);
         assert(failing_runtime.Destroy() == Error::ok);
         assert(failing_runtime.Destroy() == Error::ok);
+        switch (stage) {
+        case FakePjsuaApi::Stage::arena:
+            assert(failing.SequenceEquals("arena")); break;
+        case FakePjsuaApi::Stage::create:
+            assert(failing.SequenceEquals("arena,create,reset")); break;
+        case FakePjsuaApi::Stage::init:
+            assert(failing.SequenceEquals("arena,create,defaults,init,destroy,reset")); break;
+        case FakePjsuaApi::Stage::no_sound:
+            assert(failing.SequenceEquals("arena,create,defaults,init,nosnd,destroy,reset")); break;
+        case FakePjsuaApi::Stage::transport:
+            assert(failing.SequenceEquals("arena,create,defaults,init,nosnd,tcp,destroy,reset")); break;
+        case FakePjsuaApi::Stage::start:
+            assert(failing.SequenceEquals("arena,create,defaults,init,nosnd,tcp,start,close,destroy,reset")); break;
+        }
     }
     FakePjsuaApi tls_fake;
     PjsuaTransportManager tls_transport(tls_fake.Api());

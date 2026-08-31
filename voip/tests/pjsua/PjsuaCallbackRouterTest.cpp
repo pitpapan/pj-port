@@ -1,3 +1,4 @@
+#include "FakePjsuaApi.hpp"
 #include "../../src/pjsua/PjsuaCallbackRouter.hpp"
 
 #include <cassert>
@@ -12,8 +13,9 @@ public:
 };
 
 void RunPjsuaCallbackRouterTests() {
+    FakePjsuaApi fake;
     RecordingSink sink;
-    PjsuaCallbackRouter first(sink);
+    PjsuaCallbackRouter first(sink, fake.Api());
     PjsuaCallbackRouter second(sink);
     pjsua_callback callbacks{};
     assert(first.Attach(&callbacks) == Error::ok);
@@ -22,11 +24,17 @@ void RunPjsuaCallbackRouterTests() {
     callbacks.on_reg_started2(0, &info);
     callbacks.on_reg_state2(0, &info);
     assert(sink.started == 1 && sink.state == 1);
+    callbacks.on_incoming_call(0, 7, nullptr);
+    assert(fake.SequenceEquals("answer,hangup"));
     first.BeginQuiescence();
     callbacks.on_reg_state2(0, &info);
     assert(sink.state == 2);
+    callbacks.on_incoming_call(0, 8, nullptr);
+    assert(fake.SequenceEquals("answer,hangup"));
+    first.MarkNativeDestroyed();
     first.Detach();
     assert(second.Attach(&callbacks) == Error::ok);
+    second.MarkNativeDestroyed();
     second.Detach();
 }
 } // namespace voip::test

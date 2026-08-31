@@ -35,8 +35,8 @@ private:
     static pj_status_t Start() { active_->Record("start"); return active_->Failed(Stage::start) ? PJ_EUNKNOWN : PJ_SUCCESS; }
     static int Pump(unsigned) { active_->Record("pump"); return 0; }
     static pj_status_t Destroy() { active_->Record("destroy"); return PJ_SUCCESS; }
-    static pj_status_t CallAnswer(pjsua_call_id, unsigned, const pj_str_t *, const pjsua_msg_data *) { return PJ_SUCCESS; }
-    static pj_status_t CallHangup(pjsua_call_id, unsigned, const pj_str_t *, const pjsua_msg_data *) { return PJ_SUCCESS; }
+    static pj_status_t CallAnswer(pjsua_call_id, unsigned, const pj_str_t *, const pjsua_msg_data *) { active_->Record("answer"); return PJ_SUCCESS; }
+    static pj_status_t CallHangup(pjsua_call_id, unsigned, const pj_str_t *, const pjsua_msg_data *) { active_->Record("hangup"); return PJ_SUCCESS; }
     PjsuaApi api_{ArenaInstall, ArenaReset, Create, ConfigDefault, LogDefault, MediaDefault, TransportDefault, Init, NoSound, TransportCreate, TransportClose, Start, Pump, Destroy, CallAnswer, CallHangup};
 };
 inline FakePjsuaApi *FakePjsuaApi::active_ = nullptr;
