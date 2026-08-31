@@ -9,7 +9,7 @@ VoipService::VoipService() noexcept : impl_(nullptr) {
     static_assert(alignof(std::max_align_t) >= alignof(Impl), "placement storage alignment");
     impl_ = ::new (static_cast<void *>(storage_)) Impl();
 }
-VoipService::~VoipService() noexcept { if (impl_ != nullptr) { (void)impl_->runtime.Shutdown(); impl_->~Impl(); impl_ = nullptr; } }
+VoipService::~VoipService() noexcept { if (impl_ != nullptr) { impl_->~Impl(); impl_ = nullptr; } }
 Error VoipService::Initialize(const ServiceConfig &c) noexcept { return impl_ ? impl_->runtime.Initialize(c) : Error::internal_failure; }
 Error VoipService::Shutdown() noexcept { return impl_ ? impl_->runtime.Shutdown() : Error::internal_failure; }
 Error VoipService::GetAgentHandle(std::uint8_t i, AgentHandle *h) const noexcept { return impl_ ? impl_->runtime.GetAgentHandle(i, h) : Error::internal_failure; }

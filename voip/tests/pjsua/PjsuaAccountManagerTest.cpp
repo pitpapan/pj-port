@@ -63,6 +63,51 @@ void RunPjsuaAccountManagerTests() {
     assert(accounts.StartInitialRegistration() == Error::ok && fake.RegistrationCount() == 4);
     assert(accounts.Shutdown() == Error::ok && accounts.Count() == 0 && accounts.Resolve(2) == nullptr);
 
+    // A shutdown completion is an exact per-account token, not a global
+    // counter. Duplicate, stale, skipped-disabled, and out-of-order callback
+    // delivery must never let another account's pending teardown be consumed.
+    Fixture shutdown_fixture; AgentRegistry shutdown_registry;
+    assert(shutdown_fixture.Initialize(shutdown_registry) == Error::ok);
+    FakePjsuaApi shutdown_fake; PjsuaAccountManager shutdown_accounts(shutdown_fake.Api());
+    assert(shutdown_accounts.Initialize(shutdown_registry, 4) == Error::ok);
+    assert(shutdown_accounts.StartInitialRegistration() == Error::ok);
+    shutdown_fake.SetUnregistrationCallbacksDeferred(true);
+    assert(shutdown_accounts.BeginShutdown() == Error::ok);
+    assert(shutdown_accounts.PendingUnregistrations() == 4);
+    pjsua_acc_id first_id{}; pjsua_acc_id second_id{}; pjsua_acc_id third_id{};
+    pjsua_acc_id fourth_id{}; pjsua_acc_id disabled_id{};
+    AgentHandle shutdown_handle{};
+    for (std::uint8_t i = 0; i < 5; ++i) {
+        assert(shutdown_registry.GetAgentHandle(i, &shutdown_handle) == Error::ok);
+        pjsua_acc_id id{}; assert(shutdown_accounts.NativeId(shutdown_handle, &id) == Error::ok);
+        if (i == 0) first_id = id;
+        if (i == 1) second_id = id;
+        if (i == 2) third_id = id;
+        if (i == 3) fourth_id = id;
+        if (i == 4) disabled_id = id;
+    }
+    const auto complete_unregistration = [&shutdown_accounts](pjsua_acc_id id) noexcept {
+        PjsuaRegistrationRecord callback{};
+        callback.account = id;
+        callback.native_status = PJ_SUCCESS;
+        callback.sip_status = 200;
+        callback.unregistration = true;
+        shutdown_accounts.OnRegistrationState(callback);
+    };
+    complete_unregistration(third_id);
+    assert(shutdown_accounts.PendingUnregistrations() == 3);
+    complete_unregistration(third_id);
+    complete_unregistration(disabled_id);
+    complete_unregistration(PJSUA_INVALID_ID);
+    assert(shutdown_accounts.PendingUnregistrations() == 3);
+    complete_unregistration(first_id);
+    assert(shutdown_accounts.PendingUnregistrations() == 2);
+    complete_unregistration(fourth_id);
+    assert(shutdown_accounts.PendingUnregistrations() == 1);
+    complete_unregistration(second_id);
+    assert(shutdown_accounts.PendingUnregistrations() == 0);
+    assert(shutdown_accounts.Shutdown() == Error::ok);
+
     FakePjsuaApi rollback_fake; rollback_fake.FailAccountAdd(3); PjsuaAccountManager rollback(rollback_fake.Api());
     assert(rollback.Initialize(registry, 4) != Error::ok && rollback.Count() == 0 && rollback_fake.AccountDeleteCount() == 2);
     assert(rollback_fake.DeletedAccount(0) == 0 && rollback_fake.DeletedAccount(1) == 2);

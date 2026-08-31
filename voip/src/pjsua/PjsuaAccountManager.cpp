@@ -219,6 +219,7 @@ Error PjsuaAccountManager::BeginShutdown() noexcept {
             previous == RegistrationState::transport_failed)
             continue;
         context.registration = RegistrationState::unregistering;
+        context.unregistration_pending = true;
         ++pending_unregistrations_;
         Notify(context, RegistrationState::unregistering, Error::ok, 0, "");
         // Count before entering PJSUA: a fake or future native implementation
@@ -227,6 +228,7 @@ Error PjsuaAccountManager::BeginShutdown() noexcept {
             // A failed request cannot produce the completion we just made
             // pending. Leave the context alive for ordered account deletion,
             // but never wait for an impossible callback.
+            context.unregistration_pending = false;
             --pending_unregistrations_;
         }
     }
@@ -367,8 +369,10 @@ void PjsuaAccountManager::OnRegistrationState(const PjsuaRegistrationRecord &rec
     PjsuaAccountContext *context = Resolve(record.account);
     if (context == nullptr) return;
     if (shutting_down_) {
-        if (record.unregistration || !record.renew) {
-            if (pending_unregistrations_ != 0) --pending_unregistrations_;
+        if ((record.unregistration || !record.renew) &&
+            context->unregistration_pending) {
+            context->unregistration_pending = false;
+            --pending_unregistrations_;
             context->registration = RegistrationState::disabled;
             Notify(*context, RegistrationState::disabled, Error::ok,
                    record.sip_status > 0 ? static_cast<std::uint16_t>(record.sip_status) : 0,

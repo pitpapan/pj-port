@@ -8,7 +8,12 @@ namespace voip {
 VoipRuntime::VoipRuntime() noexcept : scheduler_(agents_) {}
 
 VoipRuntime::~VoipRuntime() noexcept {
-    (void)Shutdown();
+    // A public caller may accept the bounded shutdown timeout, but destruction
+    // has no error channel in which to return that result.  Keep the actor
+    // alive and wait in the normal signal-based shutdown path until its native
+    // teardown has detached every callback route.  Shutdown() blocks on the
+    // actor signal for each bounded interval, so this is not a polling spin.
+    while (Shutdown() == Error::shutdown_timeout) {}
     CoreLockGuard shutdown_lock(shutdown_mutex_);
     bool actor_needs_stop = false;
     {
