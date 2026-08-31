@@ -39,6 +39,11 @@ struct PjsuaApi {
 };
 
 const PjsuaApi &NativePjsuaApi() noexcept;
+#if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
+// Internal component-profile injection only.  The public service ABI neither
+// includes this header nor exposes PJSUA types.
+void SetNativePjsuaApiForComponentTest(const PjsuaApi *) noexcept;
+#endif
 Error PjsuaStatus(pj_status_t status) noexcept;
 
 } // namespace voip

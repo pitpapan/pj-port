@@ -6,6 +6,12 @@ static_assert(PJSUA_MAX_CALLS == 7, "PJSUA call capacity must remain seven");
 static_assert(PJSUA_MAX_CONF_PORTS == 12, "PJSUA conference capacity must remain twelve");
 static_assert(PJSIP_HAS_TLS_TRANSPORT == 0, "TLS is outside the initial profile");
 static_assert(PJMEDIA_HAS_SRTP == 0, "SRTP is outside the initial profile");
+#if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
+namespace { const PjsuaApi *component_test_api = nullptr; }
+void SetNativePjsuaApiForComponentTest(const PjsuaApi *api) noexcept {
+    component_test_api = api;
+}
+#endif
 
 const PjsuaApi &NativePjsuaApi() noexcept {
     static const PjsuaApi api{pj_zephyr_pool_arena_install,
@@ -30,7 +36,11 @@ const PjsuaApi &NativePjsuaApi() noexcept {
                               pjsua_acc_set_registration,
                               pjsua_call_answer,
                               pjsua_call_hangup};
+#if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
+    return component_test_api != nullptr ? *component_test_api : api;
+#else
     return api;
+#endif
 }
 
 Error PjsuaStatus(pj_status_t status) noexcept {

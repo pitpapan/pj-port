@@ -2,7 +2,6 @@
 #include "VoipRuntime.hpp"
 
 #include <chrono>
-
 namespace voip {
 
 bool CoreActor::Start(VoipRuntime &runtime) noexcept {

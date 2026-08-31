@@ -3,6 +3,15 @@
 #include <cstring>
 namespace voip {
 PjsuaCallbackRouter *PjsuaCallbackRouter::active_ = nullptr;
+#if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
+unsigned PjsuaCallbackRouter::callback_entry_count_ = 0;
+const PjsuaCallbackRouter *PjsuaCallbackRouter::ActiveForTest() noexcept {
+    return active_;
+}
+unsigned PjsuaCallbackRouter::CallbackEntryCountForTest() noexcept {
+    return callback_entry_count_;
+}
+#endif
 void PjsuaCallbackRouter::AssertActor() const noexcept {
 #ifndef NDEBUG
     assert(actor_thread_ == std::thread::id{} || actor_thread_ == std::this_thread::get_id());
@@ -34,9 +43,22 @@ void PjsuaCallbackRouter::Detach() noexcept {
     attached_ = false;
     actor_thread_ = {};
 }
-void PjsuaCallbackRouter::OnRegistrationStarted(pjsua_acc_id account, pjsua_reg_info *info) noexcept { if (active_ != nullptr) active_->ForwardStarted(account, info); }
-void PjsuaCallbackRouter::OnRegistrationState(pjsua_acc_id account, pjsua_reg_info *info) noexcept { if (active_ != nullptr) active_->ForwardState(account, info); }
+void PjsuaCallbackRouter::OnRegistrationStarted(pjsua_acc_id account, pjsua_reg_info *info) noexcept {
+#if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
+    ++callback_entry_count_;
+#endif
+    if (active_ != nullptr) active_->ForwardStarted(account, info);
+}
+void PjsuaCallbackRouter::OnRegistrationState(pjsua_acc_id account, pjsua_reg_info *info) noexcept {
+#if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
+    ++callback_entry_count_;
+#endif
+    if (active_ != nullptr) active_->ForwardState(account, info);
+}
 void PjsuaCallbackRouter::OnIncomingCall(pjsua_acc_id, pjsua_call_id call, pjsip_rx_data *) noexcept {
+#if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
+    ++callback_entry_count_;
+#endif
     if (active_ != nullptr) active_->GuardIncoming(call);
 }
 void PjsuaCallbackRouter::GuardIncoming(pjsua_call_id call) noexcept {

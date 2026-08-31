@@ -32,6 +32,10 @@ public:
     void BeginQuiescence() noexcept;
     void MarkNativeDestroyed() noexcept;
     void Detach() noexcept;
+#if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
+    static const PjsuaCallbackRouter *ActiveForTest() noexcept;
+    static unsigned CallbackEntryCountForTest() noexcept;
+#endif
 private:
     static void OnRegistrationStarted(pjsua_acc_id, pjsua_reg_info *) noexcept;
     static void OnRegistrationState(pjsua_acc_id, pjsua_reg_info *) noexcept;
@@ -44,6 +48,9 @@ private:
     bool quiescent_ = false; bool attached_ = false; bool native_destroyed_ = false;
     std::thread::id actor_thread_{};
     static PjsuaCallbackRouter *active_;
+#if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
+    static unsigned callback_entry_count_;
+#endif
 };
 } // namespace voip
 #endif

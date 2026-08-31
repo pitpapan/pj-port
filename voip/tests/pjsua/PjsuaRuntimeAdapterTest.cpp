@@ -1,6 +1,7 @@
 #include "FakePjsuaApi.hpp"
 #include "../../src/core/AgentRegistry.hpp"
 #include "../../src/pjsua/PjsuaRuntimeAdapter.hpp"
+#include "../../src/pjsua/PjsuaCallbackRouter.hpp"
 
 #include <cassert>
 #include <zephyr/sys/printk.h>
@@ -17,8 +18,10 @@ struct Fixture {
 }
 
 void RunPjsuaRuntimeAdapterTests() {
+    constexpr unsigned adapter_limit = 6;
     Fixture fixture; AgentRegistry registry; assert(registry.Initialize(fixture.config) == Error::ok);
-    FakePjsuaApi fake; PjsuaRuntimeAdapter adapter(fake.Api());
+    static FakePjsuaApi fake; fake.Activate(); PjsuaRuntimeAdapter adapter(fake.Api());
+    auto initial_lifecycle = [&]() __attribute__((noinline)) {
     assert(adapter.Initialize(registry, fixture.config.security, fixture.config.conference_format) == Error::ok);
     assert(fake.AccountAddCount() == 5 && fake.RegistrationCount() == 4);
     assert(adapter.Pump(100, 0) == Error::ok);
@@ -41,24 +44,37 @@ void RunPjsuaRuntimeAdapterTests() {
     assert(adapter.Shutdown() == Error::ok);
     printk("PjsuaRuntimeAdapterTest first lifecycle\n");
     assert(fake.SequenceEquals("arena,create,defaults,init,nosnd,tcp,start,add,add,add,add,add,reg,reg,reg,reg,pump,reg,reg,reg,reg,pump,pump,pump,clear,del,clear,del,clear,del,clear,del,clear,del,close,destroy,reset"));
+    };
+    if (adapter_limit >= 1) initial_lifecycle();
 
-    FakePjsuaApi one; PjsuaRuntimeAdapter first(one.Api());
-    PjsuaRuntimeAdapter second(one.Api());
+    auto duplicate_adapter = [&]() __attribute__((noinline)) {
+    fake.Reset(); PjsuaRuntimeAdapter first(fake.Api());
+    PjsuaRuntimeAdapter second(fake.Api());
     assert(first.Initialize(registry, fixture.config.security, fixture.config.conference_format) == Error::ok);
-    printk("PjsuaRuntimeAdapterTest second lifecycle attached\n");
     assert(second.Initialize(registry, fixture.config.security, fixture.config.conference_format) == Error::invalid_state);
     assert(first.Shutdown() == Error::busy); (void)first.Pump(1, 0); (void)first.Shutdown(); (void)first.Pump(1001, 0); assert(first.Shutdown() == Error::ok);
+    };
+    if (adapter_limit >= 2) duplicate_adapter();
 
-    FakePjsuaApi immediate_failure;
-    PjsuaRuntimeAdapter failed_unregistration(immediate_failure.Api());
+    auto unregistration_failure = [&]() __attribute__((noinline)) {
+    fake.Reset();
+    PjsuaRuntimeAdapter failed_unregistration(fake.Api());
+    const unsigned callbacks_before = PjsuaCallbackRouter::CallbackEntryCountForTest();
     assert(failed_unregistration.Initialize(registry, fixture.config.security,
                                             fixture.config.conference_format) == Error::ok);
-    immediate_failure.FailUnregistration(PJ_EUNKNOWN);
+    fake.FailUnregistration(PJ_EUNKNOWN);
     assert(failed_unregistration.Shutdown() == Error::busy);
     // An immediate native failure has no callback to wait for.  Teardown must
     // continue on the next actor step instead of relying on a timeout.
     assert(failed_unregistration.Shutdown() == Error::ok);
+    assert(fake.AccountAddCount() == 5 && fake.RegistrationCount() == 8 &&
+           fake.AccountClearCount() == 5 && fake.AccountDeleteCount() == 5);
+    assert(PjsuaCallbackRouter::CallbackEntryCountForTest() == callbacks_before);
+    assert(PjsuaCallbackRouter::ActiveForTest() == nullptr);
+    };
+    if (adapter_limit >= 3) unregistration_failure();
 
+    auto startup_transaction = [&]() __attribute__((noinline)) {
     // Startup is transactional at every composition boundary.  These calls
     // deliberately use test-only fake controls added with this matrix.
     for (FakePjsuaApi::Stage stage : {FakePjsuaApi::Stage::arena,
@@ -67,25 +83,28 @@ void RunPjsuaRuntimeAdapterTests() {
                                       FakePjsuaApi::Stage::no_sound,
                                       FakePjsuaApi::Stage::transport,
                                       FakePjsuaApi::Stage::start}) {
-        FakePjsuaApi startup_failure; startup_failure.Fail(stage);
-        PjsuaRuntimeAdapter candidate(startup_failure.Api());
+        fake.Reset(); fake.Fail(stage);
+        PjsuaRuntimeAdapter candidate(fake.Api());
         assert(candidate.Initialize(registry, fixture.config.security,
                                     fixture.config.conference_format) != Error::ok);
-        assert(startup_failure.AccountAddCount() == 0);
+        assert(fake.AccountAddCount() == 0);
     }
     for (std::size_t position = 1; position <= 5; ++position) {
-        FakePjsuaApi account_failure; account_failure.FailAccountAdd(position);
-        PjsuaRuntimeAdapter candidate(account_failure.Api());
+        fake.Reset(); fake.FailAccountAdd(position);
+        PjsuaRuntimeAdapter candidate(fake.Api());
         assert(candidate.Initialize(registry, fixture.config.security,
                                     fixture.config.conference_format) != Error::ok);
-        assert(account_failure.AccountAddCount() == position);
-        assert(account_failure.AccountDeleteCount() == position - 1);
+        assert(fake.AccountAddCount() == position);
+        assert(fake.AccountDeleteCount() == position - 1);
     }
+    };
+    if (adapter_limit >= 4) startup_transaction();
 
+    auto registration_failure = [&]() __attribute__((noinline)) {
     // One initial REGISTER failure is an isolated copied failure/retry pair;
     // it does not undo startup or suppress later enabled accounts.
-    FakePjsuaApi registration_failure; registration_failure.FailRegistrationFor(2, PJ_EUNKNOWN);
-    PjsuaRuntimeAdapter registration_adapter(registration_failure.Api());
+    fake.Reset(); fake.FailRegistrationFor(2, PJ_EUNKNOWN);
+    PjsuaRuntimeAdapter registration_adapter(fake.Api());
     assert(registration_adapter.Initialize(registry, fixture.config.security,
                                            fixture.config.conference_format) == Error::ok);
     RuntimeNotification failure{}; RuntimeNotification retry{};
@@ -93,27 +112,31 @@ void RunPjsuaRuntimeAdapterTests() {
     assert(registration_adapter.TryGetNotification(&retry));
     assert(failure.agent.slot == 0 && failure.registration == RegistrationState::transport_failed);
     assert(retry.agent.slot == 0 && retry.registration == RegistrationState::retry_wait);
-    assert(registration_failure.RegistrationCount(2) == 1);
-    assert(registration_failure.RegistrationCount(0) == 1);
-    assert(registration_failure.RegistrationCount(4) == 1);
-    assert(registration_failure.RegistrationCount(1) == 1);
-    assert(registration_failure.RegistrationCount(3) == 0);
+    assert(fake.RegistrationCount(2) == 1);
+    assert(fake.RegistrationCount(0) == 1);
+    assert(fake.RegistrationCount(4) == 1);
+    assert(fake.RegistrationCount(1) == 1);
+    assert(fake.RegistrationCount(3) == 0);
     assert(registration_adapter.Shutdown() == Error::busy);
     assert(registration_adapter.Pump(2, 0) == Error::ok);
     assert(registration_adapter.Shutdown() == Error::ok);
+    };
+    if (adapter_limit >= 5) registration_failure();
 
+    auto notification_pressure = [&]() __attribute__((noinline)) {
     // The bounded adapter ring must not pop manager records while full.  Once
     // space is available, the guaranteed failure/retry pair remains ordered.
-    FakePjsuaApi pressure_fake; PjsuaRuntimeAdapter pressure(pressure_fake.Api());
+    fake.Reset(); PjsuaRuntimeAdapter pressure(fake.Api());
     assert(pressure.Initialize(registry, fixture.config.security,
                                fixture.config.conference_format) == Error::ok);
     pressure.FillNotificationRingForTest();
-    pressure_fake.DeliverRegistrationFailure(2, PJ_EUNKNOWN);
+    fake.DeliverRegistrationFailure(2, PJ_EUNKNOWN);
     assert(pressure.Pump(500, 0) == Error::ok);
     RuntimeNotification staged{};
     for (std::size_t i = 0; i < RuntimeAdapter::notification_capacity; ++i)
         assert(pressure.TryGetNotification(&staged));
     assert(pressure.Pump(501, 0) == Error::ok);
+    RuntimeNotification failure{}; RuntimeNotification retry{};
     assert(pressure.TryGetNotification(&failure));
     assert(pressure.TryGetNotification(&retry));
     assert(failure.registration == RegistrationState::transport_failed);
@@ -122,6 +145,9 @@ void RunPjsuaRuntimeAdapterTests() {
     assert(pressure.Shutdown() == Error::busy);
     assert(pressure.Pump(502, 0) == Error::ok);
     assert(pressure.Shutdown() == Error::ok);
+    };
+    if (adapter_limit >= 6) notification_pressure();
+    fake.Deactivate();
     printk("PjsuaRuntimeAdapterTest PASSED\n");
 }
 } // namespace voip::test
