@@ -25,6 +25,7 @@ const PjsuaApi &NativePjsuaApi() noexcept {
                               pjsua_acc_config_default,
                               pjsua_acc_add,
                               pjsua_acc_set_user_data,
+                              pjsua_acc_get_user_data,
                               pjsua_acc_del,
                               pjsua_acc_set_registration,
                               pjsua_call_answer,

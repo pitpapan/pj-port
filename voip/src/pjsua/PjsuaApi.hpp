@@ -29,6 +29,7 @@ struct PjsuaApi {
     pj_status_t (*acc_add)(const pjsua_acc_config *, pj_bool_t,
                            pjsua_acc_id *) = nullptr;
     pj_status_t (*acc_set_user_data)(pjsua_acc_id, void *) = nullptr;
+    void *(*acc_get_user_data)(pjsua_acc_id) = nullptr;
     pj_status_t (*acc_del)(pjsua_acc_id) = nullptr;
     pj_status_t (*acc_set_registration)(pjsua_acc_id, pj_bool_t) = nullptr;
     pj_status_t (*call_answer)(pjsua_call_id, unsigned,

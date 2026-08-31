@@ -27,20 +27,29 @@ public:
     void FailAccountAdd(std::size_t add_number) noexcept { fail_account_add_ = add_number; }
     std::size_t AccountAddCount() const noexcept { return account_add_count_; }
     std::size_t AccountDeleteCount() const noexcept { return account_delete_count_; }
+    std::size_t AccountClearCount() const noexcept { return account_clear_count_; }
+    std::size_t AccountGetUserDataCount() const noexcept { return account_get_user_data_count_; }
     std::size_t RegistrationCount() const noexcept { return registration_count_; }
     const pjsua_acc_config &AccountConfig(std::size_t index) const noexcept { return account_configs_[index]; }
     pjsua_acc_id DeletedAccount(std::size_t index) const noexcept { return deleted_accounts_[index]; }
+    pjsua_acc_id ClearedAccount(std::size_t index) const noexcept { return cleared_accounts_[index]; }
+    void SetAccountUserData(pjsua_acc_id id, void *value) noexcept {
+        if (id >= 0 && static_cast<std::size_t>(id) < account_user_data_.size())
+            account_user_data_[static_cast<std::size_t>(id)] = value;
+    }
 private:
     static FakePjsuaApi *active_; Stage failed_ = Stage::arena; bool has_failure_ = false;
     char sequence_[160]{}; std::size_t used_ = 0;
     pjsua_config ua_{}; pjsua_media_config media_{}; pjsua_logging_config log_{};
     unsigned answer_count_ = 0; unsigned hangup_count_ = 0;
     unsigned answer_status_ = 0; unsigned hangup_status_ = 0;
-    std::array<pjsua_acc_id, 5> account_ids_{{11, 3, 17, 1, 9}};
+    std::array<pjsua_acc_id, 5> account_ids_{{2, 0, 4, 1, 3}};
     std::array<pjsua_acc_config, 5> account_configs_{};
     std::array<pjsua_acc_id, 5> deleted_accounts_{};
+    std::array<pjsua_acc_id, 5> cleared_accounts_{};
+    std::array<void *, 5> account_user_data_{};
     std::size_t account_ids_count_ = account_ids_.size();
-    std::size_t account_add_count_ = 0, account_delete_count_ = 0;
+    std::size_t account_add_count_ = 0, account_delete_count_ = 0, account_clear_count_ = 0, account_get_user_data_count_ = 0;
     std::size_t registration_count_ = 0, fail_account_add_ = 0;
     void Record(const char *word) noexcept { if (used_ != 0) sequence_[used_++] = ','; while (*word) sequence_[used_++] = *word++; sequence_[used_] = 0; }
     bool Failed(Stage s) const noexcept { return has_failure_ && failed_ == s; }
@@ -65,14 +74,21 @@ private:
         if (active_->fail_account_add_ != 0 && index + 1 == active_->fail_account_add_) return PJ_EUNKNOWN;
         active_->account_configs_[index] = *config;
         *id = index < active_->account_ids_count_ ? active_->account_ids_[index] : PJSUA_INVALID_ID;
+        if (*id >= 0 && static_cast<std::size_t>(*id) < active_->account_user_data_.size())
+            active_->account_user_data_[static_cast<std::size_t>(*id)] = config->user_data;
         return PJ_SUCCESS;
     }
-    static pj_status_t AccountSetUserData(pjsua_acc_id, void *) { active_->Record("clear"); return PJ_SUCCESS; }
+    static pj_status_t AccountSetUserData(pjsua_acc_id id, void *value) { active_->Record("clear"); active_->cleared_accounts_[active_->account_clear_count_++] = id; active_->SetAccountUserData(id, value); return PJ_SUCCESS; }
+    static void *AccountGetUserData(pjsua_acc_id id) {
+        ++active_->account_get_user_data_count_;
+        if (id < 0 || static_cast<std::size_t>(id) >= active_->account_user_data_.size()) return nullptr;
+        return active_->account_user_data_[static_cast<std::size_t>(id)];
+    }
     static pj_status_t AccountDelete(pjsua_acc_id id) { active_->Record("del"); active_->deleted_accounts_[active_->account_delete_count_++] = id; return PJ_SUCCESS; }
     static pj_status_t AccountSetRegistration(pjsua_acc_id, pj_bool_t) { active_->Record("reg"); ++active_->registration_count_; return PJ_SUCCESS; }
     static pj_status_t CallAnswer(pjsua_call_id, unsigned status, const pj_str_t *, const pjsua_msg_data *) { ++active_->answer_count_; active_->answer_status_ = status; active_->Record("answer"); return PJ_SUCCESS; }
     static pj_status_t CallHangup(pjsua_call_id, unsigned status, const pj_str_t *, const pjsua_msg_data *) { ++active_->hangup_count_; active_->hangup_status_ = status; active_->Record("hangup"); return PJ_SUCCESS; }
-    PjsuaApi api_{ArenaInstall, ArenaReset, Create, ConfigDefault, LogDefault, MediaDefault, TransportDefault, Init, NoSound, TransportCreate, TransportClose, Start, Pump, Destroy, AccountConfigDefault, AccountAdd, AccountSetUserData, AccountDelete, AccountSetRegistration, CallAnswer, CallHangup};
+    PjsuaApi api_{ArenaInstall, ArenaReset, Create, ConfigDefault, LogDefault, MediaDefault, TransportDefault, Init, NoSound, TransportCreate, TransportClose, Start, Pump, Destroy, AccountConfigDefault, AccountAdd, AccountSetUserData, AccountGetUserData, AccountDelete, AccountSetRegistration, CallAnswer, CallHangup};
 };
 inline FakePjsuaApi *FakePjsuaApi::active_ = nullptr;
 } // namespace voip::test

@@ -40,6 +40,11 @@ private:
     void AssertActor() const noexcept;
     void Clear() noexcept;
     void Rollback() noexcept;
+    static bool IsNativeIdInDomain(pjsua_acc_id) noexcept;
+    NativeLookup *FindLookup(pjsua_acc_id) noexcept;
+    const NativeLookup *FindLookup(pjsua_acc_id) const noexcept;
+    PjsuaAccountContext *OwnedContext(void *) noexcept;
+    const PjsuaAccountContext *OwnedContext(const void *) const noexcept;
     bool InsertLookup(pjsua_acc_id, PjsuaAccountContext *) noexcept;
     static pj_str_t NativeString(char *) noexcept;
 };

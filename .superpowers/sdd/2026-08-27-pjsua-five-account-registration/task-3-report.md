@@ -14,6 +14,13 @@
   rewriting, RFC5626, SRTP, and custom ICE/TURN selection.
 - Added reverse-order transactional rollback, including user-data clearing,
   for add failure, duplicate native ID, and invalid native ID.
+- Review follow-up: account IDs are accepted only in the fixed PJSUA account
+  domain. Malformed successful returns never enter context/count/lookup state
+  and never receive native cleanup. A duplicate malformed return leaves its
+  uncommitted context untouched while rolling back the previously committed
+  context exactly once. `Resolve()` now checks fixed lookup/domain, obtains
+  PJSUA user data, compares it to a manager-owned fixed context without
+  dereferencing foreign data, and validates occupied/native-ID coherence.
 - Exposed bounded `Resolve()` and `NativeId()` prerequisites. Initial
   registration is a separate post-add method and only selects contexts marked
   `register_on_start`.
@@ -33,14 +40,20 @@ behavior was added.
   `PJSUA PLAN 3 COMPONENT RESULT: PASSED`. The existing harness subsequently
   faults after `main()` returns; the bounded QEMU process was explicitly
   terminated and its stale `qemu.pid` removed.
-- `voip/tests/run_host_tests.sh` completed successfully (all 10 host-test
-  commands).
+- The follow-up `voip/tests/run_host_tests.sh` is blocked by a reproducible,
+  unrelated pre-existing `VoipEventQueueTest` timeout at
+  `test_wait_pop_timeout_and_wakeup()` line 56. The Task 3 diff changes only
+  PJSUA account-manager/component-test files; no core event-queue source or
+  test was modified. The earlier Task 3 host-suite run completed successfully.
 - `git diff --check` completed successfully.
 
 ## Review checklist
 
 All Task 3 requirements are covered by fake-API tests: one/five accounts,
-scrambled IDs, sixth/reinitialization rejection, duplicate and invalid IDs,
-third-add rollback, exact copied account configuration, disabled native
-features, disabled-agent registration, bounded lookup, and context ownership
-shape. The manager uses only fixed arrays and no dynamic allocation.
+scrambled IDs in the PJSUA five-account domain, sixth/reinitialization
+rejection, duplicate and invalid IDs, third-add rollback, exact copied account
+configuration (including `pj_str_t` lengths, realm, and scheme), disabled
+native features, user-data validation for unknown/null/mismatched/foreign and
+cleared values, disabled-agent registration, bounded lookup, and explicit
+context-layout ownership guards. The manager uses only fixed arrays and no
+dynamic allocation.

@@ -27,9 +27,39 @@ std::size_t PjsuaAccountManager::Count() const noexcept {
     return count_;
 }
 
+bool PjsuaAccountManager::IsNativeIdInDomain(pjsua_acc_id id) noexcept {
+    return id >= 0 && id < PJSUA_MAX_ACC;
+}
+
+PjsuaAccountManager::NativeLookup *PjsuaAccountManager::FindLookup(pjsua_acc_id id) noexcept {
+    if (!IsNativeIdInDomain(id)) return nullptr;
+    for (NativeLookup &entry : lookup_)
+        if (entry.context != nullptr && entry.id == id) return &entry;
+    return nullptr;
+}
+
+const PjsuaAccountManager::NativeLookup *PjsuaAccountManager::FindLookup(pjsua_acc_id id) const noexcept {
+    if (!IsNativeIdInDomain(id)) return nullptr;
+    for (const NativeLookup &entry : lookup_)
+        if (entry.context != nullptr && entry.id == id) return &entry;
+    return nullptr;
+}
+
+PjsuaAccountContext *PjsuaAccountManager::OwnedContext(void *candidate) noexcept {
+    for (PjsuaAccountContext &context : contexts_)
+        if (candidate == &context) return &context;
+    return nullptr;
+}
+
+const PjsuaAccountContext *PjsuaAccountManager::OwnedContext(const void *candidate) const noexcept {
+    for (const PjsuaAccountContext &context : contexts_)
+        if (candidate == &context) return &context;
+    return nullptr;
+}
+
 bool PjsuaAccountManager::InsertLookup(pjsua_acc_id id,
                                        PjsuaAccountContext *context) noexcept {
-    if (id == PJSUA_INVALID_ID || context == nullptr) return false;
+    if (!IsNativeIdInDomain(id) || context == nullptr) return false;
     for (NativeLookup &entry : lookup_) {
         if (entry.context != nullptr && entry.id == id) return false;
     }
@@ -41,14 +71,22 @@ bool PjsuaAccountManager::InsertLookup(pjsua_acc_id id,
 
 PjsuaAccountContext *PjsuaAccountManager::Resolve(pjsua_acc_id id) noexcept {
     AssertActor();
-    for (NativeLookup &entry : lookup_) if (entry.context != nullptr && entry.id == id) return entry.context;
-    return nullptr;
+    NativeLookup *entry = FindLookup(id);
+    if (entry == nullptr) return nullptr;
+    PjsuaAccountContext *context = OwnedContext(api_.acc_get_user_data(id));
+    if (context == nullptr || context != entry->context || !context->occupied ||
+        context->account_id != id) return nullptr;
+    return context;
 }
 
 const PjsuaAccountContext *PjsuaAccountManager::Resolve(pjsua_acc_id id) const noexcept {
     AssertActor();
-    for (const NativeLookup &entry : lookup_) if (entry.context != nullptr && entry.id == id) return entry.context;
-    return nullptr;
+    const NativeLookup *entry = FindLookup(id);
+    if (entry == nullptr) return nullptr;
+    const PjsuaAccountContext *context = OwnedContext(api_.acc_get_user_data(id));
+    if (context == nullptr || context != entry->context || !context->occupied ||
+        context->account_id != id) return nullptr;
+    return context;
 }
 
 Error PjsuaAccountManager::NativeId(AgentHandle agent, pjsua_acc_id *id) const noexcept {
@@ -129,6 +167,11 @@ Error PjsuaAccountManager::Initialize(const AgentRegistry &registry,
         pjsua_acc_id native_id = PJSUA_INVALID_ID;
         if (PjsuaStatus(api_.acc_add(&config, PJ_FALSE, &native_id)) != Error::ok) {
             Rollback(); return Error::internal_failure;
+        }
+        if (!IsNativeIdInDomain(native_id) || FindLookup(native_id) != nullptr) {
+            context = PjsuaAccountContext{};
+            Rollback();
+            return Error::internal_failure;
         }
         context.account_id = native_id;
         ++count_;
