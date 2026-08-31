@@ -25,6 +25,12 @@ struct PjsuaApi {
     pj_status_t (*start)() = nullptr;
     int (*handle_events)(unsigned) = nullptr;
     pj_status_t (*destroy)() = nullptr;
+    void (*acc_config_default)(pjsua_acc_config *) = nullptr;
+    pj_status_t (*acc_add)(const pjsua_acc_config *, pj_bool_t,
+                           pjsua_acc_id *) = nullptr;
+    pj_status_t (*acc_set_user_data)(pjsua_acc_id, void *) = nullptr;
+    pj_status_t (*acc_del)(pjsua_acc_id) = nullptr;
+    pj_status_t (*acc_set_registration)(pjsua_acc_id, pj_bool_t) = nullptr;
     pj_status_t (*call_answer)(pjsua_call_id, unsigned,
                                const pj_str_t *, const pjsua_msg_data *) = nullptr;
     pj_status_t (*call_hangup)(pjsua_call_id, unsigned,
