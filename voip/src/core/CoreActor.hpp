@@ -29,7 +29,7 @@ private:
 #if defined(__ZEPHYR__)
     static void Entry(void *, void *, void *) noexcept;
     struct k_thread thread_data_{};
-    K_KERNEL_STACK_MEMBER(stack_, 4096);
+    K_KERNEL_STACK_MEMBER(stack_, CONFIG_VOIP_CORE_ACTOR_STACK_SIZE);
     k_tid_t thread_ = nullptr;
 #else
     std::thread thread_{};

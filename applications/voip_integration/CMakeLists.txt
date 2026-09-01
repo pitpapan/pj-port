@@ -14,7 +14,8 @@ if(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
   # The component profile compiles the production-selected service against a
   # fake PJSUA function table.  This deliberately does not enable the module
   # library, so the direct component sources below have no duplicate symbols.
-  target_compile_definitions(app PRIVATE CONFIG_VOIP_PJSUA)
+  target_compile_definitions(app PRIVATE CONFIG_VOIP_PJSUA
+    CONFIG_VOIP_CORE_ACTOR_STACK_SIZE=8192)
 endif()
 
 target_sources_ifdef(CONFIG_VOIP_SDK_CONTRACT_TEST app PRIVATE

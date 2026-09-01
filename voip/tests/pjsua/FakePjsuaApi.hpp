@@ -25,10 +25,10 @@ public:
         std::memset(&ua_, 0, sizeof(ua_));
         std::memset(&media_, 0, sizeof(media_));
         std::memset(&log_, 0, sizeof(log_));
-        answer_count_ = 0;
-        hangup_count_ = 0;
-        answer_status_ = 0;
-        hangup_status_ = 0;
+        answer_count_.store(0, std::memory_order_relaxed);
+        hangup_count_.store(0, std::memory_order_relaxed);
+        answer_status_.store(0, std::memory_order_relaxed);
+        hangup_status_.store(0, std::memory_order_relaxed);
         account_ids_ = {{2, 0, 4, 1, 3}};
         std::memset(account_configs_.data(), 0, sizeof(account_configs_));
         deleted_accounts_.fill(PJSUA_INVALID_ID);
@@ -52,6 +52,10 @@ public:
         pending_unregistration_count_ = 0;
         defer_unregistration_callbacks_ = false;
         release_unregistration_callbacks_on_next_pump_.store(false);
+        incoming_call_pending_.store(false, std::memory_order_relaxed);
+        incoming_call_id_.store(PJSUA_INVALID_ID, std::memory_order_relaxed);
+        registered_pending_.store(false, std::memory_order_relaxed);
+        registered_account_id_.store(PJSUA_INVALID_ID, std::memory_order_relaxed);
         unregistration_callbacks_delivered_from_pump_ = 0;
         pump_count_ = 0;
         active_ = this;
@@ -66,10 +70,20 @@ public:
     const pjsua_config &UaConfig() const noexcept { return ua_; }
     const pjsua_media_config &MediaConfig() const noexcept { return media_; }
     const pjsua_logging_config &LoggingConfig() const noexcept { return log_; }
-    unsigned AnswerCount() const noexcept { return answer_count_; }
-    unsigned HangupCount() const noexcept { return hangup_count_; }
-    unsigned AnswerStatus() const noexcept { return answer_status_; }
-    unsigned HangupStatus() const noexcept { return hangup_status_; }
+    unsigned AnswerCount() const noexcept { return answer_count_.load(std::memory_order_acquire); }
+    unsigned HangupCount() const noexcept { return hangup_count_.load(std::memory_order_acquire); }
+    unsigned AnswerStatus() const noexcept { return answer_status_.load(std::memory_order_acquire); }
+    unsigned HangupStatus() const noexcept { return hangup_status_.load(std::memory_order_acquire); }
+    // Component-only cross-thread trigger.  It records work for the fake's
+    // handle_events implementation; it never invokes the callback here.
+    void TriggerIncomingCallOnNextPump(pjsua_call_id id) noexcept {
+        incoming_call_id_.store(id, std::memory_order_relaxed);
+        incoming_call_pending_.store(true, std::memory_order_release);
+    }
+    void TriggerRegisteredOnNextPump(pjsua_acc_id id) noexcept {
+        registered_account_id_.store(id, std::memory_order_relaxed);
+        registered_pending_.store(true, std::memory_order_release);
+    }
     void SetAccountIds(const pjsua_acc_id *ids, std::size_t count) noexcept {
         account_ids_count_ = count > account_ids_.size() ? account_ids_.size() : count;
         for (std::size_t i = 0; i < account_ids_count_; ++i) account_ids_[i] = ids[i];
@@ -179,8 +193,8 @@ private:
     char sequence_[512]{}; std::size_t used_ = 0;
     char teardown_sequence_[256]{}; std::size_t teardown_used_ = 0;
     pjsua_config ua_{}; pjsua_media_config media_{}; pjsua_logging_config log_{};
-    unsigned answer_count_ = 0; unsigned hangup_count_ = 0;
-    unsigned answer_status_ = 0; unsigned hangup_status_ = 0;
+    std::atomic<unsigned> answer_count_{0}; std::atomic<unsigned> hangup_count_{0};
+    std::atomic<unsigned> answer_status_{0}; std::atomic<unsigned> hangup_status_{0};
     std::array<pjsua_acc_id, 5> account_ids_{{2, 0, 4, 1, 3}};
     std::array<pjsua_acc_config, 5> account_configs_{};
     std::array<pjsua_acc_id, 5> deleted_accounts_{};
@@ -203,6 +217,10 @@ private:
     std::size_t pending_unregistration_count_ = 0;
     bool defer_unregistration_callbacks_ = false;
     std::atomic<bool> release_unregistration_callbacks_on_next_pump_{false};
+    std::atomic<bool> incoming_call_pending_{false};
+    std::atomic<pjsua_call_id> incoming_call_id_{PJSUA_INVALID_ID};
+    std::atomic<bool> registered_pending_{false};
+    std::atomic<pjsua_acc_id> registered_account_id_{PJSUA_INVALID_ID};
     std::size_t unregistration_callbacks_delivered_from_pump_ = 0;
     std::size_t pump_count_ = 0;
     static FakePjsuaApi &Active() noexcept { assert(active_ != nullptr); return *active_; }
@@ -239,6 +257,16 @@ private:
         FakePjsuaApi &fake = Active();
         ++fake.pump_count_;
         fake.Record("pump");
+        if (fake.incoming_call_pending_.exchange(false, std::memory_order_acq_rel) &&
+            fake.ua_.cb.on_incoming_call != nullptr) {
+            fake.ua_.cb.on_incoming_call(0,
+                fake.incoming_call_id_.load(std::memory_order_relaxed), nullptr);
+        }
+        if (fake.registered_pending_.exchange(false, std::memory_order_acq_rel)) {
+            fake.DeliverRegistrationState(
+                fake.registered_account_id_.load(std::memory_order_relaxed),
+                PJ_SUCCESS, 200, true, false, 20);
+        }
         if (fake.release_unregistration_callbacks_on_next_pump_.exchange(
                 false, std::memory_order_acq_rel)) {
             const std::size_t pending = fake.pending_unregistration_count_;
@@ -308,8 +336,8 @@ private:
         }
         return PJ_SUCCESS;
     }
-    static pj_status_t CallAnswer(pjsua_call_id, unsigned status, const pj_str_t *, const pjsua_msg_data *) { ++Active().answer_count_; Active().answer_status_ = status; Active().Record("answer"); return PJ_SUCCESS; }
-    static pj_status_t CallHangup(pjsua_call_id, unsigned status, const pj_str_t *, const pjsua_msg_data *) { ++Active().hangup_count_; Active().hangup_status_ = status; Active().Record("hangup"); return PJ_SUCCESS; }
+    static pj_status_t CallAnswer(pjsua_call_id, unsigned status, const pj_str_t *, const pjsua_msg_data *) { Active().answer_count_.fetch_add(1, std::memory_order_release); Active().answer_status_.store(status, std::memory_order_release); Active().Record("answer"); return PJ_SUCCESS; }
+    static pj_status_t CallHangup(pjsua_call_id, unsigned status, const pj_str_t *, const pjsua_msg_data *) { Active().hangup_count_.fetch_add(1, std::memory_order_release); Active().hangup_status_.store(status, std::memory_order_release); Active().Record("hangup"); return PJ_SUCCESS; }
     PjsuaApi api_{ArenaInstall, ArenaReset, Create, ConfigDefault, LogDefault, MediaDefault, TransportDefault, Init, NoSound, TransportCreate, TransportClose, Start, Pump, Destroy, AccountConfigDefault, AccountAdd, AccountSetUserData, AccountGetUserData, AccountDelete, AccountSetRegistration, CallAnswer, CallHangup};
 };
 inline FakePjsuaApi *FakePjsuaApi::active_ = nullptr;

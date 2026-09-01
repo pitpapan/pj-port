@@ -145,6 +145,15 @@ config VOIP_PJSUA
 
 endchoice
 
+config VOIP_CORE_ACTOR_STACK_SIZE
+	int "VoIP core actor stack size"
+	range 4096 16384
+	default 8192
+	help
+	  Fixed stack budget for the actor that performs adapter pumping and
+	  command processing. The registration-only PJSUA profile exercises the
+	  complete unsupported-call terminal path on this actor.
+
 config VOIP_MAX_AGENTS
 	int "VoIP service agent capacity"
 	range 5 5
