@@ -21,6 +21,8 @@
  *  - Keep alive interval follows Config.keepAlive (MqttKeepAlive); PINGREQ/
  *    PINGRESP handling is driven by calling process() periodically, which
  *    delegates to mqtt_live().
+ *  - Multiple independent modules (speaker manager, microphone manager,
+ *    etc.) can each subscribe() their own topic with their own handler.
  */
 class MqttService
 {
@@ -59,22 +61,31 @@ public:
 
 	bool isConnected() const { return connected_; }
 
-	/* Registers the single callback invoked for every incoming PUBLISH.
-	 * The application demultiplexes by topic itself; a table of per-topic
-	 * handlers isn't worth the RAM on this target.
+	/* Subscribes to a topic and registers the handler invoked for every
+	 * PUBLISH received on it. Each caller (speaker manager, microphone
+	 * manager, etc.) owns its own topic/handler pair; up to
+	 * kMaxSubscriptions can be registered. `topic` must outlive the
+	 * subscription (a string literal or otherwise static storage).
 	 */
-	void setMessageHandler(SubscriptionHandler handler, void *context);
-
-	int subscribe(const char *topic, enum mqtt_qos qos);
+	int subscribe(const char *topic, enum mqtt_qos qos, SubscriptionHandler handler, void *context);
 	int publish(const char *topic, const uint8_t *payload, size_t len, enum mqtt_qos qos);
 
 private:
 	static constexpr size_t kBufferSize = 256;
 	static constexpr size_t kPayloadBufSize = 128;
+	static constexpr size_t kMaxSubscriptions = 4;
 	static constexpr int kSocketPollTimeoutMs = 100;
+
+	struct Subscription {
+		const char *topic{};
+		SubscriptionHandler handler{};
+		void *context{};
+	};
 
 	static void eventHandler(struct mqtt_client *client, const struct mqtt_evt *evt);
 	void handlePublish(const struct mqtt_evt *evt);
+	Subscription *dispatchPublish(const char *topic);
+	void discardPublishPayload(size_t len);
 	void prepareFds();
 	void clearFds();
 	int waitSocket(int timeout_ms);
@@ -96,7 +107,7 @@ private:
 	struct mqtt_utf8 willMessage_{};
 	char willTopicBuf_[NET_HOSTNAME_MAX_LEN + 32]{};
 
-	SubscriptionHandler messageHandler_{};
-	void *messageHandlerContext_{};
+	Subscription subscriptions_[kMaxSubscriptions]{};
+	size_t subscriptionCount_{0};
 	uint16_t nextMessageId_{1};
 };

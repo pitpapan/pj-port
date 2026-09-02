@@ -139,14 +139,18 @@ void MqttService::process()
 	}
 }
 
-void MqttService::setMessageHandler(SubscriptionHandler handler, void *context)
+int MqttService::subscribe(const char *topic, enum mqtt_qos qos, SubscriptionHandler handler, void *context)
 {
-	messageHandler_ = handler;
-	messageHandlerContext_ = context;
-}
+	if (subscriptionCount_ >= kMaxSubscriptions) {
+		LOG_ERR("No room for subscription to [%s]", topic);
+		return -ENOMEM;
+	}
 
-int MqttService::subscribe(const char *topic, enum mqtt_qos qos)
-{
+	if (dispatchPublish(topic) != nullptr) {
+		LOG_ERR("Already subscribed to [%s]", topic);
+		return -EALREADY;
+	}
+
 	struct mqtt_topic mqttTopic = {};
 
 	mqttTopic.topic.utf8 = reinterpret_cast<const uint8_t *>(topic);
@@ -163,9 +167,15 @@ int MqttService::subscribe(const char *topic, enum mqtt_qos qos)
 
 	if (rc != 0) {
 		LOG_ERR("MQTT subscribe failed [%d]", rc);
+		return rc;
 	}
 
-	return rc;
+	subscriptions_[subscriptionCount_].topic = topic;
+	subscriptions_[subscriptionCount_].handler = handler;
+	subscriptions_[subscriptionCount_].context = context;
+	subscriptionCount_++;
+
+	return 0;
 }
 
 int MqttService::publish(const char *topic, const uint8_t *payload, size_t len, enum mqtt_qos qos)
@@ -185,7 +195,6 @@ int MqttService::publish(const char *topic, const uint8_t *payload, size_t len, 
 void MqttService::eventHandler(struct mqtt_client *client, const struct mqtt_evt *evt)
 {
 	auto *self = static_cast<MqttService *>(client->user_data);
-	// there might be more than thousand topics publishing/subscripbing, so maybe this central event handler is not necessary
 
 	switch (evt->type) {
 	case MQTT_EVT_CONNACK:
@@ -239,14 +248,25 @@ void MqttService::handlePublish(const struct mqtt_evt *evt)
 	const struct mqtt_publish_param &publish = evt->param.publish;
 	size_t len = publish.message.payload.len;
 
-	if (messageHandler_ == nullptr) {
-		mqtt_read_publish_payload(&client_, nullptr, 0);
+	char topic[kPayloadBufSize];
+	size_t topicLen = publish.message.topic.topic.size;
+
+	if (topicLen >= sizeof(topic)) {
+		topicLen = sizeof(topic) - 1;
+	}
+	memcpy(topic, publish.message.topic.topic.utf8, topicLen);
+	topic[topicLen] = '\0';
+
+	Subscription *sub = dispatchPublish(topic);
+
+	if (sub == nullptr) {
+		discardPublishPayload(len);
 		return;
 	}
 
 	if (len >= kPayloadBufSize) {
 		LOG_WRN("Publish payload too large [%zu], dropping", len);
-		mqtt_read_publish_payload(&client_, nullptr, 0);
+		discardPublishPayload(len);
 		return;
 	}
 
@@ -259,16 +279,41 @@ void MqttService::handlePublish(const struct mqtt_evt *evt)
 	}
 	payload[len] = '\0';
 
-	char topic[kPayloadBufSize];
-	size_t topicLen = publish.message.topic.topic.size;
+	sub->handler(topic, payload, len, sub->context);
+}
 
-	if (topicLen >= sizeof(topic)) {
-		topicLen = sizeof(topic) - 1;
+MqttService::Subscription *MqttService::dispatchPublish(const char *topic)
+{
+	for (size_t i = 0; i < subscriptionCount_; i++) {
+		if (strcmp(subscriptions_[i].topic, topic) == 0) {
+			return &subscriptions_[i];
+		}
 	}
-	memcpy(topic, publish.message.topic.topic.utf8, topicLen);
-	topic[topicLen] = '\0';
 
-	messageHandler_(topic, payload, len, messageHandlerContext_);
+	return nullptr;
+}
+
+/* mqtt_read_publish_payload() with length 0 does NOT consume anything:
+ * Zephyr's MQTT client leaves remaining_payload untouched (and a 0-byte
+ * transport read is treated as a closed connection), so a PUBLISH we
+ * don't want must still be fully drained in chunks or mqtt_input() breaks
+ * on the next call.
+ */
+void MqttService::discardPublishPayload(size_t len)
+{
+	uint8_t scratch[32];
+
+	while (len > 0) {
+		size_t chunk = len < sizeof(scratch) ? len : sizeof(scratch);
+		int rc = mqtt_readall_publish_payload(&client_, scratch, chunk);
+
+		if (rc != 0) {
+			LOG_ERR("Failed to discard publish payload [%d]", rc);
+			return;
+		}
+
+		len -= chunk;
+	}
 }
 
 void MqttService::prepareFds()
