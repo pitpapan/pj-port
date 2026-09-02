@@ -185,6 +185,7 @@ int MqttService::publish(const char *topic, const uint8_t *payload, size_t len, 
 void MqttService::eventHandler(struct mqtt_client *client, const struct mqtt_evt *evt)
 {
 	auto *self = static_cast<MqttService *>(client->user_data);
+	// there might be more than thousand topics publishing/subscripbing, so maybe this central event handler is not necessary
 
 	switch (evt->type) {
 	case MQTT_EVT_CONNACK:
