@@ -8,8 +8,8 @@ LOG_MODULE_REGISTER(mqtt_minimal, LOG_LEVEL_INF);
 /* Stand-ins until NetworkConfig and the security package exist: broker
  * address/keep-alive/clean-session and credentials are hardcoded here.
  */
-#define MQTT_BROKER_HOST "192.0.2.2"
-#define MQTT_BROKER_PORT 1883
+#define MQTT_BROKER_HOST "10.0.2.2"
+#define MQTT_BROKER_PORT 1884
 #define MQTT_KEEP_ALIVE_S 60
 #define MQTT_CLEAN_SESSION true
 #define MQTT_USERNAME     nullptr
