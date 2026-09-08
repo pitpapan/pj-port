@@ -24,6 +24,7 @@ struct PjsuaAccountContext {
     bool register_on_start{};
     bool occupied{};
     bool unregistration_pending{};
+    bool unregistration_retry{};
 };
 
 // C++17 cannot reflect on absent members. These exact member-type and layout
@@ -38,6 +39,7 @@ struct PjsuaAccountContextLayoutContract {
     bool register_on_start;
     bool occupied;
     bool unregistration_pending;
+    bool unregistration_retry;
 };
 
 static_assert(std::is_standard_layout<PjsuaAccountContext>::value,
@@ -51,7 +53,8 @@ static_assert(std::is_same<decltype(PjsuaAccountContext::account_id), pjsua_acc_
               std::is_same<decltype(PjsuaAccountContext::refresh_due_ms), std::uint64_t>::value &&
               std::is_same<decltype(PjsuaAccountContext::register_on_start), bool>::value &&
               std::is_same<decltype(PjsuaAccountContext::occupied), bool>::value &&
-              std::is_same<decltype(PjsuaAccountContext::unregistration_pending), bool>::value,
+              std::is_same<decltype(PjsuaAccountContext::unregistration_pending), bool>::value &&
+              std::is_same<decltype(PjsuaAccountContext::unregistration_retry), bool>::value,
               "account context may contain only its declared PJ registration state");
 static_assert(sizeof(PjsuaAccountContext) == sizeof(PjsuaAccountContextLayoutContract) &&
               alignof(PjsuaAccountContext) == alignof(PjsuaAccountContextLayoutContract),

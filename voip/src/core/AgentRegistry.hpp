@@ -38,6 +38,10 @@ public:
         return pool_.Resolve(handle);
     }
 
+    // Internal test seam: reports only whether copied credential bytes have
+    // been erased from every fixed-pool slot.  It never exposes credentials.
+    bool CredentialsErasedForTest() const noexcept;
+
 private:
     static constexpr std::size_t kAgentSlots = 5;
     static_assert(kAgentSlots == max_agents && max_agents == 5,

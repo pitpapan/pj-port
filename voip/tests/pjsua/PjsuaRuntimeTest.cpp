@@ -4,6 +4,7 @@
 
 #include <cassert>
 #include <initializer_list>
+#include <zephyr/sys/printk.h>
 
 namespace voip::test {
 
@@ -30,6 +31,77 @@ void RunPjsuaRuntimeTests() {
     assert(runtime.Destroy() == Error::ok);
     assert(runtime.Destroy() == Error::ok);
     assert(fake.SequenceEquals("arena,create,defaults,init,nosnd,tcp,start,pump,close,destroy,reset"));
+
+    // A Zephyr CoreActor is a native thread.  PJLIB may lose its TLS entry
+    // after pjsua_create(), so every later PJSUA call must restore it before
+    // entering the library.
+    FakePjsuaApi registration_fake;
+    PjsuaRuntime registration_runtime(registration_fake.Api());
+    assert(registration_runtime.CreateAndInitialize(callbacks, format) == Error::ok);
+    assert(registration_runtime.Start() == Error::ok);
+    registration_fake.SetThreadRegistered(false);
+    assert(registration_runtime.Pump(17) == Error::ok);
+    assert(registration_fake.ThreadRegisterCount() == 1);
+    assert(registration_fake.PumpCount() == 1);
+    assert(registration_runtime.Pump(17) == Error::ok);
+    assert(registration_fake.ThreadRegisterCount() == 1);
+    registration_fake.SetThreadRegistered(false);
+    registration_fake.FailThreadRegister(PJ_EUNKNOWN);
+    assert(registration_runtime.Pump(17) == Error::internal_failure);
+    assert(registration_fake.PumpCount() == 2);
+
+    // A failed external-thread registration makes native destruction unsafe.
+    // The runtime must retain its native/arena state so the actor can retry
+    // destruction once PJLIB registration is available again.
+    registration_fake.SetThreadRegistered(false);
+    assert(registration_runtime.Destroy() == Error::internal_failure);
+    assert(registration_fake.SequenceEquals(
+        "arena,create,defaults,init,nosnd,start,pump,pump"));
+    registration_fake.FailThreadRegister(PJ_SUCCESS);
+    assert(registration_runtime.Destroy() == Error::ok);
+    assert(registration_fake.SequenceEquals(
+        "arena,create,defaults,init,nosnd,start,pump,pump,destroy,reset"));
+
+    // A native destroy failure leaves PJSUA and its arena intact.  Resetting
+    // either before a later successful destroy would invalidate callbacks.
+    registration_fake.Reset();
+    assert(registration_runtime.CreateAndInitialize(callbacks, format) == Error::ok);
+    assert(registration_runtime.Start() == Error::ok);
+    registration_fake.Fail(FakePjsuaApi::Stage::destroy);
+    assert(registration_runtime.Destroy() == Error::internal_failure);
+    assert(registration_runtime.Created());
+    assert(registration_fake.SequenceEquals(
+        "arena,create,defaults,init,nosnd,start,destroy"));
+    registration_fake.ClearFailure();
+    assert(registration_runtime.Destroy() == Error::ok);
+    assert(registration_fake.SequenceEquals(
+        "arena,create,defaults,init,nosnd,start,destroy,destroy,reset"));
+
+    // Native destruction succeeds once, but failed arena cleanup must be
+    // retried before declaring the private lifecycle clean.
+    registration_fake.Reset();
+    assert(registration_runtime.CreateAndInitialize(callbacks, format) == Error::ok);
+    registration_fake.FailArenaReset(PJ_EBUSY);
+    const Error reset_failure = registration_runtime.Destroy();
+    printk("PjsuaRuntimeTest arena reset failure retained: %s\n",
+           reset_failure != Error::ok ? "yes" : "NO");
+    assert(reset_failure != Error::ok);
+    assert(!registration_runtime.Created());
+    assert(registration_runtime.CreateAndInitialize(callbacks, format) == Error::invalid_state);
+    registration_fake.FailArenaReset(PJ_SUCCESS);
+    assert(registration_runtime.Destroy() == Error::ok);
+    assert(registration_fake.TeardownSequenceEquals("destroy,reset,reset"));
+
+    // Destroy clears the runtime-owned descriptor/handle state.  A later
+    // lifecycle obtains a fresh PJLIB registration rather than retaining a
+    // stale external-thread record.
+    registration_fake.Reset();
+    assert(registration_runtime.CreateAndInitialize(callbacks, format) == Error::ok);
+    assert(registration_runtime.Start() == Error::ok);
+    registration_fake.SetThreadRegistered(false);
+    assert(registration_runtime.Pump(17) == Error::ok);
+    assert(registration_fake.ThreadRegisterCount() == 1);
+    assert(registration_runtime.Destroy() == Error::ok);
 
     for (FakePjsuaApi::Stage stage : {FakePjsuaApi::Stage::arena,
          FakePjsuaApi::Stage::create, FakePjsuaApi::Stage::init,
@@ -68,6 +140,8 @@ void RunPjsuaRuntimeTests() {
             assert(failing.SequenceEquals("arena,create,defaults,init,nosnd,tcp,destroy,reset")); break;
         case FakePjsuaApi::Stage::start:
             assert(failing.SequenceEquals("arena,create,defaults,init,nosnd,tcp,start,close,destroy,reset")); break;
+        case FakePjsuaApi::Stage::destroy:
+            assert(false); break;
         }
     }
     FakePjsuaApi tls_fake;

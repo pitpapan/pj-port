@@ -74,10 +74,20 @@ static int run_arena_test(void)
 			goto fail_caching;
 		}
 		pj_pool_factory_default_policy.block_free(&caching.factory, direct,
-							  4096);
+						  4096);
 		pj_zephyr_pool_arena_get_stats(&after);
 		if (expect(after.used_bytes == 0 && after.live_blocks == 0,
 			   "valid free recovers direct allocation") != 0)
+			goto fail_caching;
+		status = pj_zephyr_pool_arena_reset();
+		if (expect(status == PJ_SUCCESS, "reset after small allocation") != 0)
+			goto fail_caching;
+		pj_zephyr_pool_arena_get_stats(&after);
+		if (expect(after.last_reset_wiped_bytes > 0 &&
+			   after.last_reset_wiped_bytes < after.capacity_bytes,
+			   "reset wipes only the arena region reached by allocations") != 0 ||
+		    expect(after.reset_wipe_count == 1,
+			   "first reset records one completed wipe") != 0)
 			goto fail_caching;
 	}
 
@@ -130,6 +140,15 @@ static int run_arena_test(void)
 
 	status = pj_zephyr_pool_arena_reset();
 	if (expect(status == PJ_SUCCESS, "reset after release") != 0)
+		goto fail_caching;
+	pj_zephyr_pool_arena_get_stats(&stats);
+	if (expect(stats.live_blocks == 0 && stats.used_bytes == 0,
+		   "reset leaves no live or used arena storage") != 0 ||
+	    expect(stats.last_reset_wiped_bytes > 0 &&
+		   stats.last_reset_wiped_bytes <= stats.capacity_bytes,
+		   "reset wipes the nonzero allocation high-water region") != 0 ||
+	    expect(stats.reset_in_progress == 0,
+		   "reset finishes zeroization before reporting ready") != 0)
 		goto fail_caching;
 
 	/* A split interior block must retain a correct backward boundary tag. */

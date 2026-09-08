@@ -37,7 +37,7 @@ public:
 #endif
 
 private:
-    void Rollback() noexcept;
+    Error Rollback() noexcept;
     void DrainAccountNotifications() noexcept;
     bool Enqueue(const RuntimeNotification &) noexcept;
     const PjsuaApi &api_;
@@ -50,6 +50,9 @@ private:
     std::size_t notification_size_{};
     bool initialized_{};
     bool shutdown_started_{};
+    // A failed startup may still own live PJLIB/PJSUA state.  Shutdown must
+    // retry Rollback even though initialization never reached "initialized".
+    bool startup_rollback_pending_{};
     std::uint64_t now_ms_{};
 };
 static_assert(sizeof(PjsuaRuntimeAdapter) < 16384,

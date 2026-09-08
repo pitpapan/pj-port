@@ -29,9 +29,12 @@ public:
     Error StartInitialRegistration() noexcept;
     // Stops future refresh/retry intent and requests unregister only for
     // accounts which could still own a registration. The adapter retains the
-    // contexts until its bounded callback-drain policy completes.
+    // contexts until every accepted or busy unregister obligation drains.
     Error BeginShutdown() noexcept;
     std::size_t PendingUnregistrations() const noexcept;
+    // Updates the actor-clock used by callbacks without processing due work.
+    // RuntimeAdapter calls this before dispatching native callbacks.
+    void SetNow(std::uint64_t) noexcept;
     Error Pump(std::uint64_t now_ms) noexcept;
     Error Shutdown() noexcept;
     std::size_t Count() const noexcept;
@@ -63,6 +66,7 @@ private:
     void AssertActor() const noexcept;
     void Clear() noexcept;
     void Rollback() noexcept;
+    void RequestUnregistration(PjsuaAccountContext &) noexcept;
     static bool IsNativeIdInDomain(pjsua_acc_id) noexcept;
     NativeLookup *FindLookup(pjsua_acc_id) noexcept;
     const NativeLookup *FindLookup(pjsua_acc_id) const noexcept;

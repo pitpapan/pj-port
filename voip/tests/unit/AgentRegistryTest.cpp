@@ -334,6 +334,24 @@ void test_failed_reinitialize_resets_and_invalidates_old_handle() {
     assert(replacement.generation != old_handle.generation);
 }
 
+void test_reset_erases_registry_owned_credentials() {
+    Fixtures fixtures;
+    voip::AgentRegistry registry;
+    assert(registry.Initialize(fixtures.service) == voip::Error::ok);
+    assert(!registry.CredentialsErasedForTest());
+
+    registry.Reset();
+    assert(registry.CredentialsErasedForTest());
+    registry.Reset();
+    assert(registry.CredentialsErasedForTest());
+
+    assert(registry.Initialize(fixtures.service) == voip::Error::ok);
+    fixtures.agent.sip.auth_password = nullptr;
+    assert(registry.Initialize(fixtures.service) == voip::Error::invalid_argument);
+    assert(registry.CredentialsErasedForTest());
+    std::puts("AgentRegistryTest credential storage erased after reset and failed initialization");
+}
+
 void test_rejects_more_than_five_agents() {
     Fixtures fixtures;
     voip::AgentConfig agents[6] = {fixtures.agent, fixtures.agent, fixtures.agent,
@@ -363,6 +381,7 @@ int main() {
     test_rejects_non_integral_audio_frame_duration();
     test_copies_strings_and_maps_configuration_indexes_to_handles();
     test_failed_reinitialize_resets_and_invalidates_old_handle();
+    test_reset_erases_registry_owned_credentials();
     test_rejects_more_than_five_agents();
     std::puts("AgentRegistryTest PASSED");
     return 0;

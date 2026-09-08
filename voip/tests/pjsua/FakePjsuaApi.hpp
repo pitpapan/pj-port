@@ -10,7 +10,7 @@
 namespace voip::test {
 class FakePjsuaApi final {
 public:
-    enum class Stage { arena, create, init, no_sound, transport, start };
+    enum class Stage { arena, create, init, no_sound, transport, start, destroy };
     FakePjsuaApi() noexcept { active_ = this; }
     ~FakePjsuaApi() noexcept { if (active_ == this) active_ = nullptr; }
     void Activate() noexcept { active_ = this; }
@@ -47,6 +47,7 @@ public:
         registration_failure_ = PJ_SUCCESS;
         registration_failure_by_account_.fill(PJ_SUCCESS);
         unregistration_failure_ = PJ_SUCCESS;
+        registration_transaction_pending_.fill(false);
         registration_by_account_.fill(0);
         pending_unregistrations_.fill(PJSUA_INVALID_ID);
         pending_unregistration_count_ = 0;
@@ -56,12 +57,24 @@ public:
         incoming_call_id_.store(PJSUA_INVALID_ID, std::memory_order_relaxed);
         registered_pending_.store(false, std::memory_order_relaxed);
         registered_account_id_.store(PJSUA_INVALID_ID, std::memory_order_relaxed);
+        registration_failure_pending_.store(false, std::memory_order_relaxed);
+        registration_failure_account_id_.store(PJSUA_INVALID_ID, std::memory_order_relaxed);
         unregistration_callbacks_delivered_from_pump_ = 0;
         pump_count_ = 0;
+        thread_registered_ = true;
+        thread_register_count_ = 0;
+        thread_register_status_ = PJ_SUCCESS;
+        thread_register_failures_remaining_ = 0;
+        thread_register_recovers_ = false;
+        arena_reset_status_ = PJ_SUCCESS;
+        destroy_failures_remaining_ = 0;
         active_ = this;
     }
     static const FakePjsuaApi *ActiveForTest() noexcept { return active_; }
     void Fail(Stage stage) noexcept { failed_ = stage; has_failure_ = true; }
+    void ClearFailure() noexcept { has_failure_ = false; }
+    void FailArenaReset(pj_status_t status) noexcept { arena_reset_status_ = status; }
+    void FailDestroyAttempts(std::size_t attempts) noexcept { destroy_failures_remaining_ = attempts; }
     bool SequenceEquals(const char *expected) const noexcept { return std::strcmp(sequence_, expected) == 0; }
     bool TeardownSequenceEquals(const char *expected) const noexcept {
         return std::strcmp(teardown_sequence_, expected) == 0;
@@ -83,6 +96,10 @@ public:
     void TriggerRegisteredOnNextPump(pjsua_acc_id id) noexcept {
         registered_account_id_.store(id, std::memory_order_relaxed);
         registered_pending_.store(true, std::memory_order_release);
+    }
+    void TriggerRegistrationFailureOnNextPump(pjsua_acc_id id) noexcept {
+        registration_failure_account_id_.store(id, std::memory_order_relaxed);
+        registration_failure_pending_.store(true, std::memory_order_release);
     }
     void SetAccountIds(const pjsua_acc_id *ids, std::size_t count) noexcept {
         account_ids_count_ = count > account_ids_.size() ? account_ids_.size() : count;
@@ -107,6 +124,10 @@ public:
             registration_failure_by_account_[static_cast<std::size_t>(id)] = status;
     }
     void FailUnregistration(pj_status_t status) noexcept { unregistration_failure_ = status; }
+    void HoldRegistrationTransaction(pjsua_acc_id id) noexcept {
+        assert(id >= 0 && static_cast<std::size_t>(id) < registration_transaction_pending_.size());
+        registration_transaction_pending_[static_cast<std::size_t>(id)] = true;
+    }
     void SetUnregistrationCallbacksDeferred(bool deferred) noexcept {
         defer_unregistration_callbacks_ = deferred;
     }
@@ -123,6 +144,18 @@ public:
         return unregistration_callbacks_delivered_from_pump_;
     }
     std::size_t PumpCount() const noexcept { return pump_count_; }
+    void SetThreadRegistered(bool registered) noexcept { thread_registered_ = registered; }
+    void FailThreadRegister(pj_status_t status) noexcept {
+        thread_register_status_ = status;
+        thread_register_failures_remaining_ = 0;
+        thread_register_recovers_ = false;
+    }
+    void FailThreadRegisterAttempts(pj_status_t status, std::size_t attempts) noexcept {
+        thread_register_status_ = status;
+        thread_register_failures_remaining_ = attempts;
+        thread_register_recovers_ = true;
+    }
+    std::size_t ThreadRegisterCount() const noexcept { return thread_register_count_; }
     void DeliverUnregistrationCallbacks() noexcept {
         while (pending_unregistration_count_ != 0) {
             const pjsua_acc_id id = pending_unregistrations_[0];
@@ -151,6 +184,9 @@ public:
     void DeliverRegistrationState(pjsua_acc_id id, pj_status_t status, int code,
                                   bool renew, bool unregistration,
                                   unsigned expiration) noexcept {
+        if (renew && !unregistration && id >= 0 &&
+            static_cast<std::size_t>(id) < registration_transaction_pending_.size())
+            registration_transaction_pending_[static_cast<std::size_t>(id)] = false;
         if (ua_.cb.on_reg_state2 == nullptr) return;
         pjsip_regc_cbparam params{};
         params.status = status;
@@ -212,6 +248,7 @@ private:
                                                                    PJ_SUCCESS, PJ_SUCCESS,
                                                                    PJ_SUCCESS}};
     pj_status_t unregistration_failure_ = PJ_SUCCESS;
+    std::array<bool, 5> registration_transaction_pending_{};
     std::array<std::size_t, 5> registration_by_account_{};
     std::array<pjsua_acc_id, 5> pending_unregistrations_{};
     std::size_t pending_unregistration_count_ = 0;
@@ -221,8 +258,15 @@ private:
     std::atomic<pjsua_call_id> incoming_call_id_{PJSUA_INVALID_ID};
     std::atomic<bool> registered_pending_{false};
     std::atomic<pjsua_acc_id> registered_account_id_{PJSUA_INVALID_ID};
+    std::atomic<bool> registration_failure_pending_{false};
+    std::atomic<pjsua_acc_id> registration_failure_account_id_{PJSUA_INVALID_ID};
     std::size_t unregistration_callbacks_delivered_from_pump_ = 0;
     std::size_t pump_count_ = 0;
+    bool thread_registered_ = true;
+    std::size_t thread_register_count_ = 0;
+    pj_status_t thread_register_status_ = PJ_SUCCESS;
+    std::size_t thread_register_failures_remaining_ = 0;
+    bool thread_register_recovers_ = false;
     static FakePjsuaApi &Active() noexcept { assert(active_ != nullptr); return *active_; }
     void Record(const char *word) noexcept {
         const std::size_t word_length = std::strlen(word);
@@ -242,8 +286,27 @@ private:
     }
     bool Failed(Stage s) const noexcept { return has_failure_ && failed_ == s; }
     static pj_status_t ArenaInstall() { Active().Record("arena"); return Active().Failed(Stage::arena) ? PJ_EUNKNOWN : PJ_SUCCESS; }
-    static pj_status_t ArenaReset() { Active().Record("reset"); Active().RecordTeardown("reset"); return PJ_SUCCESS; }
+    pj_status_t arena_reset_status_ = PJ_SUCCESS;
+    std::size_t destroy_failures_remaining_{};
+    static pj_status_t ArenaReset() { Active().Record("reset"); Active().RecordTeardown("reset"); return Active().arena_reset_status_; }
     static pj_status_t Create() { Active().Record("create"); return Active().Failed(Stage::create) ? PJ_EUNKNOWN : PJ_SUCCESS; }
+    static pj_bool_t ThreadIsRegistered() {
+        return Active().thread_registered_ ? PJ_TRUE : PJ_FALSE;
+    }
+    static pj_status_t ThreadRegister(const char *, pj_thread_desc,
+                                      pj_thread_t **thread) {
+        FakePjsuaApi &fake = Active();
+        ++fake.thread_register_count_;
+        if (fake.thread_register_failures_remaining_ != 0) {
+            --fake.thread_register_failures_remaining_;
+            return fake.thread_register_status_;
+        }
+        if (!fake.thread_register_recovers_ &&
+            fake.thread_register_status_ != PJ_SUCCESS) return fake.thread_register_status_;
+        fake.thread_registered_ = true;
+        if (thread != nullptr) *thread = reinterpret_cast<pj_thread_t *>(&fake);
+        return PJ_SUCCESS;
+    }
     static void ConfigDefault(pjsua_config *x) { std::memset(x, 0, sizeof(*x)); Active().Record("defaults"); }
     static void LogDefault(pjsua_logging_config *x) { std::memset(x, 0, sizeof(*x)); (void)Active(); }
     static void MediaDefault(pjsua_media_config *x) { std::memset(x, 0, sizeof(*x)); (void)Active(); }
@@ -267,6 +330,11 @@ private:
                 fake.registered_account_id_.load(std::memory_order_relaxed),
                 PJ_SUCCESS, 200, true, false, 20);
         }
+        if (fake.registration_failure_pending_.exchange(false, std::memory_order_acq_rel)) {
+            fake.DeliverRegistrationFailure(
+                fake.registration_failure_account_id_.load(std::memory_order_relaxed),
+                PJ_EUNKNOWN);
+        }
         if (fake.release_unregistration_callbacks_on_next_pump_.exchange(
                 false, std::memory_order_acq_rel)) {
             const std::size_t pending = fake.pending_unregistration_count_;
@@ -278,10 +346,16 @@ private:
     static pj_status_t Destroy() {
         Active().Record("destroy");
         Active().RecordTeardown("destroy");
+        if (Active().destroy_failures_remaining_ != 0) {
+            --Active().destroy_failures_remaining_;
+            return PJ_EUNKNOWN;
+        }
+        if (Active().Failed(Stage::destroy)) return PJ_EUNKNOWN;
         Active().account_add_slot_ = 0;
         Active().account_delete_slot_ = 0;
         Active().account_clear_slot_ = 0;
         Active().account_user_data_ = {};
+        Active().thread_registered_ = false;
         return PJ_SUCCESS;
     }
     static void AccountConfigDefault(pjsua_acc_config *x) { (void)Active(); std::memset(x, 0, sizeof(*x)); x->transport_id = PJSUA_INVALID_ID; x->register_on_acc_add = PJ_TRUE; }
@@ -328,6 +402,9 @@ private:
         }
         if (Active().unregistration_failure_ != PJ_SUCCESS)
             return Active().unregistration_failure_;
+        if (id >= 0 && static_cast<std::size_t>(id) < Active().registration_transaction_pending_.size() &&
+            Active().registration_transaction_pending_[static_cast<std::size_t>(id)])
+            return PJSIP_EBUSY;
         if (Active().defer_unregistration_callbacks_) {
             if (Active().pending_unregistration_count_ < Active().pending_unregistrations_.size())
                 Active().pending_unregistrations_[Active().pending_unregistration_count_++] = id;
@@ -338,7 +415,7 @@ private:
     }
     static pj_status_t CallAnswer(pjsua_call_id, unsigned status, const pj_str_t *, const pjsua_msg_data *) { Active().answer_count_.fetch_add(1, std::memory_order_release); Active().answer_status_.store(status, std::memory_order_release); Active().Record("answer"); return PJ_SUCCESS; }
     static pj_status_t CallHangup(pjsua_call_id, unsigned status, const pj_str_t *, const pjsua_msg_data *) { Active().hangup_count_.fetch_add(1, std::memory_order_release); Active().hangup_status_.store(status, std::memory_order_release); Active().Record("hangup"); return PJ_SUCCESS; }
-    PjsuaApi api_{ArenaInstall, ArenaReset, Create, ConfigDefault, LogDefault, MediaDefault, TransportDefault, Init, NoSound, TransportCreate, TransportClose, Start, Pump, Destroy, AccountConfigDefault, AccountAdd, AccountSetUserData, AccountGetUserData, AccountDelete, AccountSetRegistration, CallAnswer, CallHangup};
+    PjsuaApi api_{ArenaInstall, ArenaReset, Create, ThreadIsRegistered, ThreadRegister, ConfigDefault, LogDefault, MediaDefault, TransportDefault, Init, NoSound, TransportCreate, TransportClose, Start, Pump, Destroy, AccountConfigDefault, AccountAdd, AccountSetUserData, AccountGetUserData, AccountDelete, AccountSetRegistration, CallAnswer, CallHangup};
 };
 inline FakePjsuaApi *FakePjsuaApi::active_ = nullptr;
 } // namespace voip::test

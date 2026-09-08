@@ -6,7 +6,7 @@ namespace voip {
 class VoipService::Impl final { public: Impl() noexcept = default; ~Impl() noexcept = default; VoipRuntime runtime{}; };
 VoipService::VoipService() noexcept : impl_(nullptr) {
     static_assert(sizeof(Impl) <= 131072, "implementation storage budget exceeded");
-    static_assert(alignof(std::max_align_t) >= alignof(Impl), "placement storage alignment");
+    static_assert(alignof(VoipService) >= alignof(Impl), "placement storage alignment");
     impl_ = ::new (static_cast<void *>(storage_)) Impl();
 }
 VoipService::~VoipService() noexcept { if (impl_ != nullptr) { impl_->~Impl(); impl_ = nullptr; } }

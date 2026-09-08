@@ -107,6 +107,79 @@ void RunPjsuaRuntimeAdapterTests() {
     };
     if (adapter_limit >= 4) startup_transaction();
 
+    auto deferred_startup_cleanup = [&]() __attribute__((noinline)) {
+        // If PJLIB TLS registration fails while startup is unwinding, the
+        // adapter must retain every native object until an actor turn can
+        // register and finish cleanup.  The next Shutdown call is that turn.
+        fake.Reset();
+        PjsuaRuntimeAdapter candidate(fake.Api());
+        fake.SetThreadRegistered(false);
+        fake.FailThreadRegister(PJ_EUNKNOWN);
+        assert(candidate.Initialize(registry, fixture.config.security,
+                                    fixture.config.conference_format) != Error::ok);
+        assert(fake.AccountAddCount() == 0);
+        assert(!fake.TeardownSequenceEquals("destroy,reset"));
+        assert(PjsuaCallbackRouter::ActiveForTest() != nullptr);
+        const auto *retained_router = PjsuaCallbackRouter::ActiveForTest();
+        const auto registration_attempts = fake.ThreadRegisterCount();
+        assert(candidate.Shutdown() != Error::ok);
+        assert(fake.ThreadRegisterCount() == registration_attempts + 1);
+        assert(fake.TeardownSequenceEquals(""));
+        assert(PjsuaCallbackRouter::ActiveForTest() == retained_router);
+        fake.FailThreadRegister(PJ_SUCCESS);
+        assert(candidate.Shutdown() == Error::ok);
+        assert(fake.TeardownSequenceEquals("destroy,reset"));
+        assert(PjsuaCallbackRouter::ActiveForTest() == nullptr);
+    };
+    if (adapter_limit >= 4) deferred_startup_cleanup();
+
+    auto deferred_native_cleanup = [&]() __attribute__((noinline)) {
+        for (bool fail_destroy : {true, false}) {
+            fake.Reset();
+            // Account creation failed after two callback contexts were bound.
+            fake.FailAccountAdd(3);
+            if (fail_destroy) fake.Fail(FakePjsuaApi::Stage::destroy);
+            else fake.FailArenaReset(PJ_EBUSY);
+            PjsuaRuntimeAdapter candidate(fake.Api());
+            assert(candidate.Initialize(registry, fixture.config.security,
+                                        fixture.config.conference_format) != Error::ok);
+            const auto *retained_router = PjsuaCallbackRouter::ActiveForTest();
+            assert(retained_router != nullptr);
+            assert(candidate.Shutdown() != Error::ok);
+            assert(PjsuaCallbackRouter::ActiveForTest() == retained_router);
+            if (fail_destroy)
+                assert(fake.TeardownSequenceEquals("clear,del,clear,del,close,destroy,destroy"));
+            else
+                assert(fake.TeardownSequenceEquals("clear,del,clear,del,close,destroy,reset,reset"));
+            fake.ClearFailure();
+            fake.FailArenaReset(PJ_SUCCESS);
+            assert(candidate.Shutdown() == Error::ok);
+            assert(PjsuaCallbackRouter::ActiveForTest() == nullptr);
+            assert(candidate.Shutdown() == Error::ok);
+        }
+    };
+    if (adapter_limit >= 4) deferred_native_cleanup();
+
+    auto callback_retry_uses_current_actor_time = [&]() __attribute__((noinline)) {
+        // The native callback is delivered from handle_events(). Its retry
+        // deadline must use this actor turn's time, not the prior turn's.
+        fake.Reset();
+        PjsuaRuntimeAdapter timed(fake.Api());
+        assert(timed.Initialize(registry, fixture.config.security,
+                                fixture.config.conference_format) == Error::ok);
+        fake.TriggerRegistrationFailureOnNextPump(4);
+        assert(timed.Pump(5000, 0) == Error::ok);
+        assert(fake.RegistrationCount(4) == 1);
+        assert(timed.Pump(6099, 0) == Error::ok);
+        assert(fake.RegistrationCount(4) == 1);
+        assert(timed.Pump(6100, 0) == Error::ok);
+        assert(fake.RegistrationCount(4) == 2);
+        assert(timed.Shutdown() == Error::busy);
+        assert(timed.Pump(6101, 0) == Error::ok);
+        assert(timed.Shutdown() == Error::ok);
+    };
+    if (adapter_limit >= 4) callback_retry_uses_current_actor_time();
+
     auto registration_failure = [&]() __attribute__((noinline)) {
     // One initial REGISTER failure is an isolated copied failure/retry pair;
     // it does not undo startup or suppress later enabled accounts.
@@ -154,6 +227,47 @@ void RunPjsuaRuntimeAdapterTests() {
     assert(pressure.Shutdown() == Error::ok);
     };
     if (adapter_limit >= 6) notification_pressure();
+
+    auto shutdown_waits_for_busy_registration = [&]() __attribute__((noinline)) {
+        fake.Reset();
+        PjsuaRuntimeAdapter pending(fake.Api());
+        assert(pending.Initialize(registry, fixture.config.security,
+                                  fixture.config.conference_format) == Error::ok);
+        fake.HoldRegistrationTransaction(2);
+        fake.SetUnregistrationCallbacksDeferred(true);
+        assert(pending.Shutdown() == Error::busy);
+        fake.DeliverUnregistrationCallbacks();
+        const Error blocked = pending.Shutdown();
+        printk("PjsuaRuntimeAdapterTest outstanding REGISTER retains shutdown barrier: %s\n",
+               blocked == Error::busy ? "yes" : "NO");
+        assert(blocked == Error::busy);
+        assert(fake.TeardownSequenceEquals(""));
+        assert(PjsuaCallbackRouter::ActiveForTest() != nullptr);
+        // No unregister was accepted for this account yet. A stale completion
+        // cannot discharge the obligation held behind its live REGISTER.
+        fake.DeliverRegistrationState(2, PJ_SUCCESS, 200, false, true, 0);
+        assert(pending.Pump(100, 0) == Error::ok);
+        assert(pending.Shutdown() == Error::busy);
+        assert(fake.TeardownSequenceEquals(""));
+
+        // A late successful REGISTER must leave an unregister obligation.
+        // The next actor pump can send it, but only its completion permits
+        // account deletion, transport close, native destroy, and arena reset.
+        fake.DeliverRegistrationState(2, PJ_SUCCESS, 200, true, false, 20);
+        assert(pending.Pump(101, 0) == Error::ok);
+        assert(fake.PendingUnregistrationCount() == 1);
+        const auto requests_after_retry = fake.RegistrationCount(2);
+        assert(pending.Shutdown() == Error::busy);
+        assert(pending.Pump(102, 0) == Error::ok);
+        assert(fake.RegistrationCount(2) == requests_after_retry);
+        assert(fake.TeardownSequenceEquals(""));
+        fake.DeliverUnregistrationCallbacks();
+        assert(pending.Pump(103, 0) == Error::ok);
+        assert(pending.Shutdown() == Error::ok);
+        assert(fake.TeardownSequenceEquals("clear,del,clear,del,clear,del,clear,del,clear,del,close,destroy,reset"));
+        assert(PjsuaCallbackRouter::ActiveForTest() == nullptr);
+    };
+    if (adapter_limit >= 7) shutdown_waits_for_busy_registration();
 
     auto shutdown_state_matrix = [&]() __attribute__((noinline)) {
         struct Scenario {

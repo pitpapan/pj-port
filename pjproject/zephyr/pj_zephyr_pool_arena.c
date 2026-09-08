@@ -38,12 +38,20 @@ _Static_assert(sizeof(struct arena_footer) % ARENA_ALIGNMENT == 0,
 /* All allocator metadata lives in this single statically reserved arena. */
 alignas(max_align_t) static uint8_t arena[CONFIG_PJSUA_ARENA_BYTES];
 static struct k_spinlock arena_lock;
-static bool arena_installed;
+enum arena_state {
+	ARENA_UNINSTALLED,
+	ARENA_READY,
+	ARENA_RESETTING,
+};
+static enum arena_state arena_state;
 static size_t arena_used;
 static size_t arena_peak;
+static size_t arena_high_water;
 static uint32_t arena_live_blocks;
 static uint32_t arena_failed_allocations;
 static uint32_t arena_callback_failures;
+static size_t arena_last_reset_wiped_bytes;
+static uint32_t arena_reset_wipe_count;
 
 #define ARENA_HEADER_SIZE sizeof(struct arena_header)
 #define ARENA_FOOTER_SIZE sizeof(struct arena_footer)
@@ -124,7 +132,6 @@ static void initialize_arena(void)
 {
 	struct arena_header *root;
 
-	memset(arena, 0, sizeof(arena));
 	root = (struct arena_header *)arena;
 	root->total_size = sizeof(arena);
 	root->prev_size = 0;
@@ -134,9 +141,18 @@ static void initialize_arena(void)
 
 	arena_used = 0;
 	arena_peak = 0;
+	arena_high_water = 0;
 	arena_live_blocks = 0;
 	arena_failed_allocations = 0;
 	arena_callback_failures = 0;
+}
+
+static void zeroize_reachable_arena(size_t bytes)
+{
+	volatile uint8_t *byte = arena;
+
+	for (size_t index = 0; index < bytes; ++index)
+		byte[index] = 0;
 }
 
 static void *arena_block_alloc(pj_pool_factory *factory, pj_size_t size)
@@ -149,6 +165,10 @@ static void *arena_block_alloc(pj_pool_factory *factory, pj_size_t size)
 
 	PJ_UNUSED_ARG(factory);
 	key = k_spin_lock(&arena_lock);
+	if (arena_state != ARENA_READY) {
+		k_spin_unlock(&arena_lock, key);
+		return NULL;
+	}
 
 	payload_size = align_up_size((size_t)size);
 	if (size == 0 || payload_size == 0 ||
@@ -191,6 +211,10 @@ static void *arena_block_alloc(pj_pool_factory *factory, pj_size_t size)
 			arena_used += block->total_size;
 			if (arena_used > arena_peak)
 				arena_peak = arena_used;
+			if ((size_t)((uint8_t *)block + block->total_size - arena) >
+			    arena_high_water)
+				arena_high_water =
+					(size_t)((uint8_t *)block + block->total_size - arena);
 			arena_live_blocks++;
 			k_spin_unlock(&arena_lock, key);
 			return (uint8_t *)block + ARENA_HEADER_SIZE;
@@ -216,6 +240,8 @@ static void arena_block_free(pj_pool_factory *factory, void *memory,
 		return;
 
 	key = k_spin_lock(&arena_lock);
+	if (arena_state != ARENA_READY)
+		goto unlock;
 	if ((uintptr_t)memory < (uintptr_t)arena + ARENA_HEADER_SIZE ||
 	    (uintptr_t)memory >= (uintptr_t)arena + sizeof(arena) -
 		    ARENA_FOOTER_SIZE ||
@@ -295,9 +321,14 @@ pj_status_t pj_zephyr_pool_arena_install(void)
 {
 	k_spinlock_key_t key = k_spin_lock(&arena_lock);
 
-	if (!arena_installed) {
+	if (arena_state == ARENA_RESETTING) {
+		k_spin_unlock(&arena_lock, key);
+		return PJ_EBUSY;
+	}
+	if (arena_state == ARENA_UNINSTALLED) {
+		/* Static arena storage is BSS-zeroed before the first install. */
 		initialize_arena();
-		arena_installed = true;
+		arena_state = ARENA_READY;
 	}
 
 	/* Install all policy callbacks before any PJSUA pool is created. */
@@ -311,18 +342,37 @@ pj_status_t pj_zephyr_pool_arena_install(void)
 
 pj_status_t pj_zephyr_pool_arena_reset(void)
 {
-	k_spinlock_key_t key = k_spin_lock(&arena_lock);
+	k_spinlock_key_t key;
+	size_t wipe_bytes;
 
-	if (!arena_installed) {
+	key = k_spin_lock(&arena_lock);
+
+	if (arena_state == ARENA_UNINSTALLED) {
 		k_spin_unlock(&arena_lock, key);
 		return PJ_EINVAL;
+	}
+	if (arena_state == ARENA_RESETTING) {
+		k_spin_unlock(&arena_lock, key);
+		return PJ_EBUSY;
 	}
 	if (arena_live_blocks != 0) {
 		k_spin_unlock(&arena_lock, key);
 		return PJ_EBUSY;
 	}
 
+	/* Exclude allocator access, then perform the potentially long wipe with
+	 * interrupts enabled.  Allocation/free/stat paths observe RESETTING and
+	 * do not read or mutate the transiently blank arena. */
+	wipe_bytes = arena_high_water;
+	arena_state = ARENA_RESETTING;
+	k_spin_unlock(&arena_lock, key);
+	zeroize_reachable_arena(wipe_bytes);
+
+	key = k_spin_lock(&arena_lock);
 	initialize_arena();
+	arena_last_reset_wiped_bytes = wipe_bytes;
+	arena_reset_wipe_count++;
+	arena_state = ARENA_READY;
 	k_spin_unlock(&arena_lock, key);
 	return PJ_SUCCESS;
 }
@@ -338,6 +388,19 @@ void pj_zephyr_pool_arena_get_stats(struct pj_zephyr_pool_arena_stats *out)
 		return;
 
 	key = k_spin_lock(&arena_lock);
+	if (arena_state == ARENA_RESETTING) {
+		out->capacity_bytes = sizeof(arena);
+		out->used_bytes = arena_used;
+		out->peak_bytes = arena_peak;
+		out->largest_free_block = 0;
+		out->live_blocks = arena_live_blocks;
+		out->failed_allocations = arena_failed_allocations;
+		out->last_reset_wiped_bytes = arena_last_reset_wiped_bytes;
+		out->reset_wipe_count = arena_reset_wipe_count;
+		out->reset_in_progress = 1;
+		k_spin_unlock(&arena_lock, key);
+		return;
+	}
 	while (offset + ARENA_MIN_BLOCK <= sizeof(arena)) {
 		block = (struct arena_header *)(arena + offset);
 		if (!valid_block(block))
@@ -353,5 +416,8 @@ void pj_zephyr_pool_arena_get_stats(struct pj_zephyr_pool_arena_stats *out)
 	out->largest_free_block = largest_free;
 	out->live_blocks = arena_live_blocks;
 	out->failed_allocations = arena_failed_allocations;
+	out->last_reset_wiped_bytes = arena_last_reset_wiped_bytes;
+	out->reset_wipe_count = arena_reset_wipe_count;
+	out->reset_in_progress = 0;
 	k_spin_unlock(&arena_lock, key);
 }

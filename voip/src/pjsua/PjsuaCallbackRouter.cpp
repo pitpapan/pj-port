@@ -3,7 +3,7 @@
 #include <cstring>
 namespace voip {
 PjsuaCallbackRouter *PjsuaCallbackRouter::active_ = nullptr;
-#if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
+#if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST) || defined(CONFIG_VOIP_PJSUA_REGISTRATION_TEST)
 unsigned PjsuaCallbackRouter::callback_entry_count_ = 0;
 const PjsuaCallbackRouter *PjsuaCallbackRouter::ActiveForTest() noexcept {
     return active_;

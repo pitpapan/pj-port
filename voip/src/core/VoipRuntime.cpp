@@ -27,7 +27,7 @@ Error VoipRuntime::Initialize(const ServiceConfig &config) noexcept {
     CoreLockGuard shutdown_lock(shutdown_mutex_);
     {
         CoreLockGuard lock(mutex_);
-        if (lifecycle_ == Lifecycle::starting || lifecycle_ == Lifecycle::running ||
+        if (lifecycle_ == Lifecycle::starting || lifecycle_ == Lifecycle::startup_cleanup || lifecycle_ == Lifecycle::running ||
             lifecycle_ == Lifecycle::shutting_down)
             return Error::invalid_state;
         if (shutdown_complete_ && !actor_stopped_) return Error::invalid_state;
@@ -43,6 +43,7 @@ Error VoipRuntime::Initialize(const ServiceConfig &config) noexcept {
         shutdown_complete_ = false;
         shutdown_error_ = Error::ok;
         startup_error_ = Error::ok;
+        startup_cleanup_error_ = Error::ok;
         event_publication_failed_ = false;
         shutdown_signal_.Clear();
         startup_signal_.Clear();
@@ -70,14 +71,9 @@ Error VoipRuntime::Initialize(const ServiceConfig &config) noexcept {
         }
     }
     if (!startup_signal_.Wait(1000)) {
-        actor_.Stop();
-        CoreLockGuard lock(mutex_);
-        actor_stopped_ = true;
-        (void)adapter_.Shutdown();
-        agents_.Reset();
-        events_.ResetLifecycle();
-        lifecycle_ = Lifecycle::idle;
-        RefreshResources();
+        // The actor may still own PJSUA callback storage while startup
+        // cleanup retries. It must remain alive; Shutdown()/destruction can
+        // later wait for the same completion signal and join it safely.
         return Error::internal_failure;
     }
     Error result = Error::internal_failure;
@@ -105,9 +101,8 @@ void VoipRuntime::CompleteStartup(Error error) noexcept {
 }
 
 void VoipRuntime::RollbackStartup(Error error) noexcept {
-    (void)adapter_.Shutdown();
-    lifecycle_ = Lifecycle::stopped;
-    CompleteStartup(error);
+    startup_cleanup_error_ = error;
+    lifecycle_ = Lifecycle::startup_cleanup;
 }
 
 Error VoipRuntime::ReserveOperation(OperationId *operation) noexcept {
@@ -899,10 +894,14 @@ void VoipRuntime::CancelAllCalls() noexcept {
 Error VoipRuntime::Shutdown() noexcept {
     CoreLockGuard shutdown_lock(shutdown_mutex_);
     bool completion_observed = false;
+    bool startup_cleanup_observed = false;
     {
         CoreLockGuard lock(mutex_);
         if (shutdown_complete_) {
             completion_observed = true;
+        } else if (lifecycle_ == Lifecycle::startup_cleanup ||
+                   (lifecycle_ == Lifecycle::stopped && !actor_stopped_)) {
+            startup_cleanup_observed = true;
         } else if (lifecycle_ == Lifecycle::idle || lifecycle_ == Lifecycle::stopped) {
             return Error::ok;
         } else if (lifecycle_ == Lifecycle::running) {
@@ -910,7 +909,26 @@ Error VoipRuntime::Shutdown() noexcept {
             shutdown_complete_ = false;
         }
     }
-    if (!completion_observed && !shutdown_signal_.Wait(1000))
+    if (startup_cleanup_observed) {
+        if (!startup_signal_.Wait(1000)) return Error::shutdown_timeout;
+        bool actor_needs_stop = false;
+        {
+            CoreLockGuard lock(mutex_);
+            actor_needs_stop = !actor_stopped_;
+        }
+        if (actor_needs_stop) actor_.Stop();
+        CoreLockGuard lock(mutex_);
+        if (actor_needs_stop) actor_stopped_ = true;
+        agents_.Reset();
+        events_.ResetLifecycle();
+        lifecycle_ = Lifecycle::idle;
+        RefreshResources();
+        return startup_error_;
+    }
+    // Native PJSUA destruction deliberately reserves up to one second after
+    // unregister completion. Keep the public call bounded while allowing the
+    // actor to complete that documented teardown phase.
+    if (!completion_observed && !shutdown_signal_.Wait(3000))
         return Error::shutdown_timeout;
     bool actor_needs_stop = false;
     {
@@ -1035,6 +1053,15 @@ void VoipRuntime::Step(std::uint64_t now_ms) noexcept {
         lifecycle_ = Lifecycle::running;
         CompleteStartup(Error::ok);
         RefreshResources();
+        return;
+    }
+    if (lifecycle_ == Lifecycle::startup_cleanup) {
+        // Keep this actor alive until the adapter has detached every native
+        // callback route and released its PJSUA arena. A busy or failed
+        // cleanup is retried on a subsequent actor turn.
+        if (adapter_.Shutdown() != Error::ok) return;
+        lifecycle_ = Lifecycle::stopped;
+        CompleteStartup(startup_cleanup_error_);
         return;
     }
     if (lifecycle_ != Lifecycle::running && lifecycle_ != Lifecycle::shutting_down)

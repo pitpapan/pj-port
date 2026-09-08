@@ -131,6 +131,18 @@ public:
 
     void Clear() noexcept { InvalidateAll(); }
 
+    // Internal test seam.  It only supplies raw fixed-pool storage to an
+    // internal predicate; product-facing code has no access to it.
+    template <typename Predicate>
+    bool EveryObjectStorageForTest(Predicate predicate) const noexcept {
+        for (const Slot &slot : slots_) {
+            const auto *bytes = reinterpret_cast<const std::uint8_t *>(
+                static_cast<const void *>(&slot.storage));
+            if (!predicate(bytes, sizeof(slot.storage))) return false;
+        }
+        return true;
+    }
+
 private:
     template <typename... Args>
     static Object *Construct(Slot &slot, Args &&...args) noexcept {

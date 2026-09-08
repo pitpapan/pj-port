@@ -58,7 +58,10 @@ public:
 private:
     class Impl;
     static constexpr std::size_t implementation_storage_size = 131072;
-    alignas(std::max_align_t) std::uint8_t storage_[implementation_storage_size];
+    // PJSUA-native state can require 64-byte alignment on ARM.  This remains
+    // fixed, in-object storage: there is no heap fallback or public native
+    // type exposure.
+    alignas(64) std::uint8_t storage_[implementation_storage_size];
     Impl *impl_;
 };
 

@@ -1,5 +1,12 @@
 #include "PjsuaRuntimeAdapter.hpp"
 
+#if defined(CONFIG_VOIP_PJSUA_REGISTRATION_TEST)
+// Owned by applications/voip_integration/test_support.  This test-only
+// declaration keeps the native endpoint out of the public service ABI.
+extern "C" pj_status_t voip_pjsua_registration_test_install(
+    pjsip_endpoint *endpoint) noexcept;
+#endif
+
 namespace voip {
 PjsuaRuntimeAdapter::PjsuaRuntimeAdapter(const PjsuaApi &api) noexcept
     : api_(api), accounts_(api), router_(accounts_, api), runtime_(api), transport_(api) {}
@@ -24,14 +31,29 @@ void PjsuaRuntimeAdapter::DrainAccountNotifications() noexcept {
     }
 }
 
-void PjsuaRuntimeAdapter::Rollback() noexcept {
+Error PjsuaRuntimeAdapter::Rollback() noexcept {
+    if (runtime_.Created()) {
+        const Error registered = runtime_.EnsureActorRegistered();
+        // Every following teardown operation enters PJLIB. Do not make a
+        // native call while the actor lacks its PJLIB registration.
+        if (registered != Error::ok) {
+            startup_rollback_pending_ = true;
+            return registered;
+        }
+    }
     (void)accounts_.Shutdown();
     (void)transport_.Shutdown();
-    (void)runtime_.Destroy();
+    const Error destroyed = runtime_.Destroy();
+    if (destroyed != Error::ok) {
+        startup_rollback_pending_ = true;
+        return destroyed;
+    }
     router_.MarkNativeDestroyed();
     router_.Detach();
     initialized_ = false;
     shutdown_started_ = false;
+    startup_rollback_pending_ = false;
+    return Error::ok;
 }
 
 Error PjsuaRuntimeAdapter::Initialize(const AgentRegistry &registry,
@@ -44,12 +66,20 @@ Error PjsuaRuntimeAdapter::Initialize(const AgentRegistry &registry,
     pjsua_callback callbacks{};
     if (router_.Attach(&callbacks) != Error::ok) return Error::invalid_state;
     if (runtime_.CreateAndInitialize(callbacks, format) != Error::ok) { Rollback(); return Error::internal_failure; }
+    if (runtime_.EnsureActorRegistered() != Error::ok) { Rollback(); return Error::internal_failure; }
     if (transport_.Initialize(SignalingTransportPolicy::tcp_plain) != Error::ok) { Rollback(); return Error::internal_failure; }
+#if defined(CONFIG_VOIP_PJSUA_REGISTRATION_TEST)
+    if (voip_pjsua_registration_test_install(pjsua_get_pjsip_endpt()) != PJ_SUCCESS) {
+        Rollback(); return Error::internal_failure;
+    }
+#endif
     if (runtime_.Start() != Error::ok) { Rollback(); return Error::internal_failure; }
+    if (runtime_.EnsureActorRegistered() != Error::ok) { Rollback(); return Error::internal_failure; }
     if (accounts_.Initialize(registry, transport_.Id()) != Error::ok) { Rollback(); return Error::internal_failure; }
     initialized_ = true;
     // Per-account request failures are copied as isolated notifications by
     // the account manager; no successfully created account is rolled back.
+    if (runtime_.EnsureActorRegistered() != Error::ok) { Rollback(); return Error::internal_failure; }
     (void)accounts_.StartInitialRegistration();
     DrainAccountNotifications();
     return Error::ok;
@@ -57,9 +87,13 @@ Error PjsuaRuntimeAdapter::Initialize(const AgentRegistry &registry,
 
 Error PjsuaRuntimeAdapter::Pump(std::uint64_t now_ms, std::uint32_t timeout_ms) noexcept {
     if (!initialized_) return Error::shutting_down;
+    // Native callbacks can schedule refresh/retry work.  Give them this
+    // turn's actor time before dispatch, then process timers afterwards.
+    now_ms_ = now_ms;
+    accounts_.SetNow(now_ms);
     const Error result = runtime_.Pump(timeout_ms);
     if (result != Error::ok) return result;
-    now_ms_ = now_ms;
+    if (runtime_.EnsureActorRegistered() != Error::ok) return Error::internal_failure;
     (void)accounts_.Pump(now_ms);
     DrainAccountNotifications();
     return Error::ok;
@@ -92,20 +126,20 @@ void PjsuaRuntimeAdapter::FillNotificationRingForTest() noexcept {
 #endif
 
 Error PjsuaRuntimeAdapter::Shutdown() noexcept {
-    if (!initialized_) return Error::ok;
+    if (!initialized_) return startup_rollback_pending_ ? Rollback() : Error::ok;
     if (!shutdown_started_) {
         router_.BeginQuiescence();
+        if (runtime_.EnsureActorRegistered() != Error::ok) return Error::internal_failure;
         (void)accounts_.BeginShutdown();
         DrainAccountNotifications();
         shutdown_started_ = true;
         return Error::busy;
     }
-    // Callback-reachable contexts remain intact until every successfully
-    // requested unregister completes.  Public wait timeouts are handled by
+    // Callback-reachable contexts remain intact until every accepted or busy
+    // unregister obligation completes. Public wait timeouts are handled by
     // VoipRuntime; elapsed adapter time never authorizes forced teardown.
     if (accounts_.PendingUnregistrations() != 0)
         return Error::busy;
-    Rollback();
-    return Error::ok;
+    return Rollback();
 }
 } // namespace voip

@@ -156,6 +156,43 @@ void RunPjsuaPublicServiceTests() {
     second->~VoipService();
     first->~VoipService();
 
+    // Startup failure is not published until repeated PJLIB registration
+    // failures have recovered and the actor has destroyed the native state.
+    // The synchronous Initialize call must therefore observe no live router,
+    // arena reset before destroy, or surviving agent handle.
+    fake.Reset();
+    VoipService *startup_recovery = ::new (first_storage.bytes) VoipService();
+    fake.SetThreadRegistered(false);
+    fake.FailThreadRegisterAttempts(PJ_EUNKNOWN, 3);
+    assert(startup_recovery->Initialize(fixture.config) == Error::internal_failure);
+    assert(fake.ThreadRegisterCount() == 4);
+    assert(fake.AccountAddCount() == 0 && fake.AccountDeleteCount() == 0);
+    assert(fake.TeardownSequenceEquals("destroy,reset"));
+    assert(PjsuaCallbackRouter::ActiveForTest() == nullptr);
+    AgentHandle failed_start_handle{};
+    // This is a config-index lookup: after rollback there are no configured
+    // agents, so index zero is invalid (no handle is being resolved).
+    assert(startup_recovery->GetAgentHandle(0, &failed_start_handle) == Error::invalid_argument);
+    assert(!failed_start_handle.IsValid());
+    assert(startup_recovery->GetResourceSnapshot().active_agents == 0);
+    startup_recovery->~VoipService();
+
+    // Failed startup still owns a native instance. The actor must recover
+    // repeated native destroy failures before publishing startup completion,
+    // erasing the registry or releasing service placement storage.
+    fake.Reset();
+    VoipService *destroy_recovery = ::new (first_storage.bytes) VoipService();
+    fake.FailAccountAdd(3);
+    fake.FailDestroyAttempts(3);
+    assert(destroy_recovery->Initialize(fixture.config) == Error::internal_failure);
+    assert(fake.TeardownSequenceEquals("clear,del,clear,del,close,destroy,destroy,destroy,destroy,reset"));
+    assert(PjsuaCallbackRouter::ActiveForTest() == nullptr);
+    AgentHandle destroyed_start_handle{};
+    assert(destroy_recovery->GetAgentHandle(0, &destroyed_start_handle) == Error::invalid_argument);
+    assert(destroy_recovery->GetResourceSnapshot().active_agents == 0);
+    assert(destroy_recovery->GetResourceSnapshot().active_calls == 0);
+    destroy_recovery->~VoipService();
+
     // A selected public service retains its callback-reachable adapter after
     // the bounded public wait.  The release signal is application-thread
     // safe, but the fake only delivers its deferred PJSUA callbacks from the

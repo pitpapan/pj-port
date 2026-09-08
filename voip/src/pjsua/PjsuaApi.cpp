@@ -17,6 +17,8 @@ const PjsuaApi &NativePjsuaApi() noexcept {
     static const PjsuaApi api{pj_zephyr_pool_arena_install,
                               pj_zephyr_pool_arena_reset,
                               pjsua_create,
+                              pj_thread_is_registered,
+                              pj_thread_register,
                               pjsua_config_default,
                               pjsua_logging_config_default,
                               pjsua_media_config_default,

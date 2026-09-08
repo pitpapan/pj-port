@@ -32,7 +32,7 @@ public:
     void BeginQuiescence() noexcept;
     void MarkNativeDestroyed() noexcept;
     void Detach() noexcept;
-#if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
+#if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST) || defined(CONFIG_VOIP_PJSUA_REGISTRATION_TEST)
     static const PjsuaCallbackRouter *ActiveForTest() noexcept;
     static unsigned CallbackEntryCountForTest() noexcept;
 #endif
@@ -48,7 +48,7 @@ private:
     bool quiescent_ = false; bool attached_ = false; bool native_destroyed_ = false;
     std::thread::id actor_thread_{};
     static PjsuaCallbackRouter *active_;
-#if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
+#if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST) || defined(CONFIG_VOIP_PJSUA_REGISTRATION_TEST)
     static unsigned callback_entry_count_;
 #endif
 };

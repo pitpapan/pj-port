@@ -86,6 +86,10 @@ target_sources_ifdef(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST app PRIVATE
   ../../voip/src/core/VoipRuntime.cpp
   ../../voip/src/core/VoipResourceGuard.cpp
 )
+target_sources_ifdef(CONFIG_VOIP_PJSUA_REGISTRATION_TEST app PRIVATE
+  src/pjsua_registration.cpp
+  test_support/ScriptedRegistrar.cpp
+)
 target_sources_ifdef(CONFIG_VOIP_CORE_SERVICE_TEST app PRIVATE
   src/core_service.cpp
 )

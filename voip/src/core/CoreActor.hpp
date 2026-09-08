@@ -2,6 +2,7 @@
 #define VOIP_CORE_CORE_ACTOR_HPP
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #if defined(__ZEPHYR__)
 #include <zephyr/kernel.h>
@@ -23,6 +24,12 @@ public:
     void Stop() noexcept;
     void SetPaused(bool paused) noexcept { paused_.store(paused); }
     bool Running() const noexcept { return running_.load(); }
+#if defined(CONFIG_VOIP_PJSUA_REGISTRATION_TEST)
+    // The registration integration test verifies that a full actor turn can
+    // survive a context switch without corrupting the actor TLS record.
+    static bool RegistrationTestTlsProbePassed() noexcept;
+    static std::size_t RegistrationTestMinimumUnusedStackBytes() noexcept;
+#endif
 
 private:
     void Run(VoipRuntime *) noexcept;

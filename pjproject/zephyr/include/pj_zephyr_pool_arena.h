@@ -16,6 +16,9 @@ struct pj_zephyr_pool_arena_stats {
 	size_t largest_free_block;
 	uint32_t live_blocks;
 	uint32_t failed_allocations;
+	size_t last_reset_wiped_bytes;
+	uint32_t reset_wipe_count;
+	uint8_t reset_in_progress;
 };
 
 pj_status_t pj_zephyr_pool_arena_install(void);

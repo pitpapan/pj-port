@@ -1,5 +1,6 @@
 #include "AgentRegistry.hpp"
 
+#include <cstdint>
 #include <cstring>
 
 namespace voip {
@@ -176,6 +177,26 @@ void AgentRegistry::Reset() noexcept {
     pool_.InvalidateAll();
     for (AgentHandle &handle : handles_) handle = AgentHandle{};
     count_ = 0;
+}
+
+bool AgentRegistry::CredentialsErasedForTest() const noexcept {
+    constexpr std::size_t username_offset =
+        offsetof(AgentContext, sip) + offsetof(OwnedSipAccountConfig, auth_username);
+    constexpr std::size_t password_offset =
+        offsetof(AgentContext, sip) + offsetof(OwnedSipAccountConfig, auth_password);
+
+    return pool_.EveryObjectStorageForTest(
+        [](const std::uint8_t *storage, std::size_t storage_size) noexcept {
+            if (storage_size < password_offset + sizeof(OwnedSipAccountConfig::auth_password))
+                return false;
+            for (std::size_t index = 0; index < sizeof(OwnedSipAccountConfig::auth_username); ++index) {
+                if (storage[username_offset + index] != 0) return false;
+            }
+            for (std::size_t index = 0; index < sizeof(OwnedSipAccountConfig::auth_password); ++index) {
+                if (storage[password_offset + index] != 0) return false;
+            }
+            return true;
+        });
 }
 
 Error AgentRegistry::GetAgentHandle(std::uint8_t config_index,

@@ -11,6 +11,9 @@ struct PjsuaApi {
     pj_status_t (*arena_install)() = nullptr;
     pj_status_t (*arena_reset)() = nullptr;
     pj_status_t (*create)() = nullptr;
+    pj_bool_t (*thread_is_registered)() = nullptr;
+    pj_status_t (*thread_register)(const char *, pj_thread_desc,
+                                   pj_thread_t **) = nullptr;
     void (*config_default)(pjsua_config *) = nullptr;
     void (*logging_config_default)(pjsua_logging_config *) = nullptr;
     void (*media_config_default)(pjsua_media_config *) = nullptr;

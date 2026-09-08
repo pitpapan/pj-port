@@ -2,14 +2,53 @@
 #include "VoipRuntime.hpp"
 
 #include <chrono>
+#if defined(CONFIG_VOIP_PJSUA_REGISTRATION_TEST)
+#include <cerrno>
+#include <zephyr/sys/printk.h>
+#endif
 namespace voip {
+
+#if defined(CONFIG_VOIP_PJSUA_REGISTRATION_TEST)
+namespace {
+std::atomic<int> registration_tls_probe_status{0};
+std::atomic<std::size_t> registration_min_unused_stack_bytes{
+    CONFIG_VOIP_CORE_ACTOR_STACK_SIZE};
+constexpr int registration_tls_probe_errno = 0x5a17;
+
+void RecordRegistrationStackSpace() noexcept {
+    std::size_t unused{};
+    if (k_thread_stack_space_get(k_current_get(), &unused) != 0) return;
+    std::size_t observed = registration_min_unused_stack_bytes.load(
+        std::memory_order_relaxed);
+    while (unused < observed &&
+           !registration_min_unused_stack_bytes.compare_exchange_weak(
+               observed, unused, std::memory_order_relaxed,
+               std::memory_order_relaxed)) {
+    }
+}
+}
+
+bool CoreActor::RegistrationTestTlsProbePassed() noexcept {
+    return registration_tls_probe_status.load(std::memory_order_acquire) == 1;
+}
+
+std::size_t CoreActor::RegistrationTestMinimumUnusedStackBytes() noexcept {
+    return registration_min_unused_stack_bytes.load(std::memory_order_acquire);
+}
+#endif
 
 bool CoreActor::Start(VoipRuntime &runtime) noexcept {
     if (running_.load()) return false;
     stop_.store(false);
 #if defined(__ZEPHYR__)
     running_.store(false);
-    thread_ = k_thread_create(&thread_data_, stack_, K_THREAD_STACK_SIZEOF(stack_),
+#if defined(CONFIG_VOIP_PJSUA_REGISTRATION_TEST)
+    registration_tls_probe_status.store(0, std::memory_order_release);
+#endif
+    // A K_KERNEL_STACK_MEMBER must be passed with its corresponding size
+    // macro; the documented API permits neither sizeof nor the thread-stack
+    // size macro for this object.
+    thread_ = k_thread_create(&thread_data_, stack_, K_KERNEL_STACK_SIZEOF(stack_),
                               &CoreActor::Entry, &runtime, nullptr, nullptr,
                               K_PRIO_PREEMPT(5), 0, K_NO_WAIT);
     if (thread_ != nullptr) running_.store(true);
@@ -41,11 +80,25 @@ void CoreActor::Stop() noexcept {
 void CoreActor::Entry(void *first, void *, void *) noexcept {
     static_cast<VoipRuntime *>(first)->Step(
         static_cast<std::uint64_t>(k_uptime_get()));
+#if defined(CONFIG_VOIP_PJSUA_REGISTRATION_TEST)
+    RecordRegistrationStackSpace();
+    // `errno` uses Zephyr TLS in this profile.  The preceding full PJSUA
+    // initialization reaches the deepest actor stack path; sleeping here
+    // forces the scheduler to restore the actor's stored TLS pointer.
+    errno = registration_tls_probe_errno;
+    k_sleep(K_MSEC(1));
+    registration_tls_probe_status.store(
+        errno == registration_tls_probe_errno ? 1 : -1,
+        std::memory_order_release);
+#endif
     // The actor remains in the runtime-owned loop until shutdown.  Keeping
     // this loop here avoids exposing k_thread to the public service contract.
     while (true) {
         static_cast<VoipRuntime *>(first)->Step(
             static_cast<std::uint64_t>(k_uptime_get()));
+#if defined(CONFIG_VOIP_PJSUA_REGISTRATION_TEST)
+        RecordRegistrationStackSpace();
+#endif
         k_sleep(K_MSEC(1));
     }
 }

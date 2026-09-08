@@ -11,12 +11,16 @@ class PjsuaRuntime final {
 public:
     explicit PjsuaRuntime(const PjsuaApi &api = NativePjsuaApi()) noexcept : api_(api) {}
     Error CreateAndInitialize(const pjsua_callback &, const PcmFormat &) noexcept;
+    Error EnsureActorRegistered() noexcept;
     Error Start() noexcept;
     Error Pump(std::uint32_t timeout_ms) noexcept;
     Error Destroy() noexcept;
+    bool Created() const noexcept { return created_; }
 private:
     const PjsuaApi &api_;
     bool arena_ = false, created_ = false, initialized_ = false, started_ = false;
+    pj_thread_desc actor_thread_desc_{};
+    pj_thread_t *actor_pj_thread_ = nullptr;
     std::thread::id actor_thread_{};
     void AssertActor() const noexcept;
 };

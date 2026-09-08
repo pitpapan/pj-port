@@ -67,7 +67,9 @@ public:
     bool Validate(CallHandle) const noexcept override;
 
 private:
-    enum class Lifecycle : std::uint8_t { idle, starting, running, shutting_down, stopped };
+    enum class Lifecycle : std::uint8_t {
+        idle, starting, startup_cleanup, running, shutting_down, stopped
+    };
 
     void CompleteStartup(Error) noexcept;
     void RollbackStartup(Error) noexcept;
@@ -126,6 +128,7 @@ private:
     CoreEventSignal shutdown_signal_{};
     CoreEventSignal startup_signal_{};
     Error startup_error_ = Error::ok;
+    Error startup_cleanup_error_ = Error::ok;
     bool shutdown_complete_ = false;
     Error shutdown_error_ = Error::ok;
     bool event_publication_failed_ = false;

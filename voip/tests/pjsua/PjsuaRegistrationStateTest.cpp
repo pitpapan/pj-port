@@ -136,18 +136,23 @@ void RunPjsuaRegistrationStateTests() {
     }
     Drain(accounts);
 
-    for (std::uint8_t slot = 0; slot < 4; ++slot) {
+    for (std::uint8_t slot = 0; slot < 5; ++slot) {
         AgentHandle handle{}; assert(registry.GetAgentHandle(slot, &handle) == Error::ok);
         pjsua_acc_id id{}; assert(accounts.NativeId(handle, &id) == Error::ok);
         PjsuaAccountContext *slot_context = accounts.Resolve(id); assert(slot_context != nullptr);
-        slot_context->retry = {};
-        assert(accounts.Pump(10000) == Error::ok);
-        accounts.OnRegistrationState(Record(id, PJ_EUNKNOWN, 0, "jitter", true, false, 0));
-        Expect(accounts, RegistrationState::transport_failed, Error::signaling_failed, 0, "jitter");
-        Expect(accounts, RegistrationState::retry_wait, Error::signaling_failed, 0, "jitter");
-        assert(slot_context->retry.due_ms == 11000 + static_cast<std::uint64_t>(slot) * 50);
-        Drain(accounts);
+        slot_context->register_on_start = true;
+        for (std::size_t attempt = 0; attempt < 7; ++attempt) {
+            slot_context->retry = {static_cast<std::uint8_t>(attempt), 0, false};
+            assert(accounts.Pump(10000) == Error::ok);
+            accounts.OnRegistrationState(Record(id, PJ_EUNKNOWN, 0, "jitter", true, false, 0));
+            Expect(accounts, RegistrationState::transport_failed, Error::signaling_failed, 0, "jitter");
+            Expect(accounts, RegistrationState::retry_wait, Error::signaling_failed, 0, "jitter");
+            assert(slot_context->retry.due_ms == 10000 + bases[attempt] +
+                   static_cast<std::uint64_t>(slot) * 50);
+            Drain(accounts);
+        }
     }
+    accounts.Resolve(3)->register_on_start = false;
 
     PjsuaAccountContext *one = accounts.Resolve(0); PjsuaAccountContext *three = accounts.Resolve(1);
     PjsuaAccountContext *zero = accounts.Resolve(2); PjsuaAccountContext *two = accounts.Resolve(4); PjsuaAccountContext *four = accounts.Resolve(3);
