@@ -60,6 +60,7 @@ target_sources_ifdef(CONFIG_VOIP_PJSUA_ARENA_TEST app PRIVATE
 )
 target_sources_ifdef(CONFIG_VOIP_PJSUA_CAPACITY_TEST app PRIVATE
   src/pjsua_capacity.c
+  test_support/PjsuaCapacityDeclineDrain.c
 )
 target_sources_ifdef(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST app PRIVATE
   ../../voip/tests/pjsua/PjsuaPlan3TestMain.cpp

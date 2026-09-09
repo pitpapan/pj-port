@@ -8,6 +8,8 @@ trap 'if [ "$cleanup" -eq 1 ]; then rm -rf "$out"; fi' EXIT
 
 cxx="${CXX:-c++}"
 flags="-std=c++17 -Wall -Wextra -Werror -pthread -I$root/include -I$root/src"
+cc="${CC:-cc}"
+cflags="-std=c11 -Wall -Wextra -Werror -I$root/../applications/voip_integration/test_support"
 
 $cxx $flags -c "$root/tests/unit/PublicContractTest.cpp" -o "$out/PublicContractTest.o"
 echo "PublicContractTest PASSED"
@@ -61,5 +63,10 @@ $cxx $flags "$root/tests/unit/ShutdownMailboxRegressionTest.cpp" \
     "$root/src/core/CoreActor.cpp" "$root/src/core/VoipRuntime.cpp" \
     "$root/src/core/VoipResourceGuard.cpp" -o "$out/ShutdownMailboxRegressionTest"
 "$out/ShutdownMailboxRegressionTest"
+
+$cc $cflags "$root/tests/unit/PjsuaCapacityDeclineDrainTest.c" \
+    "$root/../applications/voip_integration/test_support/PjsuaCapacityDeclineDrain.c" \
+    -o "$out/PjsuaCapacityDeclineDrainTest"
+"$out/PjsuaCapacityDeclineDrainTest"
 
 cleanup=1

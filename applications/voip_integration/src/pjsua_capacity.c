@@ -11,6 +11,8 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "../test_support/PjsuaCapacityDeclineDrain.h"
+
 _Static_assert(PJSUA_MAX_ACC == 5, "PJSUA_MAX_ACC must be five");
 _Static_assert(PJSUA_MAX_CALLS == 7, "PJSUA_MAX_CALLS must be seven");
 _Static_assert(PJSUA_MAX_CONF_PORTS == 12,
@@ -24,6 +26,7 @@ _Static_assert(PJSIP_HAS_TLS_TRANSPORT == 0,
 #define EVENT_POLL_LIMIT 500
 #define RESPONSE_POLL_MS 1000
 #define QUIESCENCE_POLL_LIMIT 500
+#define DECLINE_DRAIN_TIMEOUT_MS PJSIP_TD_TIMEOUT
 
 static pjsua_acc_id account_ids[ACCOUNT_COUNT];
 static pjsua_call_id held_call_ids[HELD_CALL_COUNT];
@@ -212,15 +215,47 @@ static int response_is_busy(pj_sock_t sock)
 	return -1;
 }
 
+struct decline_ack_context {
+	pj_sock_t sock;
+	unsigned port;
+};
+
+static int send_decline_ack(void *opaque, unsigned cseq,
+			    const char *to_header)
+{
+	struct decline_ack_context *context = opaque;
+	char ack[768];
+	int ack_len;
+
+	ack_len = pj_ansi_snprintf(
+		ack, sizeof(ack),
+		"ACK sip:capacity@127.0.0.1:%u;transport=tcp SIP/2.0\r\n"
+		"Via: SIP/2.0/TCP 127.0.0.1:9;branch=z9hG4bK-capacity-%u\r\n"
+		"From: <sip:peer%u@127.0.0.1>;tag=capacity-%u\r\n"
+		"To: %s\r\n"
+		"Call-ID: pjsua-capacity-%u@127.0.0.1\r\n"
+		"CSeq: %u ACK\r\nMax-Forwards: 70\r\n"
+		"Content-Length: 0\r\n\r\n",
+		context->port, cseq, cseq, cseq, to_header, cseq, cseq);
+	if (ack_len <= 0 ||
+	    send_all(context->sock, ack, (pj_size_t)ack_len) != PJ_SUCCESS)
+		return -1;
+	return 0;
+}
+
 static int acknowledge_declines(pj_sock_t sock, unsigned port)
 {
-	char buffer[4096];
-	pj_size_t buffered = 0;
-	unsigned acknowledged = 0;
-	unsigned polls;
+	struct pjsua_capacity_decline_drain drain;
+	struct decline_ack_context context = { sock, port };
+	uint64_t now_ms = (uint64_t)k_uptime_get();
+	enum pjsua_capacity_decline_result drain_result;
 
-	for (polls = 0; polls < EVENT_POLL_LIMIT &&
-		     acknowledged < HELD_CALL_COUNT; ++polls) {
+	pjsua_capacity_decline_drain_init(&drain, HELD_CALL_COUNT, now_ms,
+					  DECLINE_DRAIN_TIMEOUT_MS,
+					  DECLINE_DRAIN_TIMEOUT_MS);
+	drain_result = PJSUA_CAPACITY_DECLINE_WAITING;
+
+	while (drain_result == PJSUA_CAPACITY_DECLINE_WAITING) {
 		pj_fd_set_t read_set;
 		pj_time_val timeout = { 0, 10 };
 		int result;
@@ -230,75 +265,25 @@ static int acknowledge_declines(pj_sock_t sock, unsigned port)
 		PJ_FD_SET(sock, &read_set);
 		result = pj_sock_select((int)sock + 1, &read_set, NULL, NULL,
 					&timeout);
-		if (result <= 0 || !PJ_FD_ISSET(sock, &read_set))
+		now_ms = (uint64_t)k_uptime_get();
+		if (result <= 0 || !PJ_FD_ISSET(sock, &read_set)) {
+			drain_result = pjsua_capacity_decline_drain_poll(
+				&drain, now_ms);
 			continue;
-		if (buffered == sizeof(buffer) - 1)
-			return -1;
+		}
 		{
-			pj_ssize_t length = sizeof(buffer) - 1 - buffered;
+			char data[1024];
+			pj_ssize_t length = sizeof(data);
 
-			if (pj_sock_recv(sock, buffer + buffered, &length, 0) !=
+			if (pj_sock_recv(sock, data, &length, 0) !=
 			    PJ_SUCCESS || length <= 0)
 				return -1;
-			buffered += (pj_size_t)length;
-			buffer[buffered] = '\0';
-		}
-		for (;;) {
-			char *end = strstr(buffer, "\r\n\r\n");
-			char to_header[256];
-			char *to_start;
-			char *to_end;
-			char ack[768];
-			int ack_len;
-
-			if (end == NULL)
-				break;
-			*end = '\0';
-			if (strstr(buffer, "SIP/2.0 603 Decline") == NULL) {
-				pj_size_t consumed = (pj_size_t)(end - buffer) + 4;
-
-				memmove(buffer, buffer + consumed,
-					buffered - consumed);
-				buffered -= consumed;
-				buffer[buffered] = '\0';
-				continue;
-			}
-			to_start = strstr(buffer, "To: ");
-			to_end = to_start == NULL ? NULL : strstr(to_start, "\r\n");
-			if (to_start == NULL || to_end == NULL ||
-			    (pj_size_t)(to_end - to_start - 4) >=
-				    sizeof(to_header))
-				return -1;
-			memcpy(to_header, to_start + 4,
-			       (pj_size_t)(to_end - to_start - 4));
-			to_header[to_end - to_start - 4] = '\0';
-			ack_len = pj_ansi_snprintf(
-				ack, sizeof(ack),
-				"ACK sip:capacity@127.0.0.1:%u;transport=tcp SIP/2.0\r\n"
-				"Via: SIP/2.0/TCP 127.0.0.1:9;branch=z9hG4bK-capacity-%u\r\n"
-				"From: <sip:peer%u@127.0.0.1>;tag=capacity-%u\r\n"
-				"To: %s\r\n"
-				"Call-ID: pjsua-capacity-%u@127.0.0.1\r\n"
-				"CSeq: %u ACK\r\nMax-Forwards: 70\r\n"
-				"Content-Length: 0\r\n\r\n",
-				port, acknowledged + 1, acknowledged + 1,
-				acknowledged + 1, to_header, acknowledged + 1,
-				acknowledged + 1);
-			if (ack_len <= 0 ||
-			    send_all(sock, ack, (pj_size_t)ack_len) != PJ_SUCCESS)
-				return -1;
-			++acknowledged;
-			{
-				pj_size_t consumed = (pj_size_t)(end - buffer) + 4;
-
-				memmove(buffer, buffer + consumed,
-					buffered - consumed);
-				buffered -= consumed;
-				buffer[buffered] = '\0';
-			}
+			drain_result = pjsua_capacity_decline_drain_feed(
+				&drain, data, (size_t)length, now_ms,
+				send_decline_ack, &context);
 		}
 	}
-	return acknowledged == HELD_CALL_COUNT ? 0 : -1;
+	return drain_result == PJSUA_CAPACITY_DECLINE_COMPLETE ? 0 : -1;
 }
 
 static int wait_for_cleanup_quiescence(unsigned transport_baseline)
