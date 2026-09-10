@@ -97,6 +97,34 @@ void RunPjsuaPublicServiceTests() {
     SetNativePjsuaApiForComponentTest(&fake.Api());
     static ServiceStorage first_storage;
     static ServiceStorage second_storage;
+
+    // Disabled security policies are rejected through the production-selected
+    // public service before the adapter can touch any native PJSUA resource.
+    // An empty fake sequence proves there was no arena install, pjsua_create,
+    // transport creation, start, account add, registration, or teardown call.
+    for (const SecurityPolicy security : {
+             SecurityPolicy{SignalingSecurity::tls, MediaSecurity::none},
+             SecurityPolicy{SignalingSecurity::none, MediaSecurity::srtp_sdes}}) {
+        fake.Reset();
+        const unsigned router_attach_attempts =
+            PjsuaCallbackRouter::AttachAttemptCountForTest();
+        ServiceConfig rejected_config = fixture.config;
+        rejected_config.security = security;
+        VoipService *rejected = ::new (first_storage.bytes) VoipService();
+        assert(rejected->Initialize(rejected_config) ==
+               Error::unsupported_configuration);
+        assert(fake.SequenceEquals(""));
+        assert(fake.ArenaInstallCount() == 0);
+        assert(PjsuaCallbackRouter::AttachAttemptCountForTest() ==
+               router_attach_attempts);
+        assert(fake.AccountAddCount() == 0);
+        assert(fake.RegistrationCount() == 0);
+        assert(PjsuaCallbackRouter::ActiveForTest() == nullptr);
+        assert(rejected->GetResourceSnapshot().active_agents == 0);
+        rejected->~VoipService();
+    }
+
+    fake.Reset();
     VoipService *first = ::new (first_storage.bytes) VoipService();
     VoipService *second = ::new (second_storage.bytes) VoipService();
     const Error first_result = first->Initialize(fixture.config);

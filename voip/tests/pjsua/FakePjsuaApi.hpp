@@ -20,6 +20,7 @@ public:
         has_failure_ = false;
         std::memset(sequence_, 0, sizeof(sequence_));
         used_ = 0;
+        arena_install_count_ = 0;
         std::memset(teardown_sequence_, 0, sizeof(teardown_sequence_));
         teardown_used_ = 0;
         std::memset(&ua_, 0, sizeof(ua_));
@@ -76,6 +77,7 @@ public:
     void FailArenaReset(pj_status_t status) noexcept { arena_reset_status_ = status; }
     void FailDestroyAttempts(std::size_t attempts) noexcept { destroy_failures_remaining_ = attempts; }
     bool SequenceEquals(const char *expected) const noexcept { return std::strcmp(sequence_, expected) == 0; }
+    std::size_t ArenaInstallCount() const noexcept { return arena_install_count_; }
     bool TeardownSequenceEquals(const char *expected) const noexcept {
         return std::strcmp(teardown_sequence_, expected) == 0;
     }
@@ -285,8 +287,13 @@ private:
         teardown_sequence_[teardown_used_] = 0;
     }
     bool Failed(Stage s) const noexcept { return has_failure_ && failed_ == s; }
-    static pj_status_t ArenaInstall() { Active().Record("arena"); return Active().Failed(Stage::arena) ? PJ_EUNKNOWN : PJ_SUCCESS; }
+    static pj_status_t ArenaInstall() {
+        ++Active().arena_install_count_;
+        Active().Record("arena");
+        return Active().Failed(Stage::arena) ? PJ_EUNKNOWN : PJ_SUCCESS;
+    }
     pj_status_t arena_reset_status_ = PJ_SUCCESS;
+    std::size_t arena_install_count_ = 0;
     std::size_t destroy_failures_remaining_{};
     static pj_status_t ArenaReset() { Active().Record("reset"); Active().RecordTeardown("reset"); return Active().arena_reset_status_; }
     static pj_status_t Create() { Active().Record("create"); return Active().Failed(Stage::create) ? PJ_EUNKNOWN : PJ_SUCCESS; }

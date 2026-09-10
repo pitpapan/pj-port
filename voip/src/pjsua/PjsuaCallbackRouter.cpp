@@ -5,8 +5,12 @@ namespace voip {
 PjsuaCallbackRouter *PjsuaCallbackRouter::active_ = nullptr;
 #if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST) || defined(CONFIG_VOIP_PJSUA_REGISTRATION_TEST)
 unsigned PjsuaCallbackRouter::callback_entry_count_ = 0;
+unsigned PjsuaCallbackRouter::attach_attempt_count_ = 0;
 const PjsuaCallbackRouter *PjsuaCallbackRouter::ActiveForTest() noexcept {
     return active_;
+}
+unsigned PjsuaCallbackRouter::AttachAttemptCountForTest() noexcept {
+    return attach_attempt_count_;
 }
 unsigned PjsuaCallbackRouter::CallbackEntryCountForTest() noexcept {
     return callback_entry_count_;
@@ -19,6 +23,9 @@ void PjsuaCallbackRouter::AssertActor() const noexcept {
 }
 Error PjsuaCallbackRouter::Attach(pjsua_callback *callbacks) noexcept {
     AssertActor();
+#if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST) || defined(CONFIG_VOIP_PJSUA_REGISTRATION_TEST)
+    ++attach_attempt_count_;
+#endif
     if (callbacks == nullptr || active_ != nullptr || attached_) return Error::invalid_state;
     actor_thread_ = std::this_thread::get_id();
     native_destroyed_ = false;

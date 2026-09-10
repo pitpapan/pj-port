@@ -6,16 +6,22 @@
 #include <pj_zephyr_pool_arena.h>
 #include <pjsua-lib/pjsua.h>
 #include <zephyr/kernel.h>
+#include <zephyr/sys/sys_heap.h>
 #include <zephyr/sys/printk.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+
+extern "C" void voip_general_heap_tracking_begin() noexcept;
+extern "C" std::size_t voip_general_heap_tracking_end() noexcept;
 
 namespace {
 constexpr voip::PcmFormat format{8000, 80, 1, voip::SampleFormat::signed_16};
 constexpr unsigned event_wait_ms = 50;
 constexpr unsigned settle_wait_ms = 9000;
 int failures;
+unsigned heap_clean_lifecycles;
 #define CHECK(condition) do { if (!(condition)) { printk("[PJSUA registration] FAIL line %d: %s\n", __LINE__, #condition); ++failures; } } while (false)
 
 class StubSource final : public voip::PcmSource {
@@ -100,6 +106,92 @@ void DrainUntil(voip::VoipService &service, Seen &seen, bool (*complete)(const S
     }
 }
 void Wipe(char (&value)[96]) { std::memset(value, 'X', sizeof(value)); }
+
+void CheckTrackedAllocation(void *memory) {
+    const std::size_t observed = voip_general_heap_tracking_end();
+    CHECK(memory != nullptr);
+    CHECK(observed != 0);
+}
+
+void VerifyGeneralHeapTracker() {
+    void *memory;
+
+    voip_general_heap_tracking_begin();
+    void *(*volatile allocate)(std::size_t) = std::malloc;
+    memory = allocate(8);
+    CheckTrackedAllocation(memory);
+    std::free(memory);
+
+    voip_general_heap_tracking_begin();
+    void *(*volatile allocate_zeroed)(std::size_t, std::size_t) = std::calloc;
+    memory = allocate_zeroed(1, 8);
+    CheckTrackedAllocation(memory);
+    std::free(memory);
+
+    void *original = std::malloc(8);
+    voip_general_heap_tracking_begin();
+    void *(*volatile resize)(void *, std::size_t) = std::realloc;
+    memory = resize(original, 16);
+    CheckTrackedAllocation(memory);
+    std::free(memory != nullptr ? memory : original);
+
+    voip_general_heap_tracking_begin();
+    void *(*volatile allocate_aligned)(std::size_t, std::size_t) =
+        ::aligned_alloc;
+    memory = allocate_aligned(8, 8);
+    CheckTrackedAllocation(memory);
+    std::free(memory);
+
+    voip_general_heap_tracking_begin();
+    memory = k_malloc(8);
+    CheckTrackedAllocation(memory);
+    k_free(memory);
+
+    voip_general_heap_tracking_begin();
+    memory = k_calloc(1, 8);
+    CheckTrackedAllocation(memory);
+    k_free(memory);
+
+    original = k_malloc(8);
+    voip_general_heap_tracking_begin();
+    memory = k_realloc(original, 16);
+    CheckTrackedAllocation(memory);
+    k_free(memory != nullptr ? memory : original);
+
+    voip_general_heap_tracking_begin();
+    memory = k_aligned_alloc(8, 8);
+    CheckTrackedAllocation(memory);
+    k_free(memory);
+
+    alignas(8) static std::uint8_t heap_memory[512];
+    static sys_heap test_heap;
+    sys_heap_init(&test_heap, heap_memory, sizeof(heap_memory));
+
+    voip_general_heap_tracking_begin();
+    memory = sys_heap_alloc(&test_heap, 8);
+    CheckTrackedAllocation(memory);
+    sys_heap_free(&test_heap, memory);
+
+    voip_general_heap_tracking_begin();
+    memory = sys_heap_noalign_alloc(&test_heap, 8, 8);
+    CheckTrackedAllocation(memory);
+
+    original = memory;
+    voip_general_heap_tracking_begin();
+    memory = sys_heap_realloc(&test_heap, original, 16);
+    CheckTrackedAllocation(memory);
+    sys_heap_free(&test_heap, memory != nullptr ? memory : original);
+
+    voip_general_heap_tracking_begin();
+    memory = sys_heap_aligned_alloc(&test_heap, 8, 8);
+    CheckTrackedAllocation(memory);
+
+    original = memory;
+    voip_general_heap_tracking_begin();
+    memory = sys_heap_aligned_realloc(&test_heap, original, 8, 16);
+    CheckTrackedAllocation(memory);
+    sys_heap_free(&test_heap, memory != nullptr ? memory : original);
+}
 
 voip::VoipService &ServiceUnderTest() noexcept {
     static voip::VoipService service;
@@ -208,6 +300,8 @@ void RunCompleteLifecycle(unsigned lifecycle,
         {voip::SignalingSecurity::none, voip::MediaSecurity::none}};
     const voip::Error initialize_result = service.Initialize(config);
     CHECK(initialize_result == voip::Error::ok);
+    if (initialize_result == voip::Error::ok)
+        voip_general_heap_tracking_begin();
     voip::AgentHandle handles[5]{};
     for (unsigned index = 0; index < 5; ++index) {
         CHECK(service.GetAgentHandle(index, &handles[index]) == voip::Error::ok);
@@ -365,6 +459,11 @@ void RunCompleteLifecycle(unsigned lifecycle,
     CHECK(stats.challenges >= 5 && stats.authorized >= 4 && stats.forbidden == 1);
     CHECK(stats.registrations == before_shutdown.registrations);
     CHECK(stats.unregistrations == before_shutdown.unregistrations + 3);
+    const std::size_t general_heap_allocations = initialize_result == voip::Error::ok
+        ? voip_general_heap_tracking_end() : 1;
+    CHECK(general_heap_allocations == 0);
+    if (general_heap_allocations == 0)
+        ++heap_clean_lifecycles;
     if (failures == failures_before) {
         previous_reset_wipe_count = arena.reset_wipe_count;
         ++completed_lifecycles;
@@ -376,6 +475,7 @@ void RunCompleteLifecycle(unsigned lifecycle,
 } // namespace
 int main() {
     printk("VoIP PJSUA five-account TCP Digest registration validation\n");
+    VerifyGeneralHeapTracker();
     RunOneAccountSmoke();
     pj_zephyr_pool_arena_stats arena{};
     pj_zephyr_pool_arena_get_stats(&arena);
@@ -384,9 +484,11 @@ int main() {
     for (unsigned lifecycle = 0; lifecycle < 5; ++lifecycle)
         RunCompleteLifecycle(lifecycle, completed_lifecycles,
                              previous_reset_wipe_count);
-    if (failures != 0 || completed_lifecycles != 5) {
+    if (failures != 0 || completed_lifecycles != 5 ||
+        heap_clean_lifecycles != 5) {
         printk("VOIP PJSUA REGISTRATION RESULT: FAILED (%d checks)\n", failures);
     } else {
+        printk("VOIP PJSUA GENERAL HEAP: PASSED (0 allocations after initialization)\n");
         printk("VOIP PJSUA REGISTRATION RESULT: PASSED (5 independent accounts, 5 lifecycles)\n");
     }
     return failures == 0 ? 0 : 1;

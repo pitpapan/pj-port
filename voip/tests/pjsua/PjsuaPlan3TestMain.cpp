@@ -1,3 +1,4 @@
+#include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 #include "FakePjsuaApi.hpp"
 #include "../../src/pjsua/PjsuaCallbackRouter.hpp"
@@ -22,5 +23,8 @@ int main() {
     if (test_first <= 5 && test_limit >= 5) { voip::test::RunPjsuaRegistrationStateTests(); AssertDetached(); }
     if (test_first <= 6 && test_limit >= 6) { voip::test::RunPjsuaRuntimeAdapterTests(); AssertDetached(); }
     printk("PJSUA PLAN 3 COMPONENT RESULT: PASSED\n");
-    return 0;
+    // A Zephyr main return enters abort() after the verdict.  The component
+    // harness owns QEMU lifetime, so leave this fully detached test image
+    // quiescent until its timeout cleanup.
+    k_sleep(K_FOREVER);
 }

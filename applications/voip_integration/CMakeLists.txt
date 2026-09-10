@@ -89,8 +89,27 @@ target_sources_ifdef(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST app PRIVATE
 )
 target_sources_ifdef(CONFIG_VOIP_PJSUA_REGISTRATION_TEST app PRIVATE
   src/pjsua_registration.cpp
+  test_support/GeneralHeapTracker.cpp
   test_support/ScriptedRegistrar.cpp
 )
+if(CONFIG_VOIP_PJSUA_REGISTRATION_TEST)
+  target_compile_definitions(app PRIVATE VOIP_GENERAL_HEAP_WRAP_ENABLED=1)
+  target_link_options(app INTERFACE
+    -Wl,--wrap=malloc
+    -Wl,--wrap=calloc
+    -Wl,--wrap=realloc
+    -Wl,--wrap=aligned_alloc
+    -Wl,--wrap=k_malloc
+    -Wl,--wrap=k_calloc
+    -Wl,--wrap=k_realloc
+    -Wl,--wrap=k_aligned_alloc
+    -Wl,--wrap=sys_heap_alloc
+    -Wl,--wrap=sys_heap_noalign_alloc
+    -Wl,--wrap=sys_heap_realloc
+    -Wl,--wrap=sys_heap_aligned_alloc
+    -Wl,--wrap=sys_heap_aligned_realloc
+  )
+endif()
 target_sources_ifdef(CONFIG_VOIP_CORE_SERVICE_TEST app PRIVATE
   src/core_service.cpp
 )
