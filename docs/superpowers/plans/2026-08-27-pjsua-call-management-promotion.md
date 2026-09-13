@@ -2,320 +2,517 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Integrate incoming and outgoing PJSUA calls with seven logical contexts, two global promoted slots, at most one promoted call per agent, and the approved strict shared FIFO.
+**Goal:** Connect the completed five-account PJSUA service to incoming and outgoing calls while preserving seven logical calls, two global promoted leases, one promoted call per agent, and the strict shared five-entry FIFO.
 
-**Architecture:** `PjsuaCallManager` translates PJSUA callbacks and call-control commands but delegates admission/promotion order to `CallScheduler`. Queued outgoing calls have no PJSUA ID. Queued incoming calls retain their early PJSUA ID and receive 180. A stable seven-record `PjsuaCallContext` table maps optional native IDs to logical handles; native resources and promoted leases are released only after full teardown.
+**Architecture:** `VoipRuntime`, `CallScheduler`, and `CallStateMachine` remain the only owners of product admission, FIFO order, public state, handles, operations, and guaranteed events. A new actor-owned `PjsuaCallManager` owns only native PJSUA call records and translates between opaque runtime tokens and `pjsua_call_id`; `PjsuaRuntimeAdapter` composes it with the Plan 3 runtime, account, callback-router, and transport components. Incoming admission is a two-phase transaction so no `180 Ringing` is sent until logical capacity and both guaranteed events are reserved.
 
-**Tech Stack:** C++17, PJSUA-LIB call APIs, PJSIP INVITE/SDP, fixed arrays, fake PJSUA API tests, scripted SIP peers over TCP, public polling API.
+**Tech Stack:** C++17, PJSUA-LIB C API, PJSIP INVITE/SDP over SIP TCP, plain RTP/RTCP negotiation, fixed arrays, generation-protected handles, fake PJSUA component tests, scripted loopback SIP peers, Zephyr QEMU, and a compile-only `mimxrt1064_evk` gate.
 
 **Spec:** `docs/superpowers/specs/2026-08-27-multi-agent-pjsua-voip-architecture-design.md`
 
 **Business state machine:** `docs/superpowers/specs/state_machine.uml`
 
+**Plan 3 baseline:** `987076845` records acceptance of source revision `c6a9a97b9`. Read `designIdead.md`, `reviews.md`, and `docs/voip/pjsua-five-account-registration.md` before changing code.
+
 ## Global Constraints
 
-- Never inspect, search, index, or modify `zephyr/`.
-- PJSUA-LIB owns SIP dialog, INVITE, SDP, hold, and teardown mechanics.
-- Product code owns capacity, FIFO, per-agent exclusion, logical handles, and timers.
-- Keep exactly seven logical/PJSUA contexts, two promoted leases, and five FIFO entries.
-- Queued outgoing calls must not send INVITE or allocate a PJSUA call ID.
-- Queued incoming calls receive 180 and retain a PJSUA call ID.
-- Full admission/PJSUA call-ID capacity rejects incoming with 486; queue timeout uses 480.
-- Custom agent audio attachment is deferred to Plan 5; call/media state must expose a clean hook.
-- Keep the five public business states separate from private scheduler/PJSUA
-  phases. `hold(waiting)` is pre-establishment wait, whether queued or promoted
-  pending acceptance; `hold(media)` is negotiated hold.
-- Apply public transitions only through the core `CallStateMachine`; PJSUA
-  callback translation must not duplicate its transition table.
-- Publish one copied terminal transition before immediate handle invalidation
-  and slot return to `idle`; do not retain terminal contexts on a timer.
+- Never inspect, search, index, or modify `zephyr/`; use documented `west` commands and build output.
+- Preserve one to five immutable agents initialized once, one PJSUA account per agent, and exactly one process-global initialized PJSUA service.
+- Preserve fixed capacities: five agents, seven logical/native call contexts, two promoted leases, five FIFO entries, 16 commands, 16 operations, and 32 events.
+- `CallScheduler` already owns admission, strict FIFO, head-of-line blocking, one-promoted-call-per-agent, and logical handle generations. Plan 4 consumes and narrowly extends it; it does not create a second scheduler.
+- `CallStateMachine` remains the only mutable owner of public `CallState` and `HoldReason`. Native phases never duplicate or bypass `state_machine.uml`.
+- PJSUA-LIB owns SIP dialog, INVITE, SDP, hold, and native teardown. Product code owns capacity, FIFO order, handles, timers, and event guarantees.
+- Only the VoIP actor invokes mutable PJSUA APIs. PJSUA/PJMEDIA worker counts remain zero; the actor drives `pjsua_handle_events()`.
+- Callbacks synchronously copy bounded values. Never retain `pjsip_rx_data *`, `pjsua_call_info` string views, SDP pool pointers, callback-local addresses, or application callbacks.
+- A queued outgoing call owns a logical handle and copied URI but no PJSUA ID and sends no INVITE. A queued incoming call retains its early PJSUA ID and receives `180 Ringing` only after transactional admission.
+- Promotion alone does not mean acceptance. A call in `hold(waiting)` stays there until PJSUA confirms acceptance.
+- Two eligible FIFO entries may promote in one capacity pass when two leases are free. FIFO controls order; it does not serialize otherwise eligible promotions.
+- Queue timing starts at admission. Answer/establishment timing starts or restarts at promotion.
+- Commit one terminal event before handle invalidation. Clear native user data and release a promoted lease only after signaling, media state, and callback entry are quiescent.
+- No C++ or general system-heap allocation is allowed after initialization. PJPROJECT uses only the fixed VoIP arena.
+- SIP uses plain TCP and media negotiation uses plain RTP/RTCP. TLS and SRTP stay disabled and return `unsupported_configuration` before native call allocation.
+- Codec policy, custom audio attachment, and the two media bridges remain Plan 5 scope. Plan 4 retains the PJSUA no-sound-device boundary and exposes a future media hook.
+- Do not remove the legacy uppercase stack.
+- QEMU is not embedded acceptance. Plan 4 requires RT1064 compile/link and memory reports only; hardware audio, network selection, and runtime qualification remain later work.
 
 ---
 
-## Task 1: Add native call contexts and callback-safe mapping
+### Task 1: Add the bounded PJSUA call API seam and component profile
 
 **Files:**
 
-- Create: `voip/src/pjsua/PjsuaCallContext.hpp`
-- Create: `voip/src/pjsua/PjsuaCallManager.hpp`
-- Create: `voip/src/pjsua/PjsuaCallManager.cpp`
-- Create: `voip/tests/pjsua/PjsuaCallContextTest.cpp`
-- Modify: `voip/src/pjsua/PjsuaCallbackRouter.hpp`
-- Modify: `voip/src/pjsua/PjsuaCallbackRouter.cpp`
-
-**Interfaces:**
-
-- Consumes: `CallHandle`, `AgentHandle`, `pjsua_call_id`, PJSUA call user data.
-- Produces: stable seven-record native-call lookup and copied callback notifications.
-
-- [ ] Write tests allocating seven contexts, binding native IDs in non-slot order, resolving via user data, rejecting duplicate IDs, clearing user data before reuse, ignoring late callbacks from a released generation, and exhausting the eighth context.
-
-- [ ] Confirm tests fail because the call context manager is absent.
-
-- [ ] Define each context with fixed storage: logical handle, agent handle,
-  optional PJSUA ID, private `PjsuaCallPhase`, incoming/outgoing direction,
-  answer-on-promotion flag, local operation IDs, queue/answer deadlines,
-  copied native callback data, and teardown/quiescence flags. Store no public
-  `CallState`, `HoldReason`, application-owned audio pointer, or second business
-  state machine here; the core logical context is the single source.
-
-- [ ] Bind native calls with `pjsua_call_set_user_data(call_id, &stable_context)` only after the logical context is committed. Clear it before releasing the context; verify `pjsua_call_get_user_data()` in callbacks and reject mismatches.
-
-- [ ] Copy all callback data needed later while inside the callback. Never retain `pjsip_rx_data*`, `pjsua_call_info` string views, SDP pool pointers, or callback-local memory.
-
-- [ ] Extend the callback router to dispatch incoming, call-state, and media-state callbacks to `PjsuaCallManager`; never invoke the public event consumer directly.
-
-- [ ] Run `PjsuaCallContextTest` and require success.
-
-- [ ] Commit:
-
-  ```sh
-  git add voip/src/pjsua voip/tests/pjsua/PjsuaCallContextTest.cpp
-  git commit -m "feat(voip): add bounded pjsua call contexts"
-  ```
-
-## Task 2: Admit incoming calls and preserve early dialogs in FIFO
-
-**Files:**
-
-- Modify: `voip/src/pjsua/PjsuaCallManager.hpp`
-- Modify: `voip/src/pjsua/PjsuaCallManager.cpp`
-- Modify: `voip/src/core/CallScheduler.hpp`
-- Modify: `voip/src/core/CallScheduler.cpp`
-- Create: `voip/tests/pjsua/PjsuaIncomingAdmissionTest.cpp`
-
-**Interfaces:**
-
-- Consumes: `on_incoming_call(acc_id, call_id, rdata)`, account mapping, logical call/event reservations.
-- Produces: incoming call handle/event, 180 response, immediate promotion or queued-incoming state.
-
-- [ ] Write fake tests for unknown account (404), no logical/event capacity (486), immediate admission, same-agent queueing, two globally promoted agents plus five queued incoming calls, eighth rejection (486), and failure to send 180.
-
-- [ ] Add a test proving invisible admission cannot occur: if guaranteed incoming-event reservation fails, `pjsua_call_answer(...,486,...)` is sent and no logical/native context remains bound.
-
-- [ ] Confirm tests fail against the empty callback handler.
-
-- [ ] Resolve `pjsua_acc_id -> PjsuaAccountContext -> AgentHandle`. Return 404 only for an unknown/unconfigured account mapping.
-
-- [ ] Reserve logical call context and guaranteed incoming event before committing. Bind the provided native ID, call `pjsua_call_answer2(call_id, ..., 180, ..., nullptr)`, and roll back with a final failure response if 180 cannot be applied.
-
-- [ ] Ask `CallScheduler` for immediate promotion or FIFO insertion. A queued entry retains its native ID but no media bridge. Populate the event with full agent/call snapshot and queue position.
-
-- [ ] Project admission through `initiated`; immediate acceptance may continue
-  to `established`, while FIFO insertion publishes `initiated -> hold` with
-  `HoldReason::waiting`. The waiting state must not allocate a media bridge.
-
-- [ ] When the scheduler/PJSUA capacity is full, respond `PJSIP_SC_BUSY_HERE` (486). Do not use 480 for capacity rejection.
-
-- [ ] Run `PjsuaIncomingAdmissionTest` and require all SIP-code and ownership assertions pass.
-
-- [ ] Commit:
-
-  ```sh
-  git add voip/src/pjsua/PjsuaCallManager.* voip/src/core/CallScheduler.* voip/tests/pjsua/PjsuaIncomingAdmissionTest.cpp
-  git commit -m "feat(voip): admit and queue incoming PJSUA calls"
-  ```
-
-## Task 3: Promote outgoing requests only when eligible
-
-**Files:**
-
-- Modify: `voip/src/pjsua/PjsuaCallManager.hpp`
-- Modify: `voip/src/pjsua/PjsuaCallManager.cpp`
-- Modify: `voip/src/pjsua/PjsuaRuntimeAdapter.cpp`
-- Create: `voip/tests/pjsua/PjsuaOutgoingPromotionTest.cpp`
-
-**Interfaces:**
-
-- Consumes: accepted `Dial` operation and scheduler promotion notifications.
-- Produces: delayed `pjsua_call_make_call()` and native ID binding.
-
-- [ ] Write tests showing an unregistered agent returns `agent_unavailable` without operation ID, immediate dial calls PJSUA once, queued dial calls it zero times, cancellation before promotion calls it zero times, and promotion later calls it once with the original copied URI.
-
-- [ ] Add failure tests for PJSUA call-ID exhaustion and INVITE creation failure: the dial operation completes with mapped failure, the promoted lease is torn down, terminal call event is published, and the FIFO advances.
-
-- [ ] Confirm tests fail because outgoing promotion is not wired.
-
-- [ ] On `Dial`, validate agent registration, URI, logical capacity, FIFO capacity, operation reservation, and terminal-event reservation. Create the logical handle before returning. Copy the URI into `CallContext`.
-
-- [ ] If queued, complete the dial operation as locally admitted and publish
-  `hold(waiting)` without calling PJSUA. Network establishment remains a later
-  call event.
-
-- [ ] On promotion, build `pjsua_call_setting` with one audio media line, video count zero, no SRTP requirement, and account-specific options; call `pjsua_call_make_call(account_id, &uri, &setting, context, ..., &call_id)` and bind the returned ID.
-
-- [ ] Treat promotion as a state transition, not a second public operation. Map immediate PJ errors to `signaling_failed`, `negotiation_failed`, or `resource_exhausted` without leaking PJ status text containing sensitive values.
-
-- [ ] On promotion, change only private phase and lease ownership; retain
-  `hold(waiting)` until acceptance/confirmation projects directly to
-  `established`. A promotion is not a public resume operation and must not
-  synthesize a `hold -> initiated` edge absent from the UML.
-
-- [ ] Run `PjsuaOutgoingPromotionTest` and require success.
-
-- [ ] Commit:
-
-  ```sh
-  git add voip/src/pjsua/PjsuaCallManager.* voip/src/pjsua/PjsuaRuntimeAdapter.cpp voip/tests/pjsua/PjsuaOutgoingPromotionTest.cpp
-  git commit -m "feat(voip): promote queued outgoing calls through PJSUA"
-  ```
-
-## Task 4: Implement answer, reject, cancel, hangup, hold, and timers
-
-**Files:**
-
-- Modify: `voip/src/pjsua/PjsuaCallManager.hpp`
-- Modify: `voip/src/pjsua/PjsuaCallManager.cpp`
-- Create: `voip/tests/pjsua/PjsuaCallControlTest.cpp`
-
-**Interfaces:**
-
-- Consumes: actor-owned control commands and queue/answer deadlines.
-- Produces: correct PJSUA calls, operation terminal events, state transitions.
-
-- [ ] Write a state/command matrix covering valid and invalid commands for queued outgoing, queued incoming, incoming, outgoing/early, established, held, disconnecting, and terminal contexts.
-
-- [ ] For every matrix row assert both the private phase and the public
-  projection. In particular, `Answer(hold(waiting))` is valid only for a
-  queued incoming phase, while `SetHeld(false)` is valid only for a promoted
-  held phase with `HoldReason::media`.
-
-- [ ] Add explicit tests: answer queued incoming sets a flag and sends no 200 until promotion; reject queued incoming sends selected 4xx/6xx and removes it; cancel queued outgoing sends no SIP; remote CANCEL wins over queued answer; queue timeout sends 480; promoted answer timeout rejects; hangup sends final PJSUA hangup; hold/unhold call the corresponding PJSUA APIs.
-
-- [ ] Confirm failures against unimplemented controls.
-
-- [ ] Implement command behavior:
-
-  - `Answer(queued_incoming)`: set `answer_on_promotion`, complete operation locally.
-  - `Answer(incoming)`: `pjsua_call_answer2(...,200,...)`.
-  - `Reject(queued/promoted incoming)`: validate status 400–699, answer with it, begin teardown.
-  - `Cancel(queued_outgoing)`: remove locally; `Cancel(outgoing/early)`: hang up using 487-compatible cancellation behavior.
-  - `Hangup(established/held)`: `pjsua_call_hangup()`.
-  - `SetHeld(true)`: `pjsua_call_set_hold2()`; false: `pjsua_call_reinvite2()` with unhold flags.
-
-- [ ] On queued-incoming promotion, send 200 immediately if `answer_on_promotion`; otherwise enter `incoming` and start `answer_timeout_ms`. Queue deadline starts at admission for both directions.
-
-- [ ] A queue or answer timeout publishes its guaranteed terminal transition
-  before cleanup. The context is then invalidated immediately and the copied
-  event remains readable; there is no terminated-context retention timer.
-
-- [ ] Each accepted public operation produces exactly one terminal operation event regardless of later network state. Stale/invalid commands are rejected before allocation.
-
-- [ ] Run `PjsuaCallControlTest` and require success.
-
-- [ ] Commit:
-
-  ```sh
-  git add voip/src/pjsua/PjsuaCallManager.* voip/tests/pjsua/PjsuaCallControlTest.cpp
-  git commit -m "feat(voip): add queued and promoted call control"
-  ```
-
-## Task 5: Translate PJSUA call state and release slots after quiescent teardown
-
-**Files:**
-
-- Modify: `voip/src/pjsua/PjsuaCallManager.hpp`
-- Modify: `voip/src/pjsua/PjsuaCallManager.cpp`
-- Create: `voip/tests/pjsua/PjsuaCallStateTest.cpp`
-
-**Interfaces:**
-
-- Consumes: `on_call_state`, `on_call_media_state`, remote status/cause.
-- Produces: public snapshots/events and scheduler teardown-complete notification.
-
-- [ ] Write callback-sequence tests for outgoing calling/early/confirmed/disconnected, incoming confirmed, remote rejection, remote CANCEL, transport loss, duplicate callbacks, and a late callback after logical generation reuse. Assert the exact public business-state and cause trace for each sequence.
-
-- [ ] Add the release-order test: disconnected callback arrives while media is not quiescent; the promoted slot remains held. Media stop/quiescence then arrives; native user data is cleared, context released, terminal event queued, and only then does the scheduler promote the FIFO head.
-
-- [ ] Confirm tests fail before implementing state translation.
-
-- [ ] Call `pjsua_call_get_info()` inside the callback and copy remote URI, state, role, status code, media direction, and sanitized reason into the fixed public snapshot.
-
-- [ ] Map PJSUA states to product states; classify 3xx–6xx final responses as `remote_rejected`, local/remote cancellation as `cancelled`, timeout as `timed_out`, SDP failure as `negotiation_failed`, and transport failure as `signaling_failed`.
-
-- [ ] Keep PJSUA calling, incoming, early, disconnecting, and quiescence as
-  private phases. Submit confirmation, successful media hold, and successful
-  resume as transition causes to the core `CallStateMachine`. A failed hold or
-  resume submits no transition and preserves the prior public projection.
-
-- [ ] Make terminal publication idempotent. Do not release the promoted lease until signaling is disconnected, media reports stopped, callback counter is zero, and future security cleanup flag is complete.
-
-- [ ] Clear call user data before invalidating the logical handle. Publish one
-  guaranteed terminal transition containing source state, destination state,
-  cause, outcome, and complete final snapshot; then release/increment the
-  generation, return the slot to `idle` immediately, and invoke scheduler
-  capacity handling. Verify `GetCallSnapshot(old_handle)` already returns
-  `invalid_handle` while the copied event is still pollable.
-
-- [ ] Run `PjsuaCallStateTest` and require success.
-
-- [ ] Commit:
-
-  ```sh
-  git add voip/src/pjsua/PjsuaCallManager.* voip/tests/pjsua/PjsuaCallStateTest.cpp
-  git commit -m "feat(voip): translate PJSUA call lifecycle safely"
-  ```
-
-## Task 6: Validate two promoted plus five queued calls over SIP TCP
-
-**Files:**
-
-- Create: `applications/voip_integration/src/multi_call_scheduler.cpp`
-- Create: `applications/voip_integration/multi_call_scheduler.conf`
-- Create: `applications/voip_integration/test_support/ScriptedSipPeer.hpp`
-- Create: `applications/voip_integration/test_support/ScriptedSipPeer.cpp`
+- Modify: `voip/src/pjsua/PjsuaApi.hpp`
+- Modify: `voip/src/pjsua/PjsuaApi.cpp`
+- Modify: `voip/tests/pjsua/FakePjsuaApi.hpp`
+- Create: `voip/tests/pjsua/PjsuaCallApiTest.cpp`
+- Create: `voip/tests/pjsua/PjsuaPlan4TestMain.cpp`
+- Create: `applications/voip_integration/pjsua_call_component.conf`
 - Modify: `applications/voip_integration/Kconfig`
 - Modify: `applications/voip_integration/CMakeLists.txt`
 
 **Interfaces:**
 
-- Consumes: five registered agents, public call API, localhost scripted SIP peers.
-- Produces: network-level FIFO/promotion/SIP-response acceptance proof.
+- Consumes: Plan 3’s function table and component-test injection seam.
+- Produces: fakeable PJSUA call primitives without exposing PJPROJECT publicly.
 
-- [ ] Script five accounts and seven calls with mixed directions. Establish promoted calls for agents A and B; enqueue incoming A, outgoing C, incoming D, outgoing E, and incoming B in that exact order.
+- [ ] Write `RunPjsuaCallApiTests()` first. Require every new entry to be non-null and assert this fake sequence:
 
-- [ ] Verify only two calls have sent/accepted final INVITE signaling, queued incoming calls received 180, and queued outgoing C/E produced no INVITE.
-
-- [ ] End B while A remains busy. Verify the free global slot stays idle because queued A is at the head. End A; verify queued A promotes first, then only after it ends does outgoing C send its first INVITE.
-
-- [ ] Fill all seven PJSUA call records with two promoted plus five queued incoming calls and send an eighth incoming INVITE; verify 486. Separately expire a queued incoming call and verify 480.
-
-- [ ] Verify answer-on-promotion, reject while queued, cancel queued outgoing, remote CANCEL, hold/unhold, and per-agent one-promoted-call invariant.
-
-- [ ] Verify the network scenario produces the normative business trace:
-  initiation, `hold(waiting)` while queued, acceptance to `established`,
-  `hold(media)`/resume where requested, finish or rejection to `terminated`,
-  terminal publication, and immediate cleanup to `idle`.
-
-- [ ] Build and run:
-
-  ```sh
-  west build -p always -b mps2/an385 applications/voip_integration \
-    -d build_voip_multi_call -- \
-    -DEXTRA_CONF_FILE=multi_call_scheduler.conf
-  west build -d build_voip_multi_call -t run
+  ```cpp
+  assert(fake.SequenceEquals(
+      "call-defaults,make-call,set-call-data,get-call-data,get-call-info,"
+      "answer-180,answer-200,hold,reinvite,hangup"));
   ```
 
-  Expected terminator: `VOIP MULTI CALL RESULT: PASSED (2 promoted, 5 FIFO)`.
+- [ ] Build the new QEMU component profile and confirm compilation fails because the entries are absent:
 
-- [ ] Repeat the mixed scenario for five lifecycles and verify no live calls, contexts, operations, event reservations, or arena blocks remain after shutdown.
+  ```sh
+  cd /home/pitpapan/zephyrproject
+  PATH=/home/pitpapan/zephyrproject/.venv/bin:$PATH CCACHE_DISABLE=1 \
+  west build -p always -b mps2/an385 \
+    -s /home/pitpapan/zephyrproject/.worktrees/pjsua-plan4/applications/voip_integration \
+    -d /tmp/voip-plan4-component-task1 -- \
+    -DEXTRA_CONF_FILE=pjsua_call_component.conf
+  ```
+
+- [ ] Add and natively wire these private `PjsuaApi` entries:
+
+  ```cpp
+  void (*call_setting_default)(pjsua_call_setting *) = nullptr;
+  pj_status_t (*call_make_call)(pjsua_acc_id, const pj_str_t *,
+      const pjsua_call_setting *, void *, const pjsua_msg_data *,
+      pjsua_call_id *) = nullptr;
+  pj_status_t (*call_set_user_data)(pjsua_call_id, void *) = nullptr;
+  void *(*call_get_user_data)(pjsua_call_id) = nullptr;
+  pj_status_t (*call_get_info)(pjsua_call_id, pjsua_call_info *) = nullptr;
+  pj_status_t (*call_answer2)(pjsua_call_id, const pjsua_call_setting *,
+      unsigned, const pj_str_t *, const pjsua_msg_data *) = nullptr;
+  pj_status_t (*call_set_hold2)(pjsua_call_id, unsigned,
+      const pjsua_msg_data *) = nullptr;
+  pj_status_t (*call_reinvite2)(pjsua_call_id,
+      const pjsua_call_setting *, const pjsua_msg_data *) = nullptr;
+  ```
+
+  Retain existing `call_answer` and `call_hangup` entries used by Plan 3 guards.
+
+- [ ] Implement at most seven fixed fake call records. Reject the eighth with `PJ_ETOOMANY`, validate IDs, support per-entry failure injection, and zero user data on `Reset()`.
+
+- [ ] Run the profile and require `PjsuaCallApiTest PASSED`, harness-owned timeout cleanup, and no fault or abort signature.
+
+- [ ] Run `voip/tests/run_host_tests.sh` plus the Plan 3 fake component regression.
+
+- [ ] Commit:
+
+  ```sh
+  git add applications/voip_integration voip/src/pjsua/PjsuaApi.* \
+    voip/tests/pjsua/FakePjsuaApi.hpp voip/tests/pjsua/PjsuaCallApiTest.cpp \
+    voip/tests/pjsua/PjsuaPlan4TestMain.cpp
+  git commit -m "test(voip): add bounded pjsua call api seam"
+  ```
+
+### Task 2: Add native call contexts and callback-safe routing
+
+**Files:**
+
+- Create: `voip/src/pjsua/PjsuaCallRecords.hpp`
+- Create: `voip/src/pjsua/PjsuaCallContext.hpp`
+- Create: `voip/src/pjsua/PjsuaCallManager.hpp`
+- Create: `voip/src/pjsua/PjsuaCallManager.cpp`
+- Modify: `voip/src/pjsua/PjsuaCallbackRouter.hpp`
+- Modify: `voip/src/pjsua/PjsuaCallbackRouter.cpp`
+- Modify: `voip/src/pjsua/PjsuaRuntimeAdapter.hpp`
+- Modify: `voip/src/pjsua/PjsuaRuntimeAdapter.cpp`
+- Create: `voip/tests/pjsua/PjsuaCallContextTest.cpp`
+- Modify: `applications/voip_integration/CMakeLists.txt`
+
+**Interfaces:**
+
+- Consumes: `PjsuaAccountManager::Resolve(pjsua_acc_id)`, `NativeId(AgentHandle, pjsua_acc_id *)`, call callbacks, and Task 1’s API table.
+- Produces: seven stable native contexts, opaque nonzero `std::uint32_t` tokens, and copied `RuntimeNotification` records.
+
+- [ ] Write RED tests for seven non-slot-order native IDs, eighth exhaustion, duplicate IDs, token reuse, user-data mismatch, late callback after release, notification pressure, and reset.
+
+- [ ] Define native ownership without a second business-state store:
+
+  ```cpp
+  enum class PjsuaCallPhase : std::uint8_t {
+      free, provisional_incoming, queued_incoming, promoting,
+      calling, early, confirmed, local_hold, disconnecting, disconnected
+  };
+  struct PjsuaCallContext {
+      std::uint32_t token = 0;
+      CallHandle logical{};
+      AgentHandle agent{};
+      pjsua_call_id native_id = PJSUA_INVALID_ID;
+      PjsuaCallPhase phase = PjsuaCallPhase::free;
+      bool incoming = false, logical_bound = false, user_data_bound = false;
+      bool media_quiescent = true, terminal_reported = false;
+      unsigned callback_depth = 0;
+  };
+  ```
+
+  Do not add `CallState`, `HoldReason`, FIFO position, operation ownership, audio pointers, or scheduler policy.
+
+- [ ] Add `PjsuaCallCallbackSink` with synchronous `OnIncomingCall(account,id)`, `OnCallState(id)`, and `OnCallMediaState(id)`. Install the three PJSUA callbacks in `PjsuaCallbackRouter`; discard `pjsip_rx_data *` before return.
+
+- [ ] On incoming callback, resolve account→agent, reserve a native context, bind user data, synchronously copy `call_get_info`, and enqueue one incoming notification. Unknown account gets 404; context/notification exhaustion gets 486 and complete native cleanup.
+
+- [ ] Compose `PjsuaCallManager calls_` inside `PjsuaRuntimeAdapter` and drain its copied ring after every `pjsua_handle_events()`. Keep controls unsupported until their tasks land.
+
+- [ ] Run focused, Plan 3 component, and host tests; require exact pre-test resource baselines after every case.
+
+- [ ] Commit:
+
+  ```sh
+  git add voip/src/pjsua voip/tests/pjsua/PjsuaCallContextTest.cpp \
+    applications/voip_integration/CMakeLists.txt
+  git commit -m "feat(voip): add bounded pjsua call contexts"
+  ```
+
+### Task 3: Make incoming admission transactional
+
+**Files:**
+
+- Modify: `voip/src/core/RuntimeAdapter.hpp`
+- Modify: `voip/src/core/FakeRuntimeAdapter.hpp`
+- Modify: `voip/src/core/FakeRuntimeAdapter.cpp`
+- Modify: `voip/src/core/CallScheduler.hpp`
+- Modify: `voip/src/core/CallScheduler.cpp`
+- Modify: `voip/src/core/VoipRuntime.cpp`
+- Modify: `voip/src/pjsua/PjsuaCallManager.hpp`
+- Modify: `voip/src/pjsua/PjsuaCallManager.cpp`
+- Modify: `voip/src/pjsua/PjsuaRuntimeAdapter.hpp`
+- Modify: `voip/src/pjsua/PjsuaRuntimeAdapter.cpp`
+- Create: `voip/tests/pjsua/PjsuaIncomingAdmissionTest.cpp`
+- Modify: `voip/tests/unit/CallSchedulerTest.cpp`
+- Modify: `voip/tests/unit/VoipServiceCoreTest.cpp`
+
+**Interfaces:**
+
+- Consumes: a provisional incoming token, guaranteed incoming/terminal reservations, and `CallScheduler::AdmitIncoming()`.
+- Produces: a bound logical/native context and committed 180 only after admission succeeds.
+
+- [ ] Write RED cases for unknown account→404, every capacity/reservation failure→486, immediate/queued success→180, 180 failure→rollback, and remote CANCEL after admission.
+
+- [ ] Extend every private adapter implementation:
+
+  ```cpp
+  virtual Error AdmitIncoming(CallHandle, AgentHandle,
+                              std::uint32_t token) noexcept = 0;
+  virtual Error PromoteIncoming(CallHandle, AgentHandle,
+                                std::uint32_t token) noexcept = 0;
+  ```
+
+  Add `RuntimeRequest::admit_incoming` and `RuntimeRequest::call`. Fake admission records requests but emits no acceptance callback.
+
+- [ ] Add actor-only rollback for a handle never exposed publicly:
+
+  ```cpp
+  Error RollbackUnpublishedAdmission(CallHandle,
+                                     SchedulerEffects &) noexcept;
+  ```
+
+  It removes FIFO/lease/context without publishing a business transition and restores exact resource counts.
+
+- [ ] Implement this `VoipRuntime` order:
+
+  ```text
+  reserve incoming event -> reserve terminal event -> scheduler admission
+  -> adapter.AdmitIncoming(handle, agent, token) and send 180
+  -> commit incoming event -> publish state -> apply promotion effects
+  ```
+
+  Any pre-commit failure cancels both reservations, rolls back the logical admission, and rejects/drains the provisional native call without exposing a handle.
+
+- [ ] In `PjsuaCallManager`, validate token/user-data/agent, bind the logical handle, send `call_answer2(...,180,...)`, then mark admitted. A failed 180 retains callback-reachable state until native disconnection.
+
+- [ ] Prove queued admission has no promotion request and no promoted lease; immediate admission emits one ordered promotion request after 180.
+
+- [ ] Run focused component and complete host tests.
+
+- [ ] Commit:
+
+  ```sh
+  git add voip/src/core voip/src/pjsua voip/tests/unit \
+    voip/tests/pjsua/PjsuaIncomingAdmissionTest.cpp
+  git commit -m "feat(voip): admit incoming pjsua calls transactionally"
+  ```
+
+### Task 4: Promote outgoing calls only when eligible
+
+**Files:**
+
+- Modify: `voip/src/core/RuntimeAdapter.hpp`
+- Modify: `voip/src/core/FakeRuntimeAdapter.hpp`
+- Modify: `voip/src/core/FakeRuntimeAdapter.cpp`
+- Modify: `voip/src/core/VoipRuntime.cpp`
+- Modify: `voip/src/pjsua/PjsuaCallManager.hpp`
+- Modify: `voip/src/pjsua/PjsuaCallManager.cpp`
+- Modify: `voip/src/pjsua/PjsuaRuntimeAdapter.cpp`
+- Create: `voip/tests/pjsua/PjsuaOutgoingPromotionTest.cpp`
+- Modify: `voip/tests/unit/VoipServiceCoreTest.cpp`
+
+**Interfaces:**
+
+- Consumes: ordered `SchedulerEffects`, copied URI, registered-agent mapping, and a reserved terminal event.
+- Produces: `PromoteOutgoing(CallHandle, AgentHandle, const char *, std::uint32_t *)` and one native call only at promotion.
+
+- [ ] Write RED cases: unregistered agent has no operation ID; immediate dial makes one call; queued dial makes none; pre-promotion cancel makes none; later promotion uses the original copied URI; seventh native call succeeds and eighth fails cleanly.
+
+- [ ] Carry the logical handle through every adapter:
+
+  ```cpp
+  virtual Error PromoteOutgoing(CallHandle, AgentHandle, const char *,
+                                std::uint32_t *token) noexcept = 0;
+  ```
+
+- [ ] Resolve the agent account, reserve a native context, copy URI, default `pjsua_call_setting`, set `aud_cnt=1` and `vid_cnt=0`, call `call_make_call`, bind native ID/user data, and return the opaque token. Map native capacity to `resource_exhausted`; map signaling/SDP errors without native strings.
+
+- [ ] Correct operation semantics: queued Dial completes `ok` at durable FIFO admission; immediate Dial completes when `call_make_call` accepts it. PJSUA acceptance/rejection is a later call event. Remove the current pending `signaling_operation` behavior for Dial.
+
+- [ ] Process up to two promotion effects in array order. Failure of the first publishes/finalizes its terminal event, then processing continues with the second without FIFO reordering.
+
+- [ ] Run outgoing, operation, scheduler, and host tests.
+
+- [ ] Commit:
+
+  ```sh
+  git add voip/src/core voip/src/pjsua \
+    voip/tests/pjsua/PjsuaOutgoingPromotionTest.cpp \
+    voip/tests/unit/VoipServiceCoreTest.cpp
+  git commit -m "feat(voip): promote outgoing calls through pjsua"
+  ```
+
+### Task 5: Implement controls and promotion-relative timers
+
+**Files:**
+
+- Modify: `voip/src/core/CallContext.hpp`
+- Modify: `voip/src/core/VoipRuntime.cpp`
+- Modify: `voip/src/pjsua/PjsuaCallManager.hpp`
+- Modify: `voip/src/pjsua/PjsuaCallManager.cpp`
+- Modify: `voip/src/pjsua/PjsuaRuntimeAdapter.cpp`
+- Create: `voip/tests/pjsua/PjsuaCallControlTest.cpp`
+- Modify: `voip/tests/unit/CallSchedulerTest.cpp`
+- Modify: `voip/tests/unit/VoipServiceCoreTest.cpp`
+
+**Interfaces:**
+
+- Consumes: actor-owned controls, native tokens, queue/answer durations, and PJSUA control APIs.
+- Produces: one pending control per call and independent timer epochs.
+
+- [ ] Write a RED command/state matrix for queued outgoing/incoming, promoted incoming, outgoing/early, established, `hold(media)`, disconnecting, and stale handles. A second command while native negotiation is pending completes `busy` rather than cancelling the first operation.
+
+- [ ] Replace ambiguous `admitted_at_ms` timing with:
+
+  ```cpp
+  std::uint64_t queue_started_at_ms = 0;
+  std::uint64_t answer_started_at_ms = 0;
+  bool queue_timer_active = false;
+  bool answer_timer_active = false;
+  ```
+
+  Queue timing starts at FIFO insertion and stops at promotion. Answer/establishment timing starts on immediate promotion or restarts when a queued call is promoted. Use subtraction-based elapsed checks.
+
+- [ ] Implement controls exactly: queued incoming Answer sets `answer_on_promotion` and sends no 200; promoted Answer sends 200; queued incoming Reject sends validated 400–699; queued outgoing Cancel sends no SIP; outgoing early Cancel hangs up compatibly with 487; established/held Hangup calls PJSUA; hold uses `call_set_hold2`; resume uses `call_reinvite2` with unhold settings.
+
+- [ ] Complete answer/reject/cancel/hangup operations when local mutation or PJSUA accepts the request. Hold/resume stays pending until copied media confirmation or terminal failure. Every accepted operation completes once.
+
+- [ ] Queue timeout sends 480 for incoming and no SIP for outgoing. Promoted establishment/answer timeout begins native teardown. Both commit the terminal event before logical invalidation.
+
+- [ ] Prove a call queued for `answer_timeout_ms-1` receives a full answer window after promotion, and prove `UINT64_MAX`-adjacent elapsed checks do not fire early.
+
+- [ ] Run focused, Plan 3, and host regressions.
+
+- [ ] Commit:
+
+  ```sh
+  git add voip/src/core/CallContext.hpp voip/src/core/VoipRuntime.cpp \
+    voip/src/pjsua voip/tests/pjsua/PjsuaCallControlTest.cpp \
+    voip/tests/unit/CallSchedulerTest.cpp voip/tests/unit/VoipServiceCoreTest.cpp
+  git commit -m "feat(voip): add pjsua call controls and timers"
+  ```
+
+### Task 6: Translate native state and drain calls safely
+
+**Files:**
+
+- Modify: `voip/src/pjsua/PjsuaCallRecords.hpp`
+- Modify: `voip/src/pjsua/PjsuaCallContext.hpp`
+- Modify: `voip/src/pjsua/PjsuaCallManager.hpp`
+- Modify: `voip/src/pjsua/PjsuaCallManager.cpp`
+- Modify: `voip/src/pjsua/PjsuaRuntimeAdapter.cpp`
+- Modify: `voip/src/core/RuntimeAdapter.hpp`
+- Modify: `voip/src/core/VoipRuntime.cpp`
+- Create: `voip/tests/pjsua/PjsuaCallStateTest.cpp`
+- Modify: `voip/tests/pjsua/PjsuaRuntimeAdapterTest.cpp`
+
+**Interfaces:**
+
+- Consumes: call-state/media callbacks, copied `pjsua_call_info`, pending operations, and `BeginCallTeardown(token)`.
+- Produces: semantic runtime notifications and one final `call_finished` only after native ownership is unreachable.
+
+- [ ] Write RED sequences for CALLING→EARLY→CONFIRMED→DISCONNECTED, incoming confirmation, 3xx–6xx rejection, remote CANCEL, transport/SDP failures, hold/resume success/failure, duplicates, ring pressure, late callbacks, and shutdown with calls.
+
+- [ ] In each callback, call `call_get_info` synchronously and copy only token, agent, semantic type, SIP status, mapped error, bounded remote URI/address, media activity, and sanitized reason. No PJ pointer or string view enters a ring.
+
+- [ ] Emit semantic causes only: accepted on confirmation; rejected on final pre-establishment response; held/resumed on confirmed media direction; timeout only from product timer. Never store a second public `CallState`.
+
+- [ ] Make terminal handling idempotent. First terminal classification wins, each pending operation completes once, and remote CANCEL overrides queued answer-on-promotion.
+
+- [ ] Release only when signaling is disconnected, media is quiescent, `callback_depth==0`, and future security cleanup is clear. Then clear user data, invalidate native context/token, enqueue one `call_finished`, and let core commit terminal event before logical release/promotion.
+
+- [ ] Hold a media callback open while DISCONNECTED arrives. The lease must remain held. After quiescence require one terminal event, immediately invalid old handle, pollable copied snapshot, and only then FIFO promotion.
+
+- [ ] Prove shutdown order: stop admission/promotion; cancel queued outgoing; reject queued incoming; drain promoted calls; clear call user data; unregister/delete accounts; close transport; destroy PJSUA; wipe arena/credentials; publish `service_stopped`; stop actor. Timeout retains callback-reachable storage.
+
+- [ ] Run component, host, registration, and capacity regressions.
+
+- [ ] Commit:
+
+  ```sh
+  git add voip/src/pjsua voip/src/core/RuntimeAdapter.hpp \
+    voip/src/core/VoipRuntime.cpp voip/tests/pjsua
+  git commit -m "feat(voip): translate and drain pjsua call state"
+  ```
+
+### Task 7A: Prove two real calls with a scripted SIP peer
+
+**Files:**
+
+- Create: `applications/voip_integration/test_support/ScriptedSipPeer.hpp`
+- Create: `applications/voip_integration/test_support/ScriptedSipPeer.cpp`
+- Create: `applications/voip_integration/src/multi_call_scheduler.cpp`
+- Create: `applications/voip_integration/multi_call_scheduler.conf`
+- Modify: `applications/voip_integration/Kconfig`
+- Modify: `applications/voip_integration/CMakeLists.txt`
+
+**Interfaces:**
+
+- Consumes: five registrations, public polling API, loopback SIP TCP, and plain SDP/RTP negotiation.
+- Produces: bounded peer scripts and a two-promoted-call smoke test.
+
+- [ ] Write a failing scenario: outgoing A plus incoming B, answer B, require two valid calls, `promoted_calls==2`, distinct agent leases, copied remote identities, and zero workers.
+
+- [ ] Build `ScriptedSipPeer` as a separate fixed-buffer TCP peer. Parse bounded Call-ID/CSeq/tags and generate INVITE/100/180/200/ACK/BYE/CANCEL/re-INVITE flows without product internals or native endpoint pointers.
+
+- [ ] Prove malformed SDP→`negotiation_failed`, remote 486→`remote_rejected`, transport close→`signaling_failed`, remote CANCEL→`cancelled`, and BYE→one terminal event. Both leases must remain reusable.
+
+- [ ] Build/run:
+
+  ```sh
+  cd /home/pitpapan/zephyrproject
+  PATH=/home/pitpapan/zephyrproject/.venv/bin:$PATH CCACHE_DISABLE=1 \
+  west build -p always -b mps2/an385 \
+    -s /home/pitpapan/zephyrproject/.worktrees/pjsua-plan4/applications/voip_integration \
+    -d /tmp/voip-plan4-two-calls -- \
+    -DEXTRA_CONF_FILE=multi_call_scheduler.conf
+  PATH=/home/pitpapan/zephyrproject/.venv/bin:$PATH \
+  timeout 60s west build -d /tmp/voip-plan4-two-calls -t run
+  ```
+
+  Require `VOIP PJSUA TWO CALL SMOKE: PASSED (2 promoted, 2 agents)`.
 
 - [ ] Commit:
 
   ```sh
   git add applications/voip_integration
-  git commit -m "test(voip): validate PJSUA call promotion and FIFO"
+  git commit -m "test(voip): add two-call pjsua sip peer"
+  ```
+
+### Task 7B: Prove FIFO, controls, capacity, and repeated cleanup
+
+**Files:**
+
+- Modify: `applications/voip_integration/src/multi_call_scheduler.cpp`
+- Modify: `applications/voip_integration/test_support/ScriptedSipPeer.hpp`
+- Modify: `applications/voip_integration/test_support/ScriptedSipPeer.cpp`
+- Modify: `applications/voip_integration/test_support/GeneralHeapTracker.cpp`
+
+**Interfaces:**
+
+- Consumes: Task 7A’s peer and complete public call API.
+- Produces: the real `2 promoted + 5 FIFO` matrix over five lifecycles.
+
+- [ ] Establish promoted A/B. Enqueue incoming A, outgoing C, incoming D, outgoing E, incoming B. Queued incoming gets 180/native ID; outgoing C/E sends no INVITE.
+
+- [ ] End B while A stays promoted: the free slot remains idle because incoming A is FIFO head and A is busy. End A: incoming A promotes first and outgoing C may promote second in the same capacity pass; peer order must show A’s action before C’s INVITE.
+
+- [ ] Fill two promoted plus five queued incoming calls; eighth incoming gets 486 with no leak. Separately expire queued incoming→480. Fill FIFO logically and require outgoing Dial→`queue_full` with no native call.
+
+- [ ] Exercise queued answer/reject/cancel, remote CANCEL, both promoted timeouts, hangup/BYE, hold, and resume. Verify exact UML traces.
+
+- [ ] Track general heap immediately after initialization through calls/shutdown and require zero allocations. Record arena values; normal peak≤75%, injected failure peak<90%, no fallback.
+
+- [ ] Repeat five lifecycles using one static service. After each require zero native/logical calls, operations, reservations, accounts, transport/router, credentials, and arena ownership; old handles are invalid.
+
+- [ ] Require `VOIP MULTI CALL RESULT: PASSED (2 promoted, 5 FIFO, 5 lifecycles)`.
+
+- [ ] Commit:
+
+  ```sh
+  git add applications/voip_integration
+  git commit -m "test(voip): validate pjsua call promotion and fifo"
+  ```
+
+### Task 7C: Run final gates, compile RT1064, and record acceptance
+
+**Files:**
+
+- Create: `docs/voip/pjsua-call-management-promotion.md`
+- Modify only after causal RED evidence and independent review: the exact failing component files.
+
+**Interfaces:**
+
+- Consumes: stable reviewed Task 1–7B source.
+- Produces: reproducible Plan 4 acceptance and a merge-ready branch.
+
+- [ ] Run `voip/tests/run_host_tests.sh` twice; require all Plan 1–4 markers.
+
+- [ ] Fresh-build/run `pjsua_registration_fake.conf`, `pjsua_registration.conf`, and `pjsua_capacity.conf`; require exact Plan 3 component, five-account/five-lifecycle/general-heap, and Plan 1 capacity markers without application fault.
+
+- [ ] Fresh-build/run `pjsua_call_component.conf` and `multi_call_scheduler.conf`; require focused markers, clean harness cleanup, two-call smoke, final multi-call marker, zero heap, arena limits, zero workers, and complete teardown.
+
+- [ ] Compile and report RT1064 without selecting a network driver:
+
+  ```sh
+  cd /home/pitpapan/zephyrproject
+  PATH=/home/pitpapan/zephyrproject/.venv/bin:$PATH CCACHE_DISABLE=1 \
+  west build -p always -b mimxrt1064_evk \
+    -s /home/pitpapan/zephyrproject/.worktrees/pjsua-plan4/applications/voip_integration \
+    -d /tmp/voip-plan4-rt1064 -- \
+    -DEXTRA_CONF_FILE=pjsua_call_component.conf
+  PATH=/home/pitpapan/zephyrproject/.venv/bin:$PATH west build -d /tmp/voip-plan4-rt1064 -t ram_report
+  PATH=/home/pitpapan/zephyrproject/.venv/bin:$PATH west build -d /tmp/voip-plan4-rt1064 -t rom_report
+  ```
+
+  If it cannot fit configured memory, reconsider fixed storage; do not enlarge target RAM or add heap fallback. Do not claim hardware/network/audio runtime acceptance.
+
+- [ ] Audit the diff: no media bridge/device audio, codec policy, TLS/SRTP, PJSUA2, runtime agent mutation, scheduler bypass, second business-state table, Zephyr-source change, or legacy deletion.
+
+- [ ] Write the acceptance record with revision, commands/statuses, markers, flash/RAM, actor stack, arena/heap evidence, limitations, and QEMU-versus-RT1064 distinction.
+
+- [ ] Obtain independent full-diff review against the spec, `designIdead.md`, `reviews.md`, UML, Plan 3 acceptance, and this plan. Every Critical/Important finding gets focused RED/GREEN repair, scoped re-review, and affected-gate restart.
+
+- [ ] Commit:
+
+  ```sh
+  git add docs/voip/pjsua-call-management-promotion.md
+  git diff --cached --check
+  git commit -m "docs(voip): record plan4 call acceptance"
   ```
 
 ## Plan 4 Exit Criteria
 
-- Incoming calls map account ID to the correct agent and receive visible admission or a final rejection.
-- Queued incoming calls retain early PJSUA state; queued outgoing calls do not allocate/send.
-- PJSUA phases project through the core UML state machine without duplicating
-  or bypassing its transition rules.
-- Exactly two calls can be promoted globally and only one for each agent.
-- Strict shared FIFO and head-of-line blocking are proven at unit and SIP levels.
-- Answer/reject/cancel/hangup/hold and both timeouts behave as specified.
-- Terminal state is published once, and slot reuse waits for signaling/media/callback quiescence.
-- After terminal publication, the old handle is invalid immediately while its
-  copied terminal event remains pollable.
+- Incoming calls map account→agent and receive visible transactional admission or final rejection.
+- Queued incoming retains native state/180; queued outgoing has no native call/INVITE.
+- Core UML state machine remains the sole public-state authority; PJSUA reports causes only.
+- Exactly two calls promote globally and no agent owns more than one.
+- Strict FIFO, head blocking, and ordered promotion of up to two eligible entries pass at core, fake, and SIP levels.
+- Queue timeout is admission-relative; answer/establishment timeout is promotion-relative.
+- Controls, failures, and operations complete exactly once.
+- One terminal event precedes immediate handle invalidation; its copied snapshot remains pollable.
+- Native user data/context/lease survive until signaling, media, callbacks, and future security cleanup are quiescent.
+- Five complete `2 promoted + 5 FIFO` lifecycles leave zero logical/native calls, operations, reservations, accounts, transport, router, credentials, or arena ownership.
+- General heap stays unused after initialization and arena use meets 75%/90% limits.
+- Plan 1–3 regressions stay green; RT1064 compile/link and memory reports complete without a hardware-runtime claim.
+- Plan 5 receives a stable promoted-call media hook; Plan 4 contains no custom audio bridge.
