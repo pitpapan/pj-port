@@ -414,10 +414,14 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
         call_terminal_handles_[terminal_index] = handle;
         incoming.call = handle;
         incoming.call_snapshot = scheduler_.Snapshot(handle);
-        if (!admission_reservation.Commit(incoming)) {
+        const bool force_commit_failure = fail_next_incoming_event_commit_for_test_;
+        fail_next_incoming_event_commit_for_test_ = false;
+        if (force_commit_failure || !admission_reservation.Commit(incoming)) {
             event_publication_failed_ = true;
             SchedulerEffects rollback_effects{};
             (void)scheduler_.RollbackUnpublishedAdmission(handle, rollback_effects);
+            (void)terminal_reservation->Cancel();
+            call_terminal_live_[terminal_index] = false;
             (void)admission_reservation.Cancel();
             (void)adapter_.Reject(notification.token, 486);
             RefreshResources();
@@ -1115,6 +1119,13 @@ void VoipRuntime::FailNextAdapter(RuntimeRequest::Type type, Error error) noexce
 #else
     (void)type;
     (void)error;
+#endif
+}
+
+void VoipRuntime::FailNextIncomingEventCommitForTest() noexcept {
+#if !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
+    CoreLockGuard lock(mutex_);
+    fail_next_incoming_event_commit_for_test_ = true;
 #endif
 }
 

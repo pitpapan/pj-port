@@ -82,6 +82,11 @@ void RunPjsuaIncomingAdmissionTests() {
            Error::signaling_failed);
     // Failed 180 retains the exact native user-data route until DISCONNECTED.
     assert(fake.CallUserData(id) != nullptr && failed.Count() == 1);
+    // A failed 180 must be actively declined without clearing its exact-owned
+    // callback route; DISCONNECTED is the later lifetime boundary.
+    assert(failed.RejectProvisional(notification.token, 486) == Error::ok);
+    assert(fake.AnswerStatus() == 486 && fake.HangupStatus() == 486);
+    assert(fake.CallUserData(id) != nullptr && failed.Count() == 1);
     fake.ClearCallFailures();
 
     // Replacing the copied terminal record with direct callback handling

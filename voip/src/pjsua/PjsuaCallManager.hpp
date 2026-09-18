@@ -24,6 +24,7 @@ public:
     void OnCallMediaState(pjsua_call_id) noexcept override;
     Error AdmitIncoming(CallHandle, AgentHandle, std::uint32_t) noexcept;
     Error PromoteIncoming(CallHandle, AgentHandle, std::uint32_t) noexcept;
+    Error RejectProvisional(std::uint32_t, std::uint16_t) noexcept;
     bool TryGetNotification(RuntimeNotification *) noexcept;
     void Reset() noexcept;
     std::size_t Count() const noexcept { return count_; }

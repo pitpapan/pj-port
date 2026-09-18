@@ -128,7 +128,9 @@ Error PjsuaRuntimeAdapter::PromoteIncoming(CallHandle call, AgentHandle agent,
     return calls_.PromoteIncoming(call, agent, token);
 }
 Error PjsuaRuntimeAdapter::Answer(std::uint32_t) noexcept { return Error::unsupported_configuration; }
-Error PjsuaRuntimeAdapter::Reject(std::uint32_t, std::uint16_t) noexcept { return Error::unsupported_configuration; }
+Error PjsuaRuntimeAdapter::Reject(std::uint32_t token, std::uint16_t status) noexcept {
+    return calls_.RejectProvisional(token, status);
+}
 Error PjsuaRuntimeAdapter::Cancel(std::uint32_t) noexcept { return Error::unsupported_configuration; }
 Error PjsuaRuntimeAdapter::Hangup(std::uint32_t) noexcept { return Error::unsupported_configuration; }
 Error PjsuaRuntimeAdapter::SetHeld(std::uint32_t, bool) noexcept { return Error::unsupported_configuration; }

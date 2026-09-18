@@ -55,6 +55,15 @@ Error PjsuaCallManager::PromoteIncoming(CallHandle logical, AgentHandle agent,
     return Error::ok;
 }
 
+Error PjsuaCallManager::RejectProvisional(std::uint32_t token,
+                                          std::uint16_t status) noexcept {
+    PjsuaCallContext *context = FindToken(token);
+    if (context == nullptr || !OwnsNativeUserData(*context))
+        return Error::invalid_handle;
+    Decline(context->native_id, status);
+    return Error::ok;
+}
+
 PjsuaCallContext *PjsuaCallManager::Reserve(AgentHandle agent,
                                             pjsua_call_id native_id) noexcept {
     if (Find(native_id) != nullptr) return nullptr;
