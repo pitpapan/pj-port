@@ -63,7 +63,9 @@ void PjsuaCallManager::Decline(pjsua_call_id native_id, unsigned status) noexcep
 }
 
 void PjsuaCallManager::Release(PjsuaCallContext &context) noexcept {
-    if (context.user_data_bound && api_.call_set_user_data != nullptr)
+    if (context.user_data_bound && api_.call_set_user_data != nullptr &&
+        api_.call_get_user_data != nullptr &&
+        api_.call_get_user_data(context.native_id) == &context)
         (void)api_.call_set_user_data(context.native_id, nullptr);
     context = {};
     if (count_ != 0) --count_;
@@ -71,9 +73,20 @@ void PjsuaCallManager::Release(PjsuaCallContext &context) noexcept {
 
 void PjsuaCallManager::OnIncomingCall(pjsua_acc_id account, pjsua_call_id native_id) noexcept {
     PjsuaAccountContext *account_context = accounts_.Resolve(account);
-    if (account_context == nullptr || api_.call_set_user_data == nullptr ||
-        api_.call_get_info == nullptr) {
+    if (account_context == nullptr) {
         Decline(native_id, 404);
+        return;
+    }
+    if (api_.call_set_user_data == nullptr || api_.call_get_user_data == nullptr ||
+        api_.call_get_info == nullptr) {
+        Decline(native_id, 486);
+        return;
+    }
+    // A PJSUA call can have a native owner outside this manager. Never replace
+    // or later clear that owner's pointer. A duplicate callback for one of our
+    // contexts is likewise declined without rebinding the already-owned slot.
+    if (api_.call_get_user_data(native_id) != nullptr || Find(native_id) != nullptr) {
+        Decline(native_id, 486);
         return;
     }
     PjsuaCallContext *context = Reserve(account_context->agent, native_id);

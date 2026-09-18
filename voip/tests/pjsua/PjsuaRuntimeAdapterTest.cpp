@@ -335,6 +335,42 @@ void RunPjsuaRuntimeAdapterTests() {
         }
     };
     if (adapter_limit >= 7) shutdown_state_matrix();
+
+    auto drains_call_notification_after_native_pump_error = [&]() __attribute__((noinline)) {
+        // A native callback can have copied an incoming notification before
+        // handle_events reports failure. Returning before the call drain loses
+        // that notification, so this is intentionally asserted at the adapter
+        // boundary rather than against the fake's callback dispatch.
+        fake.Reset();
+        PjsuaRuntimeAdapter errored(fake.Api());
+        assert(errored.Initialize(registry, fixture.config.security,
+                                  fixture.config.conference_format) == Error::ok);
+        pjsua_call_setting setting{};
+        fake.Api().call_setting_default(&setting);
+        char uri_text[] = "sip:incoming-error@example.test";
+        pj_str_t uri{uri_text, static_cast<pj_ssize_t>(sizeof(uri_text) - 1)};
+        pjsua_call_id native_id = PJSUA_INVALID_ID;
+        assert(fake.Api().call_make_call(0, &uri, &setting, nullptr, nullptr,
+                                         &native_id) == PJ_SUCCESS);
+        fake.TriggerIncomingCallOnNextPump(native_id);
+        fake.ReturnFromNextPump(-1);
+        assert(errored.Pump(300, 0) == Error::internal_failure);
+        RuntimeNotification notification{};
+        assert(errored.TryGetNotification(&notification));
+        assert(notification.type == RuntimeNotification::Type::incoming_call &&
+               notification.token != 0);
+        assert(!errored.TryGetNotification(&notification));
+        // A pre-pump actor-registration failure remains safe: it cannot enter
+        // the native event pump or manufacture a duplicate notification.
+        fake.SetThreadRegistered(false);
+        fake.FailThreadRegister(PJ_EUNKNOWN);
+        assert(errored.Pump(301, 0) == Error::internal_failure);
+        assert(!errored.TryGetNotification(&notification));
+        fake.SetThreadRegistered(true);
+        assert(errored.Shutdown() == Error::busy);
+        assert(errored.Shutdown() == Error::ok);
+    };
+    drains_call_notification_after_native_pump_error();
     fake.Deactivate();
     printk("PjsuaRuntimeAdapterTest PASSED\n");
 }

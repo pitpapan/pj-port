@@ -53,6 +53,14 @@ pj_status_t DisconnectedInfo(pjsua_call_id id, pjsua_call_info *info) {
     info->state = PJSIP_INV_STATE_DISCONNECTED;
     return PJ_SUCCESS;
 }
+
+void AssertCallResourceBaseline(PjsuaCallManager &calls, const FakePjsuaApi &fake) {
+    RuntimeNotification notification{};
+    assert(calls.Count() == 0 && !calls.TryGetNotification(&notification));
+    assert(fake.ActiveCallCount() == 7);
+    for (pjsua_call_id id = 0; id < 7; ++id)
+        assert(fake.CallUserData(id) == nullptr);
+}
 }
 
 void RunPjsuaCallContextTests() {
@@ -63,11 +71,23 @@ void RunPjsuaCallContextTests() {
     assert(accounts.Initialize(registry, 4) == Error::ok);
     PjsuaCallManager calls(accounts, fake.Api());
     OpenNativeCalls(fake.Api());
+    AssertCallResourceBaseline(calls, fake);
 
     // Breaking this requires treating an unowned account like capacity
     // pressure instead of rejecting it as an unknown SIP destination.
     calls.OnIncomingCall(99, 0);
     assert(fake.AnswerStatus() == 404 && fake.HangupStatus() == 404);
+    AssertCallResourceBaseline(calls, fake);
+
+    // A foreign native owner is never overwritten or cleared by incoming
+    // routing. Removing the pre-bind check makes this assertion fail.
+    int foreign_prebind{};
+    assert(fake.Api().call_set_user_data(0, &foreign_prebind) == PJ_SUCCESS);
+    calls.OnIncomingCall(2, 0);
+    assert(calls.Count() == 0 && fake.CallUserData(0) == &foreign_prebind &&
+           fake.AnswerStatus() == 486 && fake.HangupStatus() == 486);
+    assert(fake.Api().call_set_user_data(0, nullptr) == PJ_SUCCESS);
+    AssertCallResourceBaseline(calls, fake);
 
     // Breaking this requires mapping a native ID to its allocation slot rather
     // than retaining the callback's actual ID.
@@ -87,21 +107,26 @@ void RunPjsuaCallContextTests() {
     assert(calls.Count() == 7 && fake.AnswerStatus() == 486 && fake.HangupStatus() == 486);
 
     calls.Reset();
-    assert(calls.Count() == 0 && !calls.TryGetNotification(&notification));
+    AssertCallResourceBaseline(calls, fake);
     calls.OnIncomingCall(2, 6);
     assert(calls.TryGetNotification(&notification));
     assert(notification.token != 0 && notification.token != tokens[0]);
+    calls.Reset();
+    AssertCallResourceBaseline(calls, fake);
 
     // A foreign native user-data pointer must not route a callback into an
     // owned context, and callbacks after Reset are similarly ignored.
-    int foreign{};
-    assert(fake.Api().call_set_user_data(6, &foreign) == PJ_SUCCESS);
+    int foreign_postbind{};
+    calls.OnIncomingCall(2, 6);
+    assert(fake.Api().call_set_user_data(6, &foreign_postbind) == PJ_SUCCESS);
     calls.OnCallState(6);
     assert(calls.Count() == 1);
     calls.Reset();
+    assert(fake.CallUserData(6) == &foreign_postbind);
+    assert(fake.Api().call_set_user_data(6, nullptr) == PJ_SUCCESS);
     calls.OnCallState(6);
     calls.OnCallMediaState(6);
-    assert(calls.Count() == 0 && !calls.TryGetNotification(&notification));
+    AssertCallResourceBaseline(calls, fake);
 
     // Context capacity is exactly seven. An eighth incoming callback is
     // declined after the bounded table is full.
@@ -109,7 +134,7 @@ void RunPjsuaCallContextTests() {
     calls.OnIncomingCall(2, 7);
     assert(calls.Count() == 7 && fake.AnswerStatus() == 486 && fake.HangupStatus() == 486);
     calls.Reset();
-    assert(calls.Count() == 0 && fake.Api().call_get_user_data(6) == nullptr);
+    AssertCallResourceBaseline(calls, fake);
 
     // The copied notification ring remains bounded even when native contexts
     // are released before the actor gets a chance to drain it.
@@ -122,6 +147,7 @@ void RunPjsuaCallContextTests() {
     pressure.OnIncomingCall(2, 6);
     assert(pressure.Count() == 0 && fake.AnswerStatus() == 486 && fake.HangupStatus() == 486);
     pressure.Reset();
+    AssertCallResourceBaseline(pressure, fake);
     printk("PjsuaCallContextTest PASSED\n");
 }
 } // namespace voip::test

@@ -99,11 +99,14 @@ Error PjsuaRuntimeAdapter::Pump(std::uint64_t now_ms, std::uint32_t timeout_ms) 
     now_ms_ = now_ms;
     accounts_.SetNow(now_ms);
     const Error result = runtime_.Pump(timeout_ms);
+    // Native callbacks may have synchronously copied call records before a
+    // later handle_events failure is reported. Draining is value-only and is
+    // safe even when runtime_.Pump failed before entering native dispatch.
+    DrainCallNotifications();
     if (result != Error::ok) return result;
     if (runtime_.EnsureActorRegistered() != Error::ok) return Error::internal_failure;
     (void)accounts_.Pump(now_ms);
     DrainAccountNotifications();
-    DrainCallNotifications();
     return Error::ok;
 }
 

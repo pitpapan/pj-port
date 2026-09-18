@@ -60,6 +60,7 @@ public:
         release_unregistration_callbacks_on_next_pump_.store(false);
         incoming_call_pending_.store(false, std::memory_order_relaxed);
         incoming_call_id_.store(PJSUA_INVALID_ID, std::memory_order_relaxed);
+        handle_events_result_.store(0, std::memory_order_relaxed);
         registered_pending_.store(false, std::memory_order_relaxed);
         registered_account_id_.store(PJSUA_INVALID_ID, std::memory_order_relaxed);
         registration_failure_pending_.store(false, std::memory_order_relaxed);
@@ -97,11 +98,24 @@ public:
     unsigned HangupCount() const noexcept { return hangup_count_.load(std::memory_order_acquire); }
     unsigned AnswerStatus() const noexcept { return answer_status_.load(std::memory_order_acquire); }
     unsigned HangupStatus() const noexcept { return hangup_status_.load(std::memory_order_acquire); }
+    std::size_t ActiveCallCount() const noexcept {
+        std::size_t count = 0;
+        for (const CallRecord &record : call_records_) if (record.in_use) ++count;
+        return count;
+    }
+    void *CallUserData(pjsua_call_id id) const noexcept {
+        return ValidCallId(id) ? call_records_[static_cast<std::size_t>(id)].user_data : nullptr;
+    }
     // Component-only cross-thread trigger.  It records work for the fake's
     // handle_events implementation; it never invokes the callback here.
     void TriggerIncomingCallOnNextPump(pjsua_call_id id) noexcept {
         incoming_call_id_.store(id, std::memory_order_relaxed);
         incoming_call_pending_.store(true, std::memory_order_release);
+    }
+    // Delivers all pending callbacks first, then makes handle_events report
+    // this result to exercise adapter post-dispatch cleanup/draining.
+    void ReturnFromNextPump(int result) noexcept {
+        handle_events_result_.store(result, std::memory_order_release);
     }
     void TriggerRegisteredOnNextPump(pjsua_acc_id id) noexcept {
         registered_account_id_.store(id, std::memory_order_relaxed);
@@ -269,6 +283,7 @@ private:
     std::atomic<bool> release_unregistration_callbacks_on_next_pump_{false};
     std::atomic<bool> incoming_call_pending_{false};
     std::atomic<pjsua_call_id> incoming_call_id_{PJSUA_INVALID_ID};
+    std::atomic<int> handle_events_result_{0};
     std::atomic<bool> registered_pending_{false};
     std::atomic<pjsua_acc_id> registered_account_id_{PJSUA_INVALID_ID};
     std::atomic<bool> registration_failure_pending_{false};
@@ -366,7 +381,7 @@ private:
             fake.DeliverUnregistrationCallbacks();
             fake.unregistration_callbacks_delivered_from_pump_ += pending;
         }
-        return 0;
+        return fake.handle_events_result_.exchange(0, std::memory_order_acq_rel);
     }
     static pj_status_t Destroy() {
         Active().Record("destroy");
