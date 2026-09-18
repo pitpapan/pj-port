@@ -9,7 +9,7 @@ extern "C" pj_status_t voip_pjsua_registration_test_install(
 
 namespace voip {
 PjsuaRuntimeAdapter::PjsuaRuntimeAdapter(const PjsuaApi &api) noexcept
-    : api_(api), accounts_(api), router_(accounts_, api), runtime_(api), transport_(api) {}
+    : api_(api), accounts_(api), calls_(accounts_, api), router_(accounts_, calls_, api), runtime_(api), transport_(api) {}
 
 bool PjsuaRuntimeAdapter::Enqueue(const RuntimeNotification &notification) noexcept {
     if (notification_size_ == notifications_.size()) return false;
@@ -31,6 +31,12 @@ void PjsuaRuntimeAdapter::DrainAccountNotifications() noexcept {
     }
 }
 
+void PjsuaRuntimeAdapter::DrainCallNotifications() noexcept {
+    RuntimeNotification notification{};
+    while (notification_size_ != notifications_.size() && calls_.TryGetNotification(&notification))
+        (void)Enqueue(notification);
+}
+
 Error PjsuaRuntimeAdapter::Rollback() noexcept {
     if (runtime_.Created()) {
         const Error registered = runtime_.EnsureActorRegistered();
@@ -41,6 +47,7 @@ Error PjsuaRuntimeAdapter::Rollback() noexcept {
             return registered;
         }
     }
+    calls_.Reset();
     (void)accounts_.Shutdown();
     (void)transport_.Shutdown();
     const Error destroyed = runtime_.Destroy();
@@ -96,6 +103,7 @@ Error PjsuaRuntimeAdapter::Pump(std::uint64_t now_ms, std::uint32_t timeout_ms) 
     if (runtime_.EnsureActorRegistered() != Error::ok) return Error::internal_failure;
     (void)accounts_.Pump(now_ms);
     DrainAccountNotifications();
+    DrainCallNotifications();
     return Error::ok;
 }
 

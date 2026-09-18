@@ -80,6 +80,7 @@ target_sources_ifdef(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST app PRIVATE
   ../../voip/src/pjsua/PjsuaTransportManager.cpp
   ../../voip/src/pjsua/PjsuaCallbackRouter.cpp
   ../../voip/src/pjsua/PjsuaAccountManager.cpp
+  ../../voip/src/pjsua/PjsuaCallManager.cpp
   ../../voip/src/pjsua/PjsuaRuntimeAdapter.cpp
   ../../voip/src/core/AgentRegistry.cpp
   ../../voip/src/VoipService.cpp
@@ -95,7 +96,12 @@ target_sources_ifdef(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST app PRIVATE
 target_sources_ifdef(CONFIG_VOIP_PJSUA_PLAN4_COMPONENT_TEST app PRIVATE
   ../../voip/tests/pjsua/PjsuaPlan4TestMain.cpp
   ../../voip/tests/pjsua/PjsuaCallApiTest.cpp
+  ../../voip/tests/pjsua/PjsuaCallContextTest.cpp
   ../../voip/src/pjsua/PjsuaApi.cpp
+  ../../voip/src/pjsua/PjsuaCallbackRouter.cpp
+  ../../voip/src/pjsua/PjsuaAccountManager.cpp
+  ../../voip/src/pjsua/PjsuaCallManager.cpp
+  ../../voip/src/core/AgentRegistry.cpp
 )
 target_sources_ifdef(CONFIG_VOIP_PJSUA_REGISTRATION_TEST app PRIVATE
   src/pjsua_registration.cpp

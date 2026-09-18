@@ -23,11 +23,22 @@ public:
     virtual void OnRegistrationStarted(const PjsuaRegistrationRecord &) noexcept = 0;
     virtual void OnRegistrationState(const PjsuaRegistrationRecord &) noexcept = 0;
 };
+class PjsuaCallCallbackSink {
+public:
+    virtual ~PjsuaCallCallbackSink() noexcept = default;
+    virtual void OnIncomingCall(pjsua_acc_id, pjsua_call_id) noexcept = 0;
+    virtual void OnCallState(pjsua_call_id) noexcept = 0;
+    virtual void OnCallMediaState(pjsua_call_id) noexcept = 0;
+};
 class PjsuaCallbackRouter final {
 public:
     explicit PjsuaCallbackRouter(PjsuaCallbackSink &sink,
                                  const PjsuaApi &api = NativePjsuaApi()) noexcept
         : sink_(sink), api_(api) {}
+    explicit PjsuaCallbackRouter(PjsuaCallbackSink &sink,
+                                 PjsuaCallCallbackSink &calls,
+                                 const PjsuaApi &api = NativePjsuaApi()) noexcept
+        : sink_(sink), calls_(&calls), api_(api) {}
     Error Attach(pjsua_callback *) noexcept;
     void BeginQuiescence() noexcept;
     void MarkNativeDestroyed() noexcept;
@@ -41,11 +52,15 @@ private:
     static void OnRegistrationStarted(pjsua_acc_id, pjsua_reg_info *) noexcept;
     static void OnRegistrationState(pjsua_acc_id, pjsua_reg_info *) noexcept;
     static void OnIncomingCall(pjsua_acc_id, pjsua_call_id, pjsip_rx_data *) noexcept;
+    static void OnCallState(pjsua_call_id, pjsip_event *) noexcept;
+    static void OnCallMediaState(pjsua_call_id) noexcept;
     void ForwardStarted(pjsua_acc_id, const pjsua_reg_info *) noexcept;
     void ForwardState(pjsua_acc_id, const pjsua_reg_info *) noexcept;
-    void GuardIncoming(pjsua_call_id) noexcept;
+    void ForwardIncoming(pjsua_acc_id, pjsua_call_id) noexcept;
+    void ForwardCallState(pjsua_call_id) noexcept;
+    void ForwardCallMediaState(pjsua_call_id) noexcept;
     void AssertActor() const noexcept;
-    PjsuaCallbackSink &sink_; const PjsuaApi &api_;
+    PjsuaCallbackSink &sink_; PjsuaCallCallbackSink *calls_{}; const PjsuaApi &api_;
     bool quiescent_ = false; bool attached_ = false; bool native_destroyed_ = false;
     std::thread::id actor_thread_{};
     static PjsuaCallbackRouter *active_;

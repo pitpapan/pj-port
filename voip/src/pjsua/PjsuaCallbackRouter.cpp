@@ -33,6 +33,8 @@ Error PjsuaCallbackRouter::Attach(pjsua_callback *callbacks) noexcept {
     callbacks->on_reg_started2 = &OnRegistrationStarted;
     callbacks->on_reg_state2 = &OnRegistrationState;
     callbacks->on_incoming_call = &OnIncomingCall;
+    callbacks->on_call_state = &OnCallState;
+    callbacks->on_call_media_state = &OnCallMediaState;
     return Error::ok;
 }
 void PjsuaCallbackRouter::BeginQuiescence() noexcept {
@@ -62,16 +64,33 @@ void PjsuaCallbackRouter::OnRegistrationState(pjsua_acc_id account, pjsua_reg_in
 #endif
     if (active_ != nullptr) active_->ForwardState(account, info);
 }
-void PjsuaCallbackRouter::OnIncomingCall(pjsua_acc_id, pjsua_call_id call, pjsip_rx_data *) noexcept {
+void PjsuaCallbackRouter::OnIncomingCall(pjsua_acc_id account, pjsua_call_id call, pjsip_rx_data *) noexcept {
 #if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
     ++callback_entry_count_;
 #endif
-    if (active_ != nullptr) active_->GuardIncoming(call);
+    if (active_ != nullptr) active_->ForwardIncoming(account, call);
 }
-void PjsuaCallbackRouter::GuardIncoming(pjsua_call_id call) noexcept {
+void PjsuaCallbackRouter::OnCallState(pjsua_call_id call, pjsip_event *) noexcept {
+    if (active_ != nullptr) active_->ForwardCallState(call);
+}
+void PjsuaCallbackRouter::OnCallMediaState(pjsua_call_id call) noexcept {
+    if (active_ != nullptr) active_->ForwardCallMediaState(call);
+}
+void PjsuaCallbackRouter::ForwardIncoming(pjsua_acc_id account, pjsua_call_id call) noexcept {
     AssertActor();
-    (void)api_.call_answer(call, 486, nullptr, nullptr);
-    (void)api_.call_hangup(call, 486, nullptr, nullptr);
+    if (calls_ != nullptr) calls_->OnIncomingCall(account, call);
+    else {
+        (void)api_.call_answer(call, 486, nullptr, nullptr);
+        (void)api_.call_hangup(call, 486, nullptr, nullptr);
+    }
+}
+void PjsuaCallbackRouter::ForwardCallState(pjsua_call_id call) noexcept {
+    AssertActor();
+    if (calls_ != nullptr) calls_->OnCallState(call);
+}
+void PjsuaCallbackRouter::ForwardCallMediaState(pjsua_call_id call) noexcept {
+    AssertActor();
+    if (calls_ != nullptr) calls_->OnCallMediaState(call);
 }
 namespace {
 PjsuaRegistrationRecord CopyRegistration(pjsua_acc_id account,

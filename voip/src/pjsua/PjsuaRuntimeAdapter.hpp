@@ -4,6 +4,7 @@
 #include "../core/RuntimeAdapter.hpp"
 #include "PjsuaAccountManager.hpp"
 #include "PjsuaCallbackRouter.hpp"
+#include "PjsuaCallManager.hpp"
 #include "PjsuaRuntime.hpp"
 #include "PjsuaTransportManager.hpp"
 
@@ -39,9 +40,11 @@ public:
 private:
     Error Rollback() noexcept;
     void DrainAccountNotifications() noexcept;
+    void DrainCallNotifications() noexcept;
     bool Enqueue(const RuntimeNotification &) noexcept;
     const PjsuaApi &api_;
     PjsuaAccountManager accounts_;
+    PjsuaCallManager calls_;
     PjsuaCallbackRouter router_;
     PjsuaRuntime runtime_;
     PjsuaTransportManager transport_;
@@ -55,7 +58,7 @@ private:
     bool startup_rollback_pending_{};
     std::uint64_t now_ms_{};
 };
-static_assert(sizeof(PjsuaRuntimeAdapter) < 16384,
+static_assert(sizeof(PjsuaRuntimeAdapter) < 20480,
               "PJSUA adapter must remain bounded service placement storage");
 } // namespace voip
 #endif
