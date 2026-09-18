@@ -36,6 +36,14 @@ const PjsuaApi &NativePjsuaApi() noexcept {
                               pjsua_acc_get_user_data,
                               pjsua_acc_del,
                               pjsua_acc_set_registration,
+                              pjsua_call_setting_default,
+                              pjsua_call_make_call,
+                              pjsua_call_set_user_data,
+                              pjsua_call_get_user_data,
+                              pjsua_call_get_info,
+                              pjsua_call_answer2,
+                              pjsua_call_set_hold2,
+                              pjsua_call_reinvite2,
                               pjsua_call_answer,
                               pjsua_call_hangup};
 #if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)

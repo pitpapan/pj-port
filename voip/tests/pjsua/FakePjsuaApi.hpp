@@ -11,6 +11,8 @@ namespace voip::test {
 class FakePjsuaApi final {
 public:
     enum class Stage { arena, create, init, no_sound, transport, start, destroy };
+    enum class CallEntry { make_call, set_user_data, get_info, answer2,
+                           set_hold2, reinvite2, answer, hangup, count };
     FakePjsuaApi() noexcept { active_ = this; }
     ~FakePjsuaApi() noexcept { if (active_ == this) active_ = nullptr; }
     void Activate() noexcept { active_ = this; }
@@ -30,6 +32,8 @@ public:
         hangup_count_.store(0, std::memory_order_relaxed);
         answer_status_.store(0, std::memory_order_relaxed);
         hangup_status_.store(0, std::memory_order_relaxed);
+        call_records_.fill({});
+        call_failures_.fill(PJ_SUCCESS);
         account_ids_ = {{2, 0, 4, 1, 3}};
         std::memset(account_configs_.data(), 0, sizeof(account_configs_));
         deleted_accounts_.fill(PJSUA_INVALID_ID);
@@ -74,6 +78,10 @@ public:
     static const FakePjsuaApi *ActiveForTest() noexcept { return active_; }
     void Fail(Stage stage) noexcept { failed_ = stage; has_failure_ = true; }
     void ClearFailure() noexcept { has_failure_ = false; }
+    void FailCall(CallEntry entry, pj_status_t status) noexcept {
+        call_failures_[static_cast<std::size_t>(entry)] = status;
+    }
+    void ClearCallFailures() noexcept { call_failures_.fill(PJ_SUCCESS); }
     void FailArenaReset(pj_status_t status) noexcept { arena_reset_status_ = status; }
     void FailDestroyAttempts(std::size_t attempts) noexcept { destroy_failures_remaining_ = attempts; }
     bool SequenceEquals(const char *expected) const noexcept { return std::strcmp(sequence_, expected) == 0; }
@@ -233,6 +241,9 @@ private:
     pjsua_config ua_{}; pjsua_media_config media_{}; pjsua_logging_config log_{};
     std::atomic<unsigned> answer_count_{0}; std::atomic<unsigned> hangup_count_{0};
     std::atomic<unsigned> answer_status_{0}; std::atomic<unsigned> hangup_status_{0};
+    struct CallRecord { bool in_use = false; void *user_data = nullptr; };
+    std::array<CallRecord, 7> call_records_{};
+    std::array<pj_status_t, static_cast<std::size_t>(CallEntry::count)> call_failures_{};
     std::array<pjsua_acc_id, 5> account_ids_{{2, 0, 4, 1, 3}};
     std::array<pjsua_acc_config, 5> account_configs_{};
     std::array<pjsua_acc_id, 5> deleted_accounts_{};
@@ -287,6 +298,13 @@ private:
         teardown_sequence_[teardown_used_] = 0;
     }
     bool Failed(Stage s) const noexcept { return has_failure_ && failed_ == s; }
+    bool ValidCallId(pjsua_call_id id) const noexcept {
+        return id >= 0 && static_cast<std::size_t>(id) < call_records_.size() &&
+               call_records_[static_cast<std::size_t>(id)].in_use;
+    }
+    pj_status_t CallFailure(CallEntry entry) const noexcept {
+        return call_failures_[static_cast<std::size_t>(entry)];
+    }
     static pj_status_t ArenaInstall() {
         ++Active().arena_install_count_;
         Active().Record("arena");
@@ -420,9 +438,73 @@ private:
         }
         return PJ_SUCCESS;
     }
-    static pj_status_t CallAnswer(pjsua_call_id, unsigned status, const pj_str_t *, const pjsua_msg_data *) { Active().answer_count_.fetch_add(1, std::memory_order_release); Active().answer_status_.store(status, std::memory_order_release); Active().Record("answer"); return PJ_SUCCESS; }
-    static pj_status_t CallHangup(pjsua_call_id, unsigned status, const pj_str_t *, const pjsua_msg_data *) { Active().hangup_count_.fetch_add(1, std::memory_order_release); Active().hangup_status_.store(status, std::memory_order_release); Active().Record("hangup"); return PJ_SUCCESS; }
-    PjsuaApi api_{ArenaInstall, ArenaReset, Create, ThreadIsRegistered, ThreadRegister, ConfigDefault, LogDefault, MediaDefault, TransportDefault, Init, NoSound, TransportCreate, TransportClose, Start, Pump, Destroy, AccountConfigDefault, AccountAdd, AccountSetUserData, AccountGetUserData, AccountDelete, AccountSetRegistration, CallAnswer, CallHangup};
+    static void CallSettingDefault(pjsua_call_setting *setting) {
+        std::memset(setting, 0, sizeof(*setting));
+        Active().Record("call-defaults");
+    }
+    static pj_status_t CallMakeCall(pjsua_acc_id account_id, const pj_str_t *uri,
+                                    const pjsua_call_setting *setting, void *user_data,
+                                    const pjsua_msg_data *, pjsua_call_id *call_id) {
+        FakePjsuaApi &fake = Active(); fake.Record("make-call");
+        if (fake.CallFailure(CallEntry::make_call) != PJ_SUCCESS)
+            return fake.CallFailure(CallEntry::make_call);
+        if (account_id < 0 || account_id >= 5 || uri == nullptr || setting == nullptr || call_id == nullptr)
+            return PJ_EINVAL;
+        for (std::size_t index = 0; index < fake.call_records_.size(); ++index) {
+            if (fake.call_records_[index].in_use) continue;
+            fake.call_records_[index] = {true, user_data};
+            *call_id = static_cast<pjsua_call_id>(index);
+            return PJ_SUCCESS;
+        }
+        return PJ_ETOOMANY;
+    }
+    static pj_status_t CallSetUserData(pjsua_call_id call_id, void *user_data) {
+        FakePjsuaApi &fake = Active(); fake.Record("set-call-data");
+        if (fake.CallFailure(CallEntry::set_user_data) != PJ_SUCCESS)
+            return fake.CallFailure(CallEntry::set_user_data);
+        if (!fake.ValidCallId(call_id)) return PJ_EINVAL;
+        fake.call_records_[static_cast<std::size_t>(call_id)].user_data = user_data;
+        return PJ_SUCCESS;
+    }
+    static void *CallGetUserData(pjsua_call_id call_id) {
+        FakePjsuaApi &fake = Active(); fake.Record("get-call-data");
+        return fake.ValidCallId(call_id) ?
+            fake.call_records_[static_cast<std::size_t>(call_id)].user_data : nullptr;
+    }
+    static pj_status_t CallGetInfo(pjsua_call_id call_id, pjsua_call_info *info) {
+        FakePjsuaApi &fake = Active(); fake.Record("get-call-info");
+        if (fake.CallFailure(CallEntry::get_info) != PJ_SUCCESS)
+            return fake.CallFailure(CallEntry::get_info);
+        if (!fake.ValidCallId(call_id) || info == nullptr) return PJ_EINVAL;
+        std::memset(info, 0, sizeof(*info)); info->id = call_id;
+        return PJ_SUCCESS;
+    }
+    static pj_status_t CallAnswer2(pjsua_call_id call_id, const pjsua_call_setting *,
+                                   unsigned status, const pj_str_t *, const pjsua_msg_data *) {
+        FakePjsuaApi &fake = Active(); fake.Record(status == 180 ? "answer-180" : "answer-200");
+        if (fake.CallFailure(CallEntry::answer2) != PJ_SUCCESS)
+            return fake.CallFailure(CallEntry::answer2);
+        return fake.ValidCallId(call_id) ? PJ_SUCCESS : PJ_EINVAL;
+    }
+    static pj_status_t CallSetHold2(pjsua_call_id call_id, unsigned, const pjsua_msg_data *) {
+        FakePjsuaApi &fake = Active(); fake.Record("hold");
+        if (fake.CallFailure(CallEntry::set_hold2) != PJ_SUCCESS)
+            return fake.CallFailure(CallEntry::set_hold2);
+        return fake.ValidCallId(call_id) ? PJ_SUCCESS : PJ_EINVAL;
+    }
+    static pj_status_t CallReinvite2(pjsua_call_id call_id, const pjsua_call_setting *,
+                                     const pjsua_msg_data *) {
+        FakePjsuaApi &fake = Active(); fake.Record("reinvite");
+        if (fake.CallFailure(CallEntry::reinvite2) != PJ_SUCCESS)
+            return fake.CallFailure(CallEntry::reinvite2);
+        return fake.ValidCallId(call_id) ? PJ_SUCCESS : PJ_EINVAL;
+    }
+    // These Plan 3 guard entries deliberately preserve their pre-Plan-4
+    // behavior: callback guard tests may use an early native ID before Task 2
+    // creates a bounded fake call record.
+    static pj_status_t CallAnswer(pjsua_call_id, unsigned status, const pj_str_t *, const pjsua_msg_data *) { FakePjsuaApi &fake = Active(); fake.answer_count_.fetch_add(1, std::memory_order_release); fake.answer_status_.store(status, std::memory_order_release); fake.Record("answer"); return fake.CallFailure(CallEntry::answer); }
+    static pj_status_t CallHangup(pjsua_call_id, unsigned status, const pj_str_t *, const pjsua_msg_data *) { FakePjsuaApi &fake = Active(); fake.hangup_count_.fetch_add(1, std::memory_order_release); fake.hangup_status_.store(status, std::memory_order_release); fake.Record("hangup"); return fake.CallFailure(CallEntry::hangup); }
+    PjsuaApi api_{ArenaInstall, ArenaReset, Create, ThreadIsRegistered, ThreadRegister, ConfigDefault, LogDefault, MediaDefault, TransportDefault, Init, NoSound, TransportCreate, TransportClose, Start, Pump, Destroy, AccountConfigDefault, AccountAdd, AccountSetUserData, AccountGetUserData, AccountDelete, AccountSetRegistration, CallSettingDefault, CallMakeCall, CallSetUserData, CallGetUserData, CallGetInfo, CallAnswer2, CallSetHold2, CallReinvite2, CallAnswer, CallHangup};
 };
 inline FakePjsuaApi *FakePjsuaApi::active_ = nullptr;
 } // namespace voip::test

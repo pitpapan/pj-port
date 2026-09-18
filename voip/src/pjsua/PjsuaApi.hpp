@@ -35,6 +35,20 @@ struct PjsuaApi {
     void *(*acc_get_user_data)(pjsua_acc_id) = nullptr;
     pj_status_t (*acc_del)(pjsua_acc_id) = nullptr;
     pj_status_t (*acc_set_registration)(pjsua_acc_id, pj_bool_t) = nullptr;
+    void (*call_setting_default)(pjsua_call_setting *) = nullptr;
+    pj_status_t (*call_make_call)(pjsua_acc_id, const pj_str_t *,
+                                  const pjsua_call_setting *, void *,
+                                  const pjsua_msg_data *, pjsua_call_id *) = nullptr;
+    pj_status_t (*call_set_user_data)(pjsua_call_id, void *) = nullptr;
+    void *(*call_get_user_data)(pjsua_call_id) = nullptr;
+    pj_status_t (*call_get_info)(pjsua_call_id, pjsua_call_info *) = nullptr;
+    pj_status_t (*call_answer2)(pjsua_call_id, const pjsua_call_setting *,
+                                unsigned, const pj_str_t *,
+                                const pjsua_msg_data *) = nullptr;
+    pj_status_t (*call_set_hold2)(pjsua_call_id, unsigned,
+                                  const pjsua_msg_data *) = nullptr;
+    pj_status_t (*call_reinvite2)(pjsua_call_id, const pjsua_call_setting *,
+                                  const pjsua_msg_data *) = nullptr;
     pj_status_t (*call_answer)(pjsua_call_id, unsigned,
                                const pj_str_t *, const pjsua_msg_data *) = nullptr;
     pj_status_t (*call_hangup)(pjsua_call_id, unsigned,

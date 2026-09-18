@@ -18,6 +18,11 @@ if(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
     CONFIG_VOIP_CORE_ACTOR_STACK_SIZE=8192)
 endif()
 
+if(CONFIG_VOIP_PJSUA_PLAN4_COMPONENT_TEST)
+  target_include_directories(app PRIVATE ../../voip/include)
+  target_compile_options(app PRIVATE -std=c++17)
+endif()
+
 target_sources_ifdef(CONFIG_VOIP_SDK_CONTRACT_TEST app PRIVATE
   src/sdk_contract.cpp
 )
@@ -86,6 +91,11 @@ target_sources_ifdef(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST app PRIVATE
   ../../voip/src/core/CoreActor.cpp
   ../../voip/src/core/VoipRuntime.cpp
   ../../voip/src/core/VoipResourceGuard.cpp
+)
+target_sources_ifdef(CONFIG_VOIP_PJSUA_PLAN4_COMPONENT_TEST app PRIVATE
+  ../../voip/tests/pjsua/PjsuaPlan4TestMain.cpp
+  ../../voip/tests/pjsua/PjsuaCallApiTest.cpp
+  ../../voip/src/pjsua/PjsuaApi.cpp
 )
 target_sources_ifdef(CONFIG_VOIP_PJSUA_REGISTRATION_TEST app PRIVATE
   src/pjsua_registration.cpp
