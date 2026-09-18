@@ -73,6 +73,8 @@ public:
         return AdmitIncoming(agent, runtime_token, remote_uri, handle, nullptr,
                              effects);
     }
+    Error RollbackUnpublishedAdmission(CallHandle,
+                                       SchedulerEffects &) noexcept;
     Error AdmitIncoming(AgentHandle agent, std::uint32_t runtime_token,
                         CallHandle *handle, bool *promoted,
                         SchedulerEffects &effects) noexcept {

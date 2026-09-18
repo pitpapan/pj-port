@@ -170,6 +170,21 @@ void test_deferred_queued_terminal_is_live_until_finalize() {
     assert(scheduler.OnTeardownComplete(active, nullptr, effects) == voip::Error::ok);
 }
 
+void test_rollback_unpublished_admission_releases_lease_and_fifo() {
+    Fixture fixture;
+    voip::CallScheduler scheduler(fixture.registry);
+    voip::SchedulerEffects effects;
+    voip::CallHandle call{};
+    assert(scheduler.AdmitIncoming(fixture.agent, 77, "sip:rollback@example.test",
+                                   &call, nullptr, effects) == voip::Error::ok);
+    assert(scheduler.LiveCount() == 1 && scheduler.PromotedCount() == 1);
+    effects.Clear();
+    assert(scheduler.RollbackUnpublishedAdmission(call, effects) == voip::Error::ok);
+    assert(!scheduler.IsLive(call));
+    assert(scheduler.LiveCount() == 0 && scheduler.PromotedCount() == 0 &&
+           scheduler.QueuedCount() == 0);
+}
+
 void test_registration_and_promoted_acceptance_rules() {
     Fixture fixture;
     fixture.registry.Resolve(fixture.agent)->registration =
@@ -465,6 +480,7 @@ int main() {
     test_fifo_capacity_and_middle_cancel();
     test_direct_timeout_publishes_before_invalidation();
     test_deferred_queued_terminal_is_live_until_finalize();
+    test_rollback_unpublished_admission_releases_lease_and_fifo();
     test_registration_and_promoted_acceptance_rules();
     test_automatic_promotions_are_returned_as_bounded_effects();
     test_runtime_tokens_and_lease_release_order();

@@ -11,7 +11,7 @@ namespace voip {
 
 enum class PjsuaCallPhase : std::uint8_t {
     free, provisional_incoming, queued_incoming, promoting,
-    calling, early, confirmed, local_hold, disconnecting, disconnected
+    admitted_incoming, calling, early, confirmed, local_hold, disconnecting, disconnected
 };
 
 struct PjsuaCallContext {

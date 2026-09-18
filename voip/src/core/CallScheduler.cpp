@@ -41,6 +41,18 @@ Error CallScheduler::AdmitIncoming(AgentHandle agent, std::uint32_t token,
                  promoted, effects);
 }
 
+Error CallScheduler::RollbackUnpublishedAdmission(CallHandle handle,
+                                                   SchedulerEffects &effects) noexcept {
+    effects.Clear();
+    CallContext *context = calls_.Resolve(handle);
+    if (context == nullptr) return Error::invalid_handle;
+    if (IsQueued(*context)) (void)RemoveFromFifo(handle);
+    else ClearAgentLease(*context);
+    if (!calls_.Release(handle)) return Error::internal_failure;
+    if (live_count_ != 0) --live_count_;
+    return Error::ok;
+}
+
 Error CallScheduler::Admit(AgentHandle agent, CallDirection direction,
                            std::uint32_t token, const char *remote_uri,
                            CallHandle *handle, bool *promoted,

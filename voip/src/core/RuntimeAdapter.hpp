@@ -35,6 +35,7 @@ struct RuntimeNotification {
 struct RuntimeRequest {
     enum class Type : std::uint8_t {
         initialize,
+        admit_incoming,
         promote_outgoing,
         promote_incoming,
         answer,
@@ -47,6 +48,7 @@ struct RuntimeRequest {
     };
     Type type = Type::shutdown;
     AgentHandle agent{};
+    CallHandle call{};
     std::uint32_t token = 0;
     std::uint16_t sip_status = 0;
     bool held = false;
@@ -60,10 +62,12 @@ public:
     virtual Error Initialize(const AgentRegistry &, const SecurityPolicy &,
                              const PcmFormat &) noexcept = 0;
     virtual Error Pump(std::uint64_t, std::uint32_t) noexcept = 0;
+    virtual Error AdmitIncoming(CallHandle, AgentHandle,
+                                std::uint32_t) noexcept = 0;
     virtual Error PromoteOutgoing(AgentHandle, const char *,
                                   std::uint32_t *) noexcept = 0;
-    virtual Error PromoteIncoming(AgentHandle, std::uint32_t,
-                                  std::uint32_t *) noexcept = 0;
+    virtual Error PromoteIncoming(CallHandle, AgentHandle,
+                                  std::uint32_t) noexcept = 0;
     virtual Error Answer(std::uint32_t) noexcept = 0;
     virtual Error Reject(std::uint32_t, std::uint16_t) noexcept = 0;
     virtual Error Cancel(std::uint32_t) noexcept = 0;
@@ -82,8 +86,9 @@ public:
     Error Initialize(const AgentRegistry &, const SecurityPolicy &,
                      const PcmFormat &) noexcept override { return Error::ok; }
     Error Pump(std::uint64_t, std::uint32_t) noexcept override { return Error::ok; }
+    Error AdmitIncoming(CallHandle, AgentHandle, std::uint32_t) noexcept override { return Error::unsupported_configuration; }
     Error PromoteOutgoing(AgentHandle, const char *, std::uint32_t *) noexcept override { return Error::unsupported_configuration; }
-    Error PromoteIncoming(AgentHandle, std::uint32_t, std::uint32_t *) noexcept override { return Error::unsupported_configuration; }
+    Error PromoteIncoming(CallHandle, AgentHandle, std::uint32_t) noexcept override { return Error::unsupported_configuration; }
     Error Answer(std::uint32_t) noexcept override { return Error::unsupported_configuration; }
     Error Reject(std::uint32_t, std::uint16_t) noexcept override { return Error::unsupported_configuration; }
     Error Cancel(std::uint32_t) noexcept override { return Error::unsupported_configuration; }

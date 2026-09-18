@@ -124,6 +124,17 @@ Error FakeRuntimeAdapter::Pump(std::uint64_t, std::uint32_t) noexcept {
     return stopped_ ? Error::shutting_down : Error::ok;
 }
 
+Error FakeRuntimeAdapter::AdmitIncoming(CallHandle call, AgentHandle agent,
+                                        std::uint32_t token) noexcept {
+    RuntimeRequest request{};
+    request.type = RuntimeRequest::Type::admit_incoming;
+    request.call = call;
+    request.agent = agent;
+    request.token = token;
+    Record(request);
+    return ConsumeFailure(request.type);
+}
+
 Error FakeRuntimeAdapter::PromoteOutgoing(AgentHandle agent, const char *uri,
                                           std::uint32_t *token) noexcept {
     if (token == nullptr || uri == nullptr) return Error::invalid_argument;
@@ -144,19 +155,17 @@ Error FakeRuntimeAdapter::PromoteOutgoing(AgentHandle agent, const char *uri,
     return Enqueue(notification);
 }
 
-Error FakeRuntimeAdapter::PromoteIncoming(AgentHandle agent, std::uint32_t token,
-                                          std::uint32_t *native_token) noexcept {
-    if (native_token == nullptr) return Error::invalid_argument;
+Error FakeRuntimeAdapter::PromoteIncoming(CallHandle call, AgentHandle agent,
+                                          std::uint32_t token) noexcept {
     RuntimeRequest request{};
     request.type = RuntimeRequest::Type::promote_incoming;
+    request.call = call;
     request.agent = agent;
     request.token = token;
     Record(request);
     const Error failure = ConsumeFailure(request.type);
     if (failure != Error::ok) return failure;
-    *native_token = token != 0 ? token : next_token_++;
-    (void)agent;
-    return Error::ok;
+    return failure;
 }
 
 Error FakeRuntimeAdapter::Answer(std::uint32_t token) noexcept {

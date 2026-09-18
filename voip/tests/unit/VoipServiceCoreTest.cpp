@@ -1345,6 +1345,63 @@ void test_shutdown_orders_native_reject_teardown_before_adapter_shutdown() {
     assert(rejected);
 }
 
+void test_incoming_admission_orders_native_180_and_hides_failure() {
+    std::array<Source, 5> sources;
+    std::array<Sink, 5> sinks;
+    std::array<voip::AgentConfig, 5> agents{};
+    const voip::ServiceConfig config = Config(agents, sources, sinks);
+    voip::VoipRuntime runtime;
+    assert(runtime.Initialize(config) == voip::Error::ok);
+    voip::AgentHandle first{}, second{}, third{};
+    assert(runtime.GetAgentHandle(0, &first) == voip::Error::ok);
+    assert(runtime.GetAgentHandle(1, &second) == voip::Error::ok);
+    assert(runtime.GetAgentHandle(2, &third) == voip::Error::ok);
+    voip::RuntimeNotification incoming{};
+    incoming.type = voip::RuntimeNotification::Type::incoming_call;
+    incoming.agent = first;
+    incoming.token = 12001;
+    std::strncpy(incoming.remote_uri, "sip:ordered-incoming@example.test",
+                 voip::max_uri_length);
+    assert(runtime.InjectNotification(incoming) == voip::Error::ok);
+    voip::Event event{};
+    voip::CallHandle immediate{};
+    for (unsigned i = 0; i < 100 && !immediate.IsValid(); ++i)
+        if (runtime.WaitForEvent(&event, 20) == voip::Error::ok &&
+            event.type == voip::EventType::incoming_call)
+            immediate = event.call;
+    assert(immediate.IsValid());
+    std::size_t admit_index = runtime.AdapterRequestCount();
+    std::size_t promote_index = runtime.AdapterRequestCount();
+    for (std::size_t i = 0; i < runtime.AdapterRequestCount(); ++i) {
+        voip::RuntimeRequest request{};
+        assert(runtime.GetAdapterRequest(i, &request));
+        if (request.type == voip::RuntimeRequest::Type::admit_incoming &&
+            request.call.slot == immediate.slot)
+            admit_index = i;
+        if (request.type == voip::RuntimeRequest::Type::promote_incoming &&
+            request.call.slot == immediate.slot)
+            promote_index = i;
+    }
+    assert(admit_index < promote_index);
+
+    runtime.FailNextAdapter(voip::RuntimeRequest::Type::admit_incoming,
+                            voip::Error::signaling_failed);
+    incoming.agent = second;
+    incoming.token = 12002;
+    assert(runtime.InjectNotification(incoming) == voip::Error::ok);
+    for (unsigned i = 0; i < 10; ++i) runtime.Step(i);
+    assert(runtime.GetResourceSnapshot().active_calls == 1);
+    bool rejected = false;
+    for (std::size_t i = 0; i < runtime.AdapterRequestCount(); ++i) {
+        voip::RuntimeRequest request{};
+        assert(runtime.GetAdapterRequest(i, &request));
+        rejected |= request.type == voip::RuntimeRequest::Type::reject &&
+                    request.token == 12002 && request.sip_status == 486;
+    }
+    assert(rejected);
+    assert(runtime.Shutdown() == voip::Error::ok);
+}
+
 } // namespace
 
 int main() {
@@ -1379,6 +1436,7 @@ int main() {
     test_fake_callback_state_resets_between_lifecycles();
     test_shutdown_timeout_requires_retry_before_reinitialize();
     test_shutdown_orders_native_reject_teardown_before_adapter_shutdown();
+    test_incoming_admission_orders_native_180_and_hides_failure();
     std::puts("VoipServiceCoreTest PASSED");
     return 0;
 }

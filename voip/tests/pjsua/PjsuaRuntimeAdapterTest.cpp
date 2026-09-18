@@ -28,7 +28,7 @@ void RunPjsuaRuntimeAdapterTests() {
     RuntimeNotification notification{};
     assert(!adapter.TryGetNotification(&notification));
     assert(adapter.PromoteOutgoing({}, "sip:peer@example.test", nullptr) == Error::unsupported_configuration);
-    assert(adapter.PromoteIncoming({}, 1, nullptr) == Error::unsupported_configuration);
+    assert(adapter.PromoteIncoming({}, {}, 1) == Error::unsupported_configuration);
     assert(adapter.Answer(1) == Error::unsupported_configuration);
     assert(adapter.Reject(1, 486) == Error::unsupported_configuration);
     assert(adapter.Cancel(1) == Error::unsupported_configuration);

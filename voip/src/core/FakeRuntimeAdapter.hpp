@@ -19,8 +19,9 @@ public:
     Error Initialize(const AgentRegistry &, const SecurityPolicy &,
                      const PcmFormat &) noexcept override;
     Error Pump(std::uint64_t, std::uint32_t) noexcept override;
+    Error AdmitIncoming(CallHandle, AgentHandle, std::uint32_t) noexcept override;
     Error PromoteOutgoing(AgentHandle, const char *, std::uint32_t *) noexcept override;
-    Error PromoteIncoming(AgentHandle, std::uint32_t, std::uint32_t *) noexcept override;
+    Error PromoteIncoming(CallHandle, AgentHandle, std::uint32_t) noexcept override;
     Error Answer(std::uint32_t) noexcept override;
     Error Reject(std::uint32_t, std::uint16_t) noexcept override;
     Error Cancel(std::uint32_t) noexcept override;
@@ -59,8 +60,8 @@ private:
     std::size_t initialization_notification_burst_ = 0;
     std::array<RuntimeRequest, capacity> requests_{};
     std::size_t request_count_ = 0;
-    std::array<Error, 10> failures_{};
-    static_assert(static_cast<std::size_t>(RuntimeRequest::Type::shutdown) + 1 == 10,
+    std::array<Error, 11> failures_{};
+    static_assert(static_cast<std::size_t>(RuntimeRequest::Type::shutdown) + 1 == 11,
                   "failure table must cover every adapter request");
 };
 

@@ -225,8 +225,8 @@ void VoipRuntime::ApplyEffects(const SchedulerEffects &effects) noexcept {
         std::uint32_t token = 0;
         Error error = Error::internal_failure;
         if (effect.direction == CallDirection::incoming)
-            error = adapter_.PromoteIncoming(effect.handle.IsValid() ? context->agent : AgentHandle{},
-                                              context->runtime_token, &token);
+            error = adapter_.PromoteIncoming(effect.handle, context->agent,
+                                              context->runtime_token);
         else
             error = adapter_.PromoteOutgoing(context->agent, context->remote_uri,
                                              &token);
@@ -248,7 +248,8 @@ void VoipRuntime::ApplyEffects(const SchedulerEffects &effects) noexcept {
             }
             continue;
         }
-        context->runtime_token = token;
+        if (effect.direction == CallDirection::outgoing)
+            context->runtime_token = token;
         if (effect.answer_on_promotion) {
             // A queued incoming Answer is a local decision. Native 200/Answer
             // must succeed before the business state accepts the call; the
@@ -396,41 +397,36 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
             (void)adapter_.Reject(notification.token, 486);
             return;
         }
-        call_terminal_handles_[terminal_index] = handle;
-        if (call_count_ < calls_.size()) {
-            calls_[call_count_++] = handle;
-            if (CallContext *context = scheduler_.Resolve(handle))
-                context->admitted_at_ms = now_ms_;
+        // The provisional native context is made callback-reachable before
+        // the incoming event becomes visible.  The fake records this 180
+        // handshake without synthesizing an acceptance callback.
+        if (adapter_.AdmitIncoming(handle, notification.agent,
+                                   notification.token) != Error::ok) {
+            SchedulerEffects rollback_effects{};
+            (void)scheduler_.RollbackUnpublishedAdmission(handle, rollback_effects);
+            (void)terminal_reservation->Cancel();
+            call_terminal_live_[terminal_index] = false;
+            (void)admission_reservation.Cancel();
+            (void)adapter_.Reject(notification.token, 486);
+            RefreshResources();
+            return;
         }
+        call_terminal_handles_[terminal_index] = handle;
         incoming.call = handle;
         incoming.call_snapshot = scheduler_.Snapshot(handle);
         if (!admission_reservation.Commit(incoming)) {
             event_publication_failed_ = true;
-            ScheduledTransition rollback{};
             SchedulerEffects rollback_effects{};
-            const Error rollback_error = promoted
-                                             ? scheduler_.Cancel(handle, &rollback,
-                                                                  rollback_effects)
-                                             : scheduler_.CancelDeferred(
-                                                   handle, &rollback,
-                                                   rollback_effects);
-            if (rollback_error == Error::ok) {
-                PublishTransition(rollback);
-                if (rollback.handle_invalidated) {
-                    ForgetCall(handle);
-                } else {
-                    ScheduledTransition cleanup{};
-                    SchedulerEffects cleanup_effects{};
-                    if (scheduler_.OnTeardownComplete(handle, &cleanup,
-                                                     cleanup_effects) == Error::ok) {
-                        ForgetCall(cleanup.handle);
-                        ApplyEffects(cleanup_effects);
-                    }
-                }
-            }
+            (void)scheduler_.RollbackUnpublishedAdmission(handle, rollback_effects);
             (void)admission_reservation.Cancel();
             (void)adapter_.Reject(notification.token, 486);
+            RefreshResources();
             return;
+        }
+        if (call_count_ < calls_.size()) {
+            calls_[call_count_++] = handle;
+            if (CallContext *context = scheduler_.Resolve(handle))
+                context->admitted_at_ms = now_ms_;
         }
         PublishAdmission(handle, !promoted);
         ApplyEffects(effects);

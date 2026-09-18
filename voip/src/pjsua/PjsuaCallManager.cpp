@@ -17,6 +17,44 @@ PjsuaCallContext *PjsuaCallManager::Find(pjsua_call_id native_id) noexcept {
     return nullptr;
 }
 
+PjsuaCallContext *PjsuaCallManager::FindToken(std::uint32_t token) noexcept {
+    for (PjsuaCallContext &context : contexts_)
+        if (context.phase != PjsuaCallPhase::free && context.token == token)
+            return &context;
+    return nullptr;
+}
+
+Error PjsuaCallManager::AdmitIncoming(CallHandle logical, AgentHandle agent,
+                                      std::uint32_t token) noexcept {
+    PjsuaCallContext *context = FindToken(token);
+    if (context == nullptr || !logical.IsValid() ||
+        context->agent.slot != agent.slot || context->agent.generation != agent.generation ||
+        context->phase != PjsuaCallPhase::queued_incoming ||
+        !OwnsNativeUserData(*context) || api_.call_setting_default == nullptr ||
+        api_.call_answer2 == nullptr)
+        return Error::invalid_handle;
+    context->logical = logical;
+    context->logical_bound = true;
+    pjsua_call_setting setting{};
+    api_.call_setting_default(&setting);
+    if (api_.call_answer2(context->native_id, &setting, 180, nullptr, nullptr) != PJ_SUCCESS)
+        return Error::signaling_failed;
+    context->phase = PjsuaCallPhase::admitted_incoming;
+    return Error::ok;
+}
+
+Error PjsuaCallManager::PromoteIncoming(CallHandle logical, AgentHandle agent,
+                                        std::uint32_t token) noexcept {
+    PjsuaCallContext *context = FindToken(token);
+    if (context == nullptr || !context->logical_bound ||
+        context->logical.slot != logical.slot || context->logical.generation != logical.generation ||
+        context->agent.slot != agent.slot || context->agent.generation != agent.generation ||
+        context->phase != PjsuaCallPhase::admitted_incoming ||
+        !OwnsNativeUserData(*context))
+        return Error::invalid_handle;
+    return Error::ok;
+}
+
 PjsuaCallContext *PjsuaCallManager::Reserve(AgentHandle agent,
                                             pjsua_call_id native_id) noexcept {
     if (Find(native_id) != nullptr) return nullptr;
@@ -117,6 +155,19 @@ void PjsuaCallManager::OnCallState(pjsua_call_id native_id) noexcept {
     if (api_.call_get_info(native_id, &info) != PJ_SUCCESS) return;
     if (info.state == PJSIP_INV_STATE_DISCONNECTED) {
         context->phase = PjsuaCallPhase::disconnected;
+        // A remote CANCEL after 180 is a copied actor notification.  The
+        // context stays native-owned until this point, so callbacks can still
+        // validate the exact user-data pointer during the transaction.
+        if (context->logical_bound && notification_size_ != notifications_.size()) {
+            RuntimeNotification notification{};
+            notification.type = RuntimeNotification::Type::call_finished;
+            notification.agent = context->agent;
+            notification.token = context->token;
+            notifications_[(notification_head_ + notification_size_) % notifications_.size()].notification = notification;
+            ++notification_size_;
+        } else if (context->logical_bound) {
+            return;
+        }
         Release(*context);
     }
 }

@@ -22,12 +22,15 @@ public:
     void OnIncomingCall(pjsua_acc_id, pjsua_call_id) noexcept override;
     void OnCallState(pjsua_call_id) noexcept override;
     void OnCallMediaState(pjsua_call_id) noexcept override;
+    Error AdmitIncoming(CallHandle, AgentHandle, std::uint32_t) noexcept;
+    Error PromoteIncoming(CallHandle, AgentHandle, std::uint32_t) noexcept;
     bool TryGetNotification(RuntimeNotification *) noexcept;
     void Reset() noexcept;
     std::size_t Count() const noexcept { return count_; }
 
 private:
     PjsuaCallContext *Find(pjsua_call_id) noexcept;
+    PjsuaCallContext *FindToken(std::uint32_t) noexcept;
     PjsuaCallContext *Reserve(AgentHandle, pjsua_call_id) noexcept;
     bool OwnsNativeUserData(const PjsuaCallContext &) const noexcept;
     bool EnqueueIncoming(const PjsuaCallContext &, const pjsua_call_info &) noexcept;
