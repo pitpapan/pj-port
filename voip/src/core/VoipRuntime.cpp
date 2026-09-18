@@ -367,7 +367,7 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
                      max_uri_length);
         VoipEventQueue::Reservation admission_reservation;
         if (!events_.ReserveGuaranteed(incoming, &admission_reservation)) {
-            (void)adapter_.Reject(notification.token, 486);
+            (void)adapter_.AbortIncoming(notification.token, 486);
             return;
         }
         std::size_t terminal_index = 0;
@@ -381,7 +381,7 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
         if (terminal_reservation == nullptr ||
             !ReserveCallTerminal(terminal_reservation, &terminal_index)) {
             (void)admission_reservation.Cancel();
-            (void)adapter_.Reject(notification.token, 486);
+            (void)adapter_.AbortIncoming(notification.token, 486);
             return;
         }
         CallHandle handle{};
@@ -394,7 +394,7 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
             (void)terminal_reservation->Cancel();
             call_terminal_live_[terminal_index] = false;
             (void)admission_reservation.Cancel();
-            (void)adapter_.Reject(notification.token, 486);
+            (void)adapter_.AbortIncoming(notification.token, 486);
             return;
         }
         // The provisional native context is made callback-reachable before

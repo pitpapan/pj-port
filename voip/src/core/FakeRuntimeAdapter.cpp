@@ -135,6 +135,11 @@ Error FakeRuntimeAdapter::AdmitIncoming(CallHandle call, AgentHandle agent,
     return ConsumeFailure(request.type);
 }
 
+Error FakeRuntimeAdapter::AbortIncoming(std::uint32_t token,
+                                        std::uint16_t status) noexcept {
+    return Reject(token, status);
+}
+
 Error FakeRuntimeAdapter::PromoteOutgoing(AgentHandle agent, const char *uri,
                                           std::uint32_t *token) noexcept {
     if (token == nullptr || uri == nullptr) return Error::invalid_argument;

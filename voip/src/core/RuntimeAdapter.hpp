@@ -64,6 +64,7 @@ public:
     virtual Error Pump(std::uint64_t, std::uint32_t) noexcept = 0;
     virtual Error AdmitIncoming(CallHandle, AgentHandle,
                                 std::uint32_t) noexcept = 0;
+    virtual Error AbortIncoming(std::uint32_t, std::uint16_t) noexcept = 0;
     virtual Error PromoteOutgoing(AgentHandle, const char *,
                                   std::uint32_t *) noexcept = 0;
     virtual Error PromoteIncoming(CallHandle, AgentHandle,
@@ -87,6 +88,7 @@ public:
                      const PcmFormat &) noexcept override { return Error::ok; }
     Error Pump(std::uint64_t, std::uint32_t) noexcept override { return Error::ok; }
     Error AdmitIncoming(CallHandle, AgentHandle, std::uint32_t) noexcept override { return Error::unsupported_configuration; }
+    Error AbortIncoming(std::uint32_t, std::uint16_t) noexcept override { return Error::unsupported_configuration; }
     Error PromoteOutgoing(AgentHandle, const char *, std::uint32_t *) noexcept override { return Error::unsupported_configuration; }
     Error PromoteIncoming(CallHandle, AgentHandle, std::uint32_t) noexcept override { return Error::unsupported_configuration; }
     Error Answer(std::uint32_t) noexcept override { return Error::unsupported_configuration; }

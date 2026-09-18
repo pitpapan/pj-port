@@ -30,10 +30,9 @@ void RunPjsuaRuntimeAdapterTests() {
     assert(adapter.PromoteOutgoing({}, "sip:peer@example.test", nullptr) == Error::unsupported_configuration);
     assert(adapter.PromoteIncoming({}, {}, 1) == Error::invalid_handle);
     assert(adapter.Answer(1) == Error::unsupported_configuration);
-    // Task 3 supports only a callback-owned provisional token. An arbitrary
-    // token must be rejected by that lookup, rather than treated as a later
-    // Task 5 call-control request.
-    assert(adapter.Reject(1, 486) == Error::invalid_handle);
+    // Generic Reject remains a Task 5 control; Task 3 only has a private
+    // pre-publication abort handshake.
+    assert(adapter.Reject(1, 486) == Error::unsupported_configuration);
     assert(adapter.Cancel(1) == Error::unsupported_configuration);
     assert(adapter.Hangup(1) == Error::unsupported_configuration);
     assert(adapter.SetHeld(1, true) == Error::unsupported_configuration);
