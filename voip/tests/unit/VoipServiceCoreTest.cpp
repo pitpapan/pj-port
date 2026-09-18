@@ -1411,6 +1411,8 @@ void test_incoming_event_commit_failure_releases_terminal_reservation() {
     assert(runtime.Initialize(config) == voip::Error::ok);
     voip::AgentHandle agent{};
     assert(runtime.GetAgentHandle(0, &agent) == voip::Error::ok);
+    const std::uint16_t event_baseline =
+        runtime.GetResourceSnapshot().available_events;
     runtime.FailNextIncomingEventCommitForTest();
     voip::RuntimeNotification incoming{};
     incoming.type = voip::RuntimeNotification::Type::incoming_call;
@@ -1422,7 +1424,8 @@ void test_incoming_event_commit_failure_releases_terminal_reservation() {
     runtime.Step(0);
     const voip::ResourceSnapshot after_failure = runtime.GetResourceSnapshot();
     assert(after_failure.active_calls == 0 &&
-           after_failure.available_logical_calls == 7);
+           after_failure.available_logical_calls == 7 &&
+           after_failure.available_events == event_baseline);
     // A second admission proves the first terminal reservation was cancelled;
     // its exact resource baseline prevents masking a leaked reservation.
     incoming.token = 12102;

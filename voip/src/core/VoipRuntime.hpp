@@ -63,7 +63,9 @@ public:
     std::size_t PendingAdapterNotifications() const noexcept;
     std::size_t AdapterRequestCount() const noexcept;
     bool GetAdapterRequest(std::size_t, RuntimeRequest *) const noexcept;
+#if !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
     void FailNextIncomingEventCommitForTest() noexcept;
+#endif
     bool Validate(AgentHandle) const noexcept override;
     bool Validate(CallHandle) const noexcept override;
 
@@ -129,7 +131,9 @@ private:
     CoreEventSignal shutdown_signal_{};
     CoreEventSignal startup_signal_{};
     Error startup_error_ = Error::ok;
+#if !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
     bool fail_next_incoming_event_commit_for_test_ = false;
+#endif
     Error startup_cleanup_error_ = Error::ok;
     bool shutdown_complete_ = false;
     Error shutdown_error_ = Error::ok;
