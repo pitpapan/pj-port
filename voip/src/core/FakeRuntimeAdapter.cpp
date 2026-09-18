@@ -137,7 +137,19 @@ Error FakeRuntimeAdapter::AdmitIncoming(CallHandle call, AgentHandle agent,
 
 Error FakeRuntimeAdapter::AbortIncoming(std::uint32_t token,
                                         std::uint16_t status) noexcept {
-    return Reject(token, status);
+    RuntimeRequest request{};
+    request.type = RuntimeRequest::Type::abort_incoming;
+    request.token = token;
+    request.sip_status = status;
+    Record(request);
+    const Error failure = ConsumeFailure(request.type);
+    if (failure != Error::ok) return failure;
+    RuntimeNotification notification{};
+    notification.type = RuntimeNotification::Type::call_rejected;
+    notification.token = token;
+    notification.sip_status = status;
+    notification.error = Error::remote_rejected;
+    return Enqueue(notification);
 }
 
 Error FakeRuntimeAdapter::PromoteOutgoing(AgentHandle agent, const char *uri,

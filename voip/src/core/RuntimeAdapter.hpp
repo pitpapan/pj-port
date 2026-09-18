@@ -36,6 +36,7 @@ struct RuntimeRequest {
     enum class Type : std::uint8_t {
         initialize,
         admit_incoming,
+        abort_incoming,
         promote_outgoing,
         promote_incoming,
         answer,

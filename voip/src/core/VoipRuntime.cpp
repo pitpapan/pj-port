@@ -407,7 +407,7 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
             (void)terminal_reservation->Cancel();
             call_terminal_live_[terminal_index] = false;
             (void)admission_reservation.Cancel();
-            (void)adapter_.Reject(notification.token, 486);
+            (void)adapter_.AbortIncoming(notification.token, 486);
             RefreshResources();
             return;
         }
@@ -427,7 +427,7 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
             (void)terminal_reservation->Cancel();
             call_terminal_live_[terminal_index] = false;
             (void)admission_reservation.Cancel();
-            (void)adapter_.Reject(notification.token, 486);
+            (void)adapter_.AbortIncoming(notification.token, 486);
             RefreshResources();
             return;
         }

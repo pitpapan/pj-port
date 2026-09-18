@@ -1395,50 +1395,80 @@ void test_incoming_admission_orders_native_180_and_hides_failure() {
     for (std::size_t i = 0; i < runtime.AdapterRequestCount(); ++i) {
         voip::RuntimeRequest request{};
         assert(runtime.GetAdapterRequest(i, &request));
-        rejected |= request.type == voip::RuntimeRequest::Type::reject &&
+        rejected |= request.type == voip::RuntimeRequest::Type::abort_incoming &&
                     request.token == 12002 && request.sip_status == 486;
     }
     assert(rejected);
     assert(runtime.Shutdown() == voip::Error::ok);
 }
 
-void test_incoming_event_commit_failure_releases_terminal_reservation() {
-    std::array<Source, 5> sources;
-    std::array<Sink, 5> sinks;
-    std::array<voip::AgentConfig, 5> agents{};
-    const voip::ServiceConfig config = Config(agents, sources, sinks);
-    voip::VoipRuntime runtime;
-    assert(runtime.Initialize(config) == voip::Error::ok);
-    voip::AgentHandle agent{};
-    assert(runtime.GetAgentHandle(0, &agent) == voip::Error::ok);
-    const std::uint16_t event_baseline =
-        runtime.GetResourceSnapshot().available_events;
-    runtime.FailNextIncomingEventCommitForTest();
-    voip::RuntimeNotification incoming{};
-    incoming.type = voip::RuntimeNotification::Type::incoming_call;
-    incoming.agent = agent;
-    incoming.token = 12101;
-    std::strncpy(incoming.remote_uri, "sip:commit-failure@example.test",
-                 voip::max_uri_length);
-    assert(runtime.InjectNotification(incoming) == voip::Error::ok);
-    runtime.Step(0);
-    const voip::ResourceSnapshot after_failure = runtime.GetResourceSnapshot();
-    assert(after_failure.active_calls == 0 &&
-           after_failure.available_logical_calls == 7 &&
-           after_failure.available_events == event_baseline);
-    // A second admission proves the first terminal reservation was cancelled;
-    // its exact resource baseline prevents masking a leaked reservation.
-    incoming.token = 12102;
-    assert(runtime.InjectNotification(incoming) == voip::Error::ok);
-    voip::Event event{};
-    bool admitted = false;
-    for (unsigned i = 0; i < 100 && !admitted; ++i)
-        if (runtime.WaitForEvent(&event, 20) == voip::Error::ok &&
-            event.type == voip::EventType::incoming_call)
-            admitted = true;
-    assert(admitted);
-    assert(runtime.GetResourceSnapshot().available_logical_calls == 6);
-    assert(runtime.Shutdown() == voip::Error::ok);
+void test_prepublication_failures_abort_incoming_and_restore_reservations() {
+    unsigned routing_failures = 0;
+    for (bool fail_commit : {false, true}) {
+        std::array<Source, 5> sources;
+        std::array<Sink, 5> sinks;
+        std::array<voip::AgentConfig, 5> agents{};
+        const voip::ServiceConfig config = Config(agents, sources, sinks);
+        voip::VoipRuntime runtime;
+        assert(runtime.Initialize(config) == voip::Error::ok);
+        voip::AgentHandle agent{};
+        assert(runtime.GetAgentHandle(0, &agent) == voip::Error::ok);
+        const std::uint16_t event_baseline =
+            runtime.GetResourceSnapshot().available_events;
+        if (fail_commit)
+            runtime.FailNextIncomingEventCommitForTest();
+        else
+            runtime.FailNextAdapter(voip::RuntimeRequest::Type::admit_incoming,
+                                    voip::Error::signaling_failed);
+        voip::RuntimeNotification incoming{};
+        incoming.type = voip::RuntimeNotification::Type::incoming_call;
+        incoming.agent = agent;
+        incoming.token = 12101;
+        std::strncpy(incoming.remote_uri, "sip:commit-failure@example.test",
+                     voip::max_uri_length);
+        assert(runtime.InjectNotification(incoming) == voip::Error::ok);
+        runtime.Step(0);
+        const voip::ResourceSnapshot after_failure = runtime.GetResourceSnapshot();
+        assert(after_failure.active_calls == 0 &&
+               after_failure.available_logical_calls == 7 &&
+               after_failure.available_events == event_baseline);
+        unsigned aborts = 0;
+        unsigned rejects = 0;
+        for (std::size_t i = 0; i < runtime.AdapterRequestCount(); ++i) {
+            voip::RuntimeRequest request{};
+            assert(runtime.GetAdapterRequest(i, &request));
+            if (request.token != 12101) continue;
+            if (request.type == voip::RuntimeRequest::Type::abort_incoming &&
+                request.sip_status == 486) ++aborts;
+            if (request.type == voip::RuntimeRequest::Type::reject) ++rejects;
+            assert(request.type != voip::RuntimeRequest::Type::promote_incoming);
+        }
+        if (aborts != 1 || rejects != 0) {
+            std::fprintf(stderr, "%s failure: expected one private abort and no "
+                         "generic reject; got %u aborts, %u rejects\n",
+                         fail_commit ? "incoming commit" : "native admission/180",
+                         aborts, rejects);
+            ++routing_failures;
+        }
+        voip::Event event{};
+        while (runtime.TryGetEvent(&event) == voip::Error::ok) {
+            assert(event.type != voip::EventType::incoming_call);
+            assert(event.type != voip::EventType::call_state);
+        }
+        // A second admission proves the first terminal reservation was cancelled;
+        // its exact resource baseline prevents masking a leaked reservation.
+        incoming.token = 12102;
+        assert(runtime.InjectNotification(incoming) == voip::Error::ok);
+        bool admitted = false;
+        for (unsigned i = 0; i < 100 && !admitted; ++i)
+            if (runtime.WaitForEvent(&event, 20) == voip::Error::ok &&
+                event.type == voip::EventType::incoming_call)
+                admitted = true;
+        assert(admitted);
+        assert(runtime.GetResourceSnapshot().available_logical_calls == 6);
+        assert(runtime.Shutdown() == voip::Error::ok);
+    }
+    assert(routing_failures == 0);
 }
 
 } // namespace
@@ -1475,8 +1505,8 @@ int main() {
     test_fake_callback_state_resets_between_lifecycles();
     test_shutdown_timeout_requires_retry_before_reinitialize();
     test_shutdown_orders_native_reject_teardown_before_adapter_shutdown();
+    test_prepublication_failures_abort_incoming_and_restore_reservations();
     test_incoming_admission_orders_native_180_and_hides_failure();
-    test_incoming_event_commit_failure_releases_terminal_reservation();
     std::puts("VoipServiceCoreTest PASSED");
     return 0;
 }

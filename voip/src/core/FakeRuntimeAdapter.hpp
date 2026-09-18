@@ -61,8 +61,8 @@ private:
     std::size_t initialization_notification_burst_ = 0;
     std::array<RuntimeRequest, capacity> requests_{};
     std::size_t request_count_ = 0;
-    std::array<Error, 11> failures_{};
-    static_assert(static_cast<std::size_t>(RuntimeRequest::Type::shutdown) + 1 == 11,
+    std::array<Error, 12> failures_{};
+    static_assert(static_cast<std::size_t>(RuntimeRequest::Type::shutdown) + 1 == 12,
                   "failure table must cover every adapter request");
 };
 
