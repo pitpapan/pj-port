@@ -561,6 +561,104 @@ void test_outgoing_dial_admission_copies_uri_and_completes_at_durability() {
     runtime.SetActorPaused(false); assert(runtime.Shutdown() == voip::Error::ok);
 }
 
+void test_failed_first_effect_does_not_skip_second_in_single_capacity_pass() {
+    std::array<Source, 5> sources;
+    std::array<Sink, 5> sinks;
+    std::array<voip::AgentConfig, 5> agents{};
+    voip::ServiceConfig config = Config(agents, sources, sinks);
+    config.queue_timeout_ms = 60000;
+    voip::VoipRuntime runtime;
+    assert(runtime.Initialize(config) == voip::Error::ok);
+    runtime.SetActorPaused(true);
+    runtime.SetAdapterCallbacksDeferred(true);
+
+    std::array<voip::AgentHandle, 4> agent{};
+    for (std::uint8_t index = 0; index < agent.size(); ++index)
+        assert(runtime.GetAgentHandle(index, &agent[index]) == voip::Error::ok);
+
+    voip::OperationId first_live_operation = 0;
+    voip::OperationId second_live_operation = 0;
+    assert(runtime.Dial(agent[0], {"sip:live-first@example.test"},
+                        &first_live_operation) == voip::Error::ok);
+    runtime.Step(1);
+    assert(runtime.Dial(agent[1], {"sip:live-second@example.test"},
+                        &second_live_operation) == voip::Error::ok);
+    runtime.Step(2);
+
+    // Hold promotion while both original leases drain. Re-enabling it below
+    // makes OnCapacityChanged create one two-effect FIFO batch.
+    runtime.SetSchedulerPromotionEnabledForTest(false);
+    voip::OperationId first_queued_operation = 0;
+    voip::OperationId second_queued_operation = 0;
+    assert(runtime.Dial(agent[2], {"sip:effect-first@example.test"},
+                        &first_queued_operation) == voip::Error::ok);
+    runtime.Step(3);
+    assert(runtime.Dial(agent[3], {"sip:effect-second@example.test"},
+                        &second_queued_operation) == voip::Error::ok);
+    runtime.Step(4);
+
+    voip::CallHandle first_queued{};
+    voip::CallHandle second_queued{};
+    voip::Event event{};
+    while (runtime.TryGetEvent(&event) == voip::Error::ok) {
+        if (event.type != voip::EventType::call_state) continue;
+        if (event.operation == first_queued_operation) first_queued = event.call;
+        if (event.operation == second_queued_operation) second_queued = event.call;
+    }
+    assert(first_queued.IsValid() && second_queued.IsValid());
+
+    voip::RuntimeNotification finished{};
+    finished.type = voip::RuntimeNotification::Type::call_finished;
+    finished.token = 1;
+    assert(runtime.InjectNotification(finished) == voip::Error::ok);
+    finished.token = 2;
+    assert(runtime.InjectNotification(finished) == voip::Error::ok);
+    runtime.Step(5);
+    assert(runtime.GetResourceSnapshot().promoted_calls == 0);
+    assert(runtime.GetResourceSnapshot().queued_calls == 2);
+
+    const std::size_t before = runtime.AdapterRequestCount();
+    runtime.FailNextAdapter(voip::RuntimeRequest::Type::promote_outgoing,
+                            voip::Error::signaling_failed);
+    runtime.SetSchedulerPromotionEnabledForTest(true);
+    assert(runtime.RunCapacityPassForTest() == 2);
+    assert(runtime.AdapterRequestCount() == before + 2);
+
+    voip::RuntimeRequest first_request{};
+    voip::RuntimeRequest second_request{};
+    assert(runtime.GetAdapterRequest(before, &first_request));
+    assert(runtime.GetAdapterRequest(before + 1, &second_request));
+    assert(first_request.type == voip::RuntimeRequest::Type::promote_outgoing);
+    assert(second_request.type == voip::RuntimeRequest::Type::promote_outgoing);
+    assert(first_request.call.slot == first_queued.slot);
+    assert(first_request.call.generation == first_queued.generation);
+    assert(second_request.call.slot == second_queued.slot);
+    assert(second_request.call.generation == second_queued.generation);
+    assert(std::strcmp(first_request.remote_uri, "sip:effect-first@example.test") == 0);
+    assert(std::strcmp(second_request.remote_uri, "sip:effect-second@example.test") == 0);
+
+    bool first_terminal_seen = false;
+    while (runtime.TryGetEvent(&event) == voip::Error::ok) {
+        if (event.type == voip::EventType::call_state &&
+            event.call.slot == first_queued.slot &&
+            event.call.generation == first_queued.generation &&
+            event.transition == voip::CallTransition::timeout) {
+            assert(event.operation == first_queued_operation);
+            first_terminal_seen = true;
+        }
+    }
+    assert(first_terminal_seen);
+    voip::CallSnapshot snapshot{};
+    assert(runtime.GetCallSnapshot(first_queued, &snapshot) == voip::Error::invalid_handle);
+    runtime.DrainAdapterCallbacks();
+    runtime.Step(6);
+    assert(runtime.GetCallSnapshot(second_queued, &snapshot) == voip::Error::ok);
+    assert(snapshot.state == voip::CallState::established);
+    runtime.SetAdapterCallbacksDeferred(false);
+    runtime.SetActorPaused(false);
+    assert(runtime.Shutdown() == voip::Error::ok);
+}
+
 void test_disabled_registration_rejects_outgoing_admission() {
     std::array<Source, 5> sources;
     std::array<Sink, 5> sinks;
@@ -1548,6 +1646,7 @@ int main() {
     test_rejection_finishes_promoted_call_and_preserves_terminal_trace();
     test_fake_adapter_records_bounded_copied_requests();
     test_outgoing_dial_admission_copies_uri_and_completes_at_durability();
+    test_failed_first_effect_does_not_skip_second_in_single_capacity_pass();
     test_disabled_registration_rejects_outgoing_admission();
     test_failed_hold_preserves_established_state();
     test_shutdown_adapter_failure_preserves_reachable_runtime();

@@ -1138,6 +1138,20 @@ void VoipRuntime::FailNextIncomingEventCommitForTest() noexcept {
     CoreLockGuard lock(mutex_);
     fail_next_incoming_event_commit_for_test_ = true;
 }
+
+void VoipRuntime::SetSchedulerPromotionEnabledForTest(bool enabled) noexcept {
+    CoreLockGuard lock(mutex_);
+    scheduler_.SetPromotionEnabled(enabled);
+}
+
+std::size_t VoipRuntime::RunCapacityPassForTest() noexcept {
+    CoreLockGuard lock(mutex_);
+    SchedulerEffects effects{};
+    (void)scheduler_.OnCapacityChanged(effects);
+    ApplyEffects(effects);
+    RefreshResources();
+    return effects.count;
+}
 #endif
 
 void VoipRuntime::SetAdapterCallbacksDeferred(bool deferred) noexcept {

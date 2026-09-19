@@ -65,6 +65,10 @@ public:
     bool GetAdapterRequest(std::size_t, RuntimeRequest *) const noexcept;
 #if !defined(__ZEPHYR__) || defined(CONFIG_VOIP_SERVICE_FAKE_ADAPTER)
     void FailNextIncomingEventCommitForTest() noexcept;
+    // Host-only scheduler seam: stages a bounded capacity pass without
+    // exposing actor controls through the public VoipService API.
+    void SetSchedulerPromotionEnabledForTest(bool) noexcept;
+    std::size_t RunCapacityPassForTest() noexcept;
 #endif
     bool Validate(AgentHandle) const noexcept override;
     bool Validate(CallHandle) const noexcept override;
