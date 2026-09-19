@@ -228,7 +228,7 @@ void VoipRuntime::ApplyEffects(const SchedulerEffects &effects) noexcept {
             error = adapter_.PromoteIncoming(effect.handle, context->agent,
                                               context->runtime_token);
         else
-            error = adapter_.PromoteOutgoing(context->agent, context->remote_uri,
+            error = adapter_.PromoteOutgoing(effect.handle, context->agent, context->remote_uri,
                                              &token);
         if (error != Error::ok) {
             // Promotion did not acquire a native call. Keep the scheduler
@@ -250,6 +250,8 @@ void VoipRuntime::ApplyEffects(const SchedulerEffects &effects) noexcept {
         }
         if (effect.direction == CallDirection::outgoing)
             context->runtime_token = token;
+        if (effect.direction == CallDirection::outgoing && error == Error::ok)
+            (void)operations_.Complete(operation, Error::ok);
         if (effect.answer_on_promotion) {
             // A queued incoming Answer is a local decision. Native 200/Answer
             // must succeed before the business state accepts the call; the
@@ -616,9 +618,11 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
         }
         context->admitted_at_ms = now_ms_;
         BindCallOperation(*context, command.operation);
-        context->signaling_operation = command.operation;
+        context->signaling_operation = 0;
         if (call_count_ < calls_.size()) calls_[call_count_++] = handle;
         PublishAdmission(handle, !promoted);
+        if (!promoted)
+            (void)operations_.Complete(command.operation, Error::ok);
         ApplyEffects(effects);
         return;
     }

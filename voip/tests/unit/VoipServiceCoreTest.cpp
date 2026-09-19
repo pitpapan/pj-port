@@ -469,10 +469,10 @@ void test_queued_call_times_out_and_publishes_terminal_operation() {
     voip::Event event{};
     for (unsigned i = 0; i < 100 && !timed_out; ++i) {
         if (service.WaitForEvent(&event, 20) == voip::Error::ok &&
-            event.type == voip::EventType::operation_terminal &&
-            event.operation == queued_operation) {
-            timed_out = event.status.error == voip::Error::timed_out;
-        }
+            event.type == voip::EventType::call_state &&
+            event.call.slot == queued.slot &&
+            event.call.generation == queued.generation)
+            timed_out = event.destination_state == voip::CallState::terminated;
     }
     assert(timed_out);
     voip::CallSnapshot snapshot{};
@@ -484,13 +484,69 @@ void test_fake_adapter_records_bounded_copied_requests() {
     voip::FakeRuntimeAdapter adapter;
     assert(adapter.RequestCount() == 0);
     std::uint32_t token = 0;
-    assert(adapter.PromoteOutgoing({0, 1}, "sip:record@example.test", &token) ==
+    assert(adapter.PromoteOutgoing({0, 1}, {0, 1}, "sip:record@example.test", &token) ==
            voip::Error::ok);
     assert(adapter.RequestCount() == 1);
     voip::RuntimeRequest request{};
     assert(adapter.GetRequest(0, &request));
     assert(request.type == voip::RuntimeRequest::Type::promote_outgoing);
     assert(std::strcmp(request.remote_uri, "sip:record@example.test") == 0);
+}
+
+void test_outgoing_dial_admission_copies_uri_and_completes_at_durability() {
+    std::array<Source, 5> sources; std::array<Sink, 5> sinks;
+    std::array<voip::AgentConfig, 5> agents{};
+    voip::ServiceConfig config = Config(agents, sources, sinks);
+    config.queue_timeout_ms = 60000;
+    voip::VoipRuntime runtime;
+    assert(runtime.Initialize(config) == voip::Error::ok);
+    runtime.SetActorPaused(true); runtime.SetAdapterCallbacksDeferred(true);
+    voip::AgentHandle first_agent{}, second_agent{}, queued_agent{}, cancelled_agent{};
+    assert(runtime.GetAgentHandle(0, &first_agent) == voip::Error::ok);
+    assert(runtime.GetAgentHandle(1, &second_agent) == voip::Error::ok);
+    assert(runtime.GetAgentHandle(2, &queued_agent) == voip::Error::ok);
+    assert(runtime.GetAgentHandle(3, &cancelled_agent) == voip::Error::ok);
+    voip::OperationId first = 0, second = 0, queued = 0, cancelled = 0;
+    assert(runtime.Dial(first_agent, {"sip:first@example.test"}, &first) == voip::Error::ok); runtime.Step(1);
+    assert(runtime.Dial(second_agent, {"sip:second@example.test"}, &second) == voip::Error::ok); runtime.Step(2);
+    char copied_uri[voip::max_uri_length + 1] = "sip:copied@example.test";
+    assert(runtime.Dial(queued_agent, {copied_uri}, &queued) == voip::Error::ok);
+    std::strcpy(copied_uri, "sip:changed@example.test"); runtime.Step(3);
+    assert(runtime.Dial(cancelled_agent, {"sip:cancel-before-promotion@example.test"}, &cancelled) == voip::Error::ok); runtime.Step(4);
+
+    // Leaving Dial pending until an acceptance callback makes immediate and
+    // FIFO-admitted operations indistinguishable after durable admission.
+    std::array<bool, 4> completed{}; voip::Event event{}; voip::CallHandle queued_call{}, cancelled_call{};
+    while (runtime.TryGetEvent(&event) == voip::Error::ok) {
+        if (event.type == voip::EventType::operation_terminal && event.status.error == voip::Error::ok) {
+            if (event.operation == first) completed[0] = true;
+            if (event.operation == second) completed[1] = true;
+            if (event.operation == queued) completed[2] = true;
+            if (event.operation == cancelled) completed[3] = true;
+        }
+        if (event.type == voip::EventType::call_state && event.operation == queued) queued_call = event.call;
+        if (event.type == voip::EventType::call_state && event.operation == cancelled) cancelled_call = event.call;
+    }
+    assert(completed[0] && completed[1] && completed[2] && completed[3]);
+    assert(queued_call.IsValid() && cancelled_call.IsValid());
+    const std::size_t before_cancel = runtime.AdapterRequestCount();
+    voip::OperationId cancel = 0;
+    assert(runtime.Cancel(cancelled_call, &cancel) == voip::Error::ok); runtime.Step(5);
+    assert(runtime.AdapterRequestCount() == before_cancel);
+    voip::RuntimeNotification finished{};
+    finished.type = voip::RuntimeNotification::Type::call_finished;
+    finished.token = 1;
+    assert(runtime.InjectNotification(finished) == voip::Error::ok);
+    runtime.Step(6);
+    bool promoted_original_uri = false;
+    for (std::size_t i = 0; i < runtime.AdapterRequestCount(); ++i) {
+        voip::RuntimeRequest request{}; assert(runtime.GetAdapterRequest(i, &request));
+        if (request.type == voip::RuntimeRequest::Type::promote_outgoing && std::strcmp(request.remote_uri, "sip:copied@example.test") == 0) promoted_original_uri = true;
+    }
+    assert(promoted_original_uri);
+    finished.token = 2; assert(runtime.InjectNotification(finished) == voip::Error::ok); runtime.Step(7);
+    finished.token = 3; assert(runtime.InjectNotification(finished) == voip::Error::ok); runtime.Step(8);
+    runtime.SetActorPaused(false); assert(runtime.Shutdown() == voip::Error::ok);
 }
 
 void test_disabled_registration_rejects_outgoing_admission() {
@@ -1483,6 +1539,7 @@ int main() {
     test_queued_call_times_out_and_publishes_terminal_operation();
     test_rejection_finishes_promoted_call_and_preserves_terminal_trace();
     test_fake_adapter_records_bounded_copied_requests();
+    test_outgoing_dial_admission_copies_uri_and_completes_at_durability();
     test_disabled_registration_rejects_outgoing_admission();
     test_failed_hold_preserves_established_state();
     test_shutdown_adapter_failure_preserves_reachable_runtime();

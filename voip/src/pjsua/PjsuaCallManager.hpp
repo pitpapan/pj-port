@@ -23,6 +23,8 @@ public:
     void OnCallState(pjsua_call_id) noexcept override;
     void OnCallMediaState(pjsua_call_id) noexcept override;
     Error AdmitIncoming(CallHandle, AgentHandle, std::uint32_t) noexcept;
+    Error PromoteOutgoing(CallHandle, AgentHandle, const char *,
+                          std::uint32_t *) noexcept;
     Error PromoteIncoming(CallHandle, AgentHandle, std::uint32_t) noexcept;
     Error RejectProvisional(std::uint32_t, std::uint16_t) noexcept;
     bool TryGetNotification(RuntimeNotification *) noexcept;
@@ -33,6 +35,7 @@ private:
     PjsuaCallContext *Find(pjsua_call_id) noexcept;
     PjsuaCallContext *FindToken(std::uint32_t) noexcept;
     PjsuaCallContext *Reserve(AgentHandle, pjsua_call_id) noexcept;
+    PjsuaCallContext *ReserveOutgoing(CallHandle, AgentHandle) noexcept;
     bool OwnsNativeUserData(const PjsuaCallContext &) const noexcept;
     bool EnqueueIncoming(const PjsuaCallContext &, const pjsua_call_info &) noexcept;
     void Release(PjsuaCallContext &) noexcept;

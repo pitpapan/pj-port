@@ -223,13 +223,13 @@ void test_no_heap_after_successful_initialization() {
     assert(!hold_seen);
     assert(resume_seen);
 
-    const voip::OperationId timeout_operation = dial_operations[5];
     bool timeout_seen = false;
     for (unsigned attempt = 0; attempt < 150 && !timeout_seen; ++attempt) {
         if (service.WaitForEvent(&event, 20) != voip::Error::ok) continue;
-        timeout_seen = event.type == voip::EventType::operation_terminal &&
-                       event.operation == timeout_operation &&
-                       event.status.error == voip::Error::timed_out;
+        timeout_seen = event.type == voip::EventType::call_state &&
+                       event.call.slot == calls[5].slot &&
+                       event.call.generation == calls[5].generation &&
+                       event.destination_state == voip::CallState::terminated;
     }
     assert(timeout_seen);
     voip::CallSnapshot timed_out{};

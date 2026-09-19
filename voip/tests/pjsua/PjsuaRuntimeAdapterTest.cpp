@@ -27,7 +27,7 @@ void RunPjsuaRuntimeAdapterTests() {
     assert(adapter.Pump(100, 0) == Error::ok);
     RuntimeNotification notification{};
     assert(!adapter.TryGetNotification(&notification));
-    assert(adapter.PromoteOutgoing({}, "sip:peer@example.test", nullptr) == Error::unsupported_configuration);
+    assert(adapter.PromoteOutgoing({}, {}, "sip:peer@example.test", nullptr) == Error::invalid_argument);
     assert(adapter.PromoteIncoming({}, {}, 1) == Error::invalid_handle);
     assert(adapter.Answer(1) == Error::unsupported_configuration);
     // Generic Reject remains a Task 5 control; Task 3 only has a private

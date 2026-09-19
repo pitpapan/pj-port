@@ -152,11 +152,12 @@ Error FakeRuntimeAdapter::AbortIncoming(std::uint32_t token,
     return Enqueue(notification);
 }
 
-Error FakeRuntimeAdapter::PromoteOutgoing(AgentHandle agent, const char *uri,
+Error FakeRuntimeAdapter::PromoteOutgoing(CallHandle call, AgentHandle agent, const char *uri,
                                           std::uint32_t *token) noexcept {
     if (token == nullptr || uri == nullptr) return Error::invalid_argument;
     RuntimeRequest request{};
     request.type = RuntimeRequest::Type::promote_outgoing;
+    request.call = call;
     request.agent = agent;
     std::strncpy(request.remote_uri, uri, max_uri_length);
     Record(request);

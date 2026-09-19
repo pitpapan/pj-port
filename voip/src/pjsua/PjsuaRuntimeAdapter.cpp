@@ -118,7 +118,11 @@ bool PjsuaRuntimeAdapter::TryGetNotification(RuntimeNotification *notification) 
     return true;
 }
 
-Error PjsuaRuntimeAdapter::PromoteOutgoing(AgentHandle, const char *, std::uint32_t *) noexcept { return Error::unsupported_configuration; }
+Error PjsuaRuntimeAdapter::PromoteOutgoing(CallHandle call, AgentHandle agent,
+                                           const char *uri,
+                                           std::uint32_t *token) noexcept {
+    return calls_.PromoteOutgoing(call, agent, uri, token);
+}
 Error PjsuaRuntimeAdapter::AdmitIncoming(CallHandle call, AgentHandle agent,
                                          std::uint32_t token) noexcept {
     return calls_.AdmitIncoming(call, agent, token);

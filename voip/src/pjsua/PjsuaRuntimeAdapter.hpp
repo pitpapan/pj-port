@@ -23,7 +23,7 @@ public:
     Error Pump(std::uint64_t, std::uint32_t) noexcept override;
     Error AdmitIncoming(CallHandle, AgentHandle, std::uint32_t) noexcept override;
     Error AbortIncoming(std::uint32_t, std::uint16_t) noexcept override;
-    Error PromoteOutgoing(AgentHandle, const char *, std::uint32_t *) noexcept override;
+    Error PromoteOutgoing(CallHandle, AgentHandle, const char *, std::uint32_t *) noexcept override;
     Error PromoteIncoming(CallHandle, AgentHandle, std::uint32_t) noexcept override;
     Error Answer(std::uint32_t) noexcept override;
     Error Reject(std::uint32_t, std::uint16_t) noexcept override;

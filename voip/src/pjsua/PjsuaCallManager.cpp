@@ -81,6 +81,66 @@ PjsuaCallContext *PjsuaCallManager::Reserve(AgentHandle agent,
     return nullptr;
 }
 
+PjsuaCallContext *PjsuaCallManager::ReserveOutgoing(CallHandle logical,
+                                                     AgentHandle agent) noexcept {
+    if (!logical.IsValid()) return nullptr;
+    for (PjsuaCallContext &context : contexts_) {
+        if (context.phase != PjsuaCallPhase::free) continue;
+        context = {};
+        context.token = NextToken();
+        context.logical = logical;
+        context.logical_bound = true;
+        context.agent = agent;
+        context.phase = PjsuaCallPhase::calling;
+        ++count_;
+        return &context;
+    }
+    return nullptr;
+}
+
+Error PjsuaCallManager::PromoteOutgoing(CallHandle logical, AgentHandle agent,
+                                        const char *uri,
+                                        std::uint32_t *token) noexcept {
+    if (uri == nullptr || token == nullptr || !logical.IsValid())
+        return Error::invalid_argument;
+    *token = 0;
+    pjsua_acc_id account = PJSUA_INVALID_ID;
+    if (accounts_.NativeId(agent, &account) != Error::ok)
+        return Error::invalid_handle;
+    if (api_.call_setting_default == nullptr || api_.call_make_call == nullptr ||
+        api_.call_get_user_data == nullptr)
+        return Error::unsupported_configuration;
+    char copied_uri[max_uri_length + 1]{};
+    std::size_t length = 0;
+    while (length <= max_uri_length && uri[length] != '\0') ++length;
+    if (length == 0 || length > max_uri_length) return Error::invalid_argument;
+    std::memcpy(copied_uri, uri, length + 1);
+    PjsuaCallContext *context = ReserveOutgoing(logical, agent);
+    if (context == nullptr) return Error::resource_exhausted;
+    pjsua_call_setting setting{};
+    api_.call_setting_default(&setting);
+    setting.aud_cnt = 1;
+    setting.vid_cnt = 0;
+    pj_str_t destination{copied_uri, static_cast<pj_ssize_t>(length)};
+    pjsua_call_id native_id = PJSUA_INVALID_ID;
+    const pj_status_t status = api_.call_make_call(account, &destination,
+                                                    &setting, context, nullptr,
+                                                    &native_id);
+    if (status != PJ_SUCCESS) {
+        Release(*context);
+        return status == PJ_ETOOMANY ? Error::resource_exhausted
+                                     : Error::signaling_failed;
+    }
+    context->native_id = native_id;
+    context->user_data_bound = api_.call_get_user_data(native_id) == context;
+    if (!context->user_data_bound) {
+        Release(*context);
+        return Error::signaling_failed;
+    }
+    *token = context->token;
+    return Error::ok;
+}
+
 bool PjsuaCallManager::OwnsNativeUserData(const PjsuaCallContext &context) const noexcept {
     return context.user_data_bound && api_.call_get_user_data != nullptr &&
            api_.call_get_user_data(context.native_id) == &context;
