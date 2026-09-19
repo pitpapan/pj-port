@@ -33,7 +33,7 @@ public:
         answer_status_.store(0, std::memory_order_relaxed);
         hangup_status_.store(0, std::memory_order_relaxed);
         call_records_.fill({});
-        mismatch_next_call_user_data_ = false;
+        persistent_call_user_data_mismatch_ = false;
         call_failures_.fill(PJ_SUCCESS);
         account_ids_ = {{2, 0, 4, 1, 3}};
         std::memset(account_configs_.data(), 0, sizeof(account_configs_));
@@ -84,7 +84,7 @@ public:
         call_failures_[static_cast<std::size_t>(entry)] = status;
     }
     void ClearCallFailures() noexcept { call_failures_.fill(PJ_SUCCESS); }
-    void MismatchNextCallUserData() noexcept { mismatch_next_call_user_data_ = true; }
+    void PersistNextCallUserDataMismatch() noexcept { persistent_call_user_data_mismatch_ = true; }
     void FailArenaReset(pj_status_t status) noexcept { arena_reset_status_ = status; }
     void FailDestroyAttempts(std::size_t attempts) noexcept { destroy_failures_remaining_ = attempts; }
     bool SequenceEquals(const char *expected) const noexcept { return std::strcmp(sequence_, expected) == 0; }
@@ -259,7 +259,7 @@ private:
     std::atomic<unsigned> answer_status_{0}; std::atomic<unsigned> hangup_status_{0};
     struct CallRecord { bool in_use = false; void *user_data = nullptr; };
     std::array<CallRecord, 7> call_records_{};
-    bool mismatch_next_call_user_data_ = false;
+    bool persistent_call_user_data_mismatch_ = false;
     std::array<pj_status_t, static_cast<std::size_t>(CallEntry::count)> call_failures_{};
     std::array<pjsua_acc_id, 5> account_ids_{{2, 0, 4, 1, 3}};
     std::array<pjsua_acc_config, 5> account_configs_{};
@@ -470,7 +470,9 @@ private:
             return PJ_EINVAL;
         for (std::size_t index = 0; index < fake.call_records_.size(); ++index) {
             if (fake.call_records_[index].in_use) continue;
-            fake.call_records_[index] = {true, user_data};
+            fake.call_records_[index] = {true, fake.persistent_call_user_data_mismatch_
+                                              ? static_cast<void *>(&fake) : user_data};
+            fake.persistent_call_user_data_mismatch_ = false;
             *call_id = static_cast<pjsua_call_id>(index);
             return PJ_SUCCESS;
         }
@@ -486,10 +488,6 @@ private:
     }
     static void *CallGetUserData(pjsua_call_id call_id) {
         FakePjsuaApi &fake = Active(); fake.Record("get-call-data");
-        if (fake.mismatch_next_call_user_data_) {
-            fake.mismatch_next_call_user_data_ = false;
-            return &fake;
-        }
         return fake.ValidCallId(call_id) ?
             fake.call_records_[static_cast<std::size_t>(call_id)].user_data : nullptr;
     }

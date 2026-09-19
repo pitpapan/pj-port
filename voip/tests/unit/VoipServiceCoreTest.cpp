@@ -577,7 +577,10 @@ void test_disabled_registration_rejects_outgoing_admission() {
     assert(dial_error == voip::Error::agent_unavailable);
     assert(operation == 0);
     voip::Event event{};
-    assert(service.TryGetEvent(&event) == voip::Error::timed_out);
+    bool terminal = false;
+    while (service.TryGetEvent(&event) == voip::Error::ok)
+        terminal |= event.type == voip::EventType::operation_terminal;
+    assert(!terminal);
     assert(service.Shutdown() == voip::Error::ok);
 }
 

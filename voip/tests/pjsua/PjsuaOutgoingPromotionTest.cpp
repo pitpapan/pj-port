@@ -48,9 +48,10 @@ void RunPjsuaOutgoingPromotionTests() {
     PjsuaAccountManager mismatch_accounts(fake.Api());
     assert(mismatch_accounts.Initialize(fixture.registry, 4) == Error::ok);
     PjsuaCallManager mismatch_calls(mismatch_accounts, fake.Api());
-    fake.MismatchNextCallUserData();
+    fake.PersistNextCallUserDataMismatch();
     assert(mismatch_calls.PromoteOutgoing({0, 1}, agent, "sip:mismatch@example.test", &token) == Error::signaling_failed);
     assert(fake.ActiveCallCount() == 1 && fake.HangupCount() == 1);
+    assert(fake.CallUserData(0) == &fake);
     for (std::uint16_t i = 0; i < 6; ++i)
         assert(mismatch_calls.PromoteOutgoing({static_cast<std::uint8_t>(i + 1), 1}, agent,
                                               "sip:retained@example.test", &token) == Error::ok);

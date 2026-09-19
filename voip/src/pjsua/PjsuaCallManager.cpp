@@ -143,9 +143,9 @@ Error PjsuaCallManager::PromoteOutgoing(CallHandle logical, AgentHandle agent,
             if (api_.call_set_user_data != nullptr)
                 (void)api_.call_set_user_data(native_id, nullptr);
             context->user_data_bound = false;
-            if (api_.call_hangup != nullptr)
-                (void)api_.call_hangup(native_id, 0, nullptr, nullptr);
         }
+        if (api_.call_hangup != nullptr)
+            (void)api_.call_hangup(native_id, 0, nullptr, nullptr);
         context->phase = PjsuaCallPhase::disconnecting;
         return Error::signaling_failed;
     }
