@@ -143,3 +143,23 @@ Zephyr production builds or public `VoipService`, preserves the reviewed
 failure path, and leaves the unrelated queue test exactly at HEAD. Final
 full-host evidence remains blocked solely by the two pre-existing timing
 assertions above.
+
+### Plan 4 component regression
+
+Because the host-only runtime seam touches core code, the component was
+re-run from the main west workspace with:
+
+```sh
+PATH=/home/pitpapan/zephyrproject/.venv/bin:$PATH timeout 18s west build -d /tmp/voip-plan4-component-task1 -t run
+```
+
+The bounded run exited 124 only when `timeout` terminated QEMU after these
+markers:
+
+```text
+PjsuaCallApiTest PASSED
+PjsuaCallContextTest PASSED
+PjsuaIncomingAdmissionTest PASSED
+PjsuaOutgoingPromotionTest PASSED
+PJSUA PLAN 4 COMPONENT RESULT: PASSED
+```
