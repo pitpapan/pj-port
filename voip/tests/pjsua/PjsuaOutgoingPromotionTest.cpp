@@ -32,6 +32,7 @@ void RunPjsuaOutgoingPromotionTests() {
     assert(calls.PromoteOutgoing({0, 99}, {0, 99}, "sip:invalid@example.test", &token) == Error::invalid_handle);
     assert(fake.ActiveCallCount() == 0 && calls.Count() == 0);
 
+
     // Replacing promotion-time allocation with Dial-time allocation makes
     // either the seventh call fail early or the eighth call succeed.
     for (std::uint16_t i = 0; i < 7; ++i) {
@@ -42,6 +43,18 @@ void RunPjsuaOutgoingPromotionTests() {
     assert(fake.ActiveCallCount() == 7 && calls.Count() == 7);
     assert(calls.PromoteOutgoing({7, 1}, agent, "sip:eighth@example.test", &token) == Error::resource_exhausted);
     assert(fake.ActiveCallCount() == 7 && calls.Count() == 7);
+
+    calls.Reset(); fake.Reset(); fake.Activate();
+    PjsuaAccountManager mismatch_accounts(fake.Api());
+    assert(mismatch_accounts.Initialize(fixture.registry, 4) == Error::ok);
+    PjsuaCallManager mismatch_calls(mismatch_accounts, fake.Api());
+    fake.MismatchNextCallUserData();
+    assert(mismatch_calls.PromoteOutgoing({0, 1}, agent, "sip:mismatch@example.test", &token) == Error::signaling_failed);
+    assert(fake.ActiveCallCount() == 1 && fake.HangupCount() == 1);
+    for (std::uint16_t i = 0; i < 6; ++i)
+        assert(mismatch_calls.PromoteOutgoing({static_cast<std::uint8_t>(i + 1), 1}, agent,
+                                              "sip:retained@example.test", &token) == Error::ok);
+    assert(mismatch_calls.PromoteOutgoing({7, 1}, agent, "sip:reused@example.test", &token) == Error::resource_exhausted);
     printk("PjsuaOutgoingPromotionTest PASSED\n");
 }
 } // namespace voip::test

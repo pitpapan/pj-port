@@ -765,7 +765,10 @@ Error VoipRuntime::Dial(AgentHandle agent, const DialRequest &request,
     if (operation == nullptr || request.remote_uri == nullptr)
         return Error::invalid_argument;
     *operation = 0;
-    if (agents_.Resolve(agent) == nullptr) return Error::invalid_handle;
+    const AgentContext *agent_context = agents_.Resolve(agent);
+    if (agent_context == nullptr) return Error::invalid_handle;
+    if (agent_context->registration != RegistrationState::registered)
+        return Error::agent_unavailable;
     VoipCommand command{};
     command.type = CommandType::dial;
     command.dial.agent = agent;

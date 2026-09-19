@@ -134,7 +134,19 @@ Error PjsuaCallManager::PromoteOutgoing(CallHandle logical, AgentHandle agent,
     context->native_id = native_id;
     context->user_data_bound = api_.call_get_user_data(native_id) == context;
     if (!context->user_data_bound) {
-        Release(*context);
+        // Do not recycle storage after native make-call acceptance. A callback
+        // may still observe the address supplied to PJSUA. Only detach and
+        // hang up after a fresh exact ownership check; never clear a foreign
+        // user-data pointer.
+        if (api_.call_get_user_data(native_id) == context) {
+            context->user_data_bound = true;
+            if (api_.call_set_user_data != nullptr)
+                (void)api_.call_set_user_data(native_id, nullptr);
+            context->user_data_bound = false;
+            if (api_.call_hangup != nullptr)
+                (void)api_.call_hangup(native_id, 0, nullptr, nullptr);
+        }
+        context->phase = PjsuaCallPhase::disconnecting;
         return Error::signaling_failed;
     }
     *token = context->token;

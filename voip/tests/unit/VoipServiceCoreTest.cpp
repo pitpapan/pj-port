@@ -509,10 +509,22 @@ void test_outgoing_dial_admission_copies_uri_and_completes_at_durability() {
     voip::OperationId first = 0, second = 0, queued = 0, cancelled = 0;
     assert(runtime.Dial(first_agent, {"sip:first@example.test"}, &first) == voip::Error::ok); runtime.Step(1);
     assert(runtime.Dial(second_agent, {"sip:second@example.test"}, &second) == voip::Error::ok); runtime.Step(2);
+    const auto outgoing_promotions = [&runtime] {
+        std::size_t count = 0;
+        for (std::size_t i = 0; i < runtime.AdapterRequestCount(); ++i) {
+            voip::RuntimeRequest request{};
+            assert(runtime.GetAdapterRequest(i, &request));
+            if (request.type == voip::RuntimeRequest::Type::promote_outgoing) ++count;
+        }
+        return count;
+    };
+    const std::size_t promotions_before_queue = outgoing_promotions();
     char copied_uri[voip::max_uri_length + 1] = "sip:copied@example.test";
     assert(runtime.Dial(queued_agent, {copied_uri}, &queued) == voip::Error::ok);
     std::strcpy(copied_uri, "sip:changed@example.test"); runtime.Step(3);
+    assert(outgoing_promotions() == promotions_before_queue);
     assert(runtime.Dial(cancelled_agent, {"sip:cancel-before-promotion@example.test"}, &cancelled) == voip::Error::ok); runtime.Step(4);
+    assert(outgoing_promotions() == promotions_before_queue);
 
     // Leaving Dial pending until an acceptance callback makes immediate and
     // FIFO-admitted operations indistinguishable after durable admission.
@@ -562,17 +574,10 @@ void test_disabled_registration_rejects_outgoing_admission() {
     voip::OperationId operation = 0;
     const voip::Error dial_error = service.Dial(
         agent, {"sip:disabled@example.test"}, &operation);
-    assert(dial_error == voip::Error::ok);
-    assert(operation != 0);
+    assert(dial_error == voip::Error::agent_unavailable);
+    assert(operation == 0);
     voip::Event event{};
-    bool rejected = false;
-    for (unsigned i = 0; i < 100 && !rejected; ++i) {
-        if (service.WaitForEvent(&event, 20) == voip::Error::ok &&
-            event.type == voip::EventType::operation_terminal &&
-            event.operation == operation)
-            rejected = event.status.error == voip::Error::agent_unavailable;
-    }
-    assert(rejected);
+    assert(service.TryGetEvent(&event) == voip::Error::timed_out);
     assert(service.Shutdown() == voip::Error::ok);
 }
 
