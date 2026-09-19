@@ -26,6 +26,11 @@ public:
     Error PromoteOutgoing(CallHandle, AgentHandle, const char *,
                           std::uint32_t *) noexcept;
     Error PromoteIncoming(CallHandle, AgentHandle, std::uint32_t) noexcept;
+    Error Answer(std::uint32_t) noexcept;
+    Error Reject(std::uint32_t, std::uint16_t) noexcept;
+    Error Cancel(std::uint32_t) noexcept;
+    Error Hangup(std::uint32_t) noexcept;
+    Error SetHeld(std::uint32_t, bool) noexcept;
     Error RejectProvisional(std::uint32_t, std::uint16_t) noexcept;
     bool TryGetNotification(RuntimeNotification *) noexcept;
     void Reset() noexcept;
@@ -40,6 +45,7 @@ private:
     bool EnqueueIncoming(const PjsuaCallContext &, const pjsua_call_info &) noexcept;
     void Release(PjsuaCallContext &) noexcept;
     void Decline(pjsua_call_id, unsigned) noexcept;
+    Error Native(pjsua_call_id, pj_status_t) const noexcept;
     std::uint32_t NextToken() noexcept;
 
     PjsuaAccountManager &accounts_;

@@ -99,6 +99,7 @@ target_sources_ifdef(CONFIG_VOIP_PJSUA_PLAN4_COMPONENT_TEST app PRIVATE
   ../../voip/tests/pjsua/PjsuaCallContextTest.cpp
   ../../voip/tests/pjsua/PjsuaIncomingAdmissionTest.cpp
   ../../voip/tests/pjsua/PjsuaOutgoingPromotionTest.cpp
+  ../../voip/tests/pjsua/PjsuaCallControlTest.cpp
   ../../voip/src/pjsua/PjsuaApi.cpp
   ../../voip/src/pjsua/PjsuaCallbackRouter.cpp
   ../../voip/src/pjsua/PjsuaAccountManager.cpp

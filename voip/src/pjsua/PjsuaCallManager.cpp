@@ -64,6 +64,69 @@ Error PjsuaCallManager::RejectProvisional(std::uint32_t token,
     return Error::ok;
 }
 
+Error PjsuaCallManager::Native(pjsua_call_id native_id,
+                               pj_status_t status) const noexcept {
+    return status == PJ_SUCCESS ? Error::ok : Error::signaling_failed;
+}
+
+Error PjsuaCallManager::Answer(std::uint32_t token) noexcept {
+    PjsuaCallContext *context = FindToken(token);
+    if (context == nullptr || !OwnsNativeUserData(*context) ||
+        api_.call_setting_default == nullptr || api_.call_answer2 == nullptr)
+        return Error::invalid_handle;
+    pjsua_call_setting setting{};
+    api_.call_setting_default(&setting);
+    return Native(context->native_id,
+                  api_.call_answer2(context->native_id, &setting, 200, nullptr,
+                                    nullptr));
+}
+
+Error PjsuaCallManager::Reject(std::uint32_t token, std::uint16_t status) noexcept {
+    if (status < 400 || status > 699) return Error::invalid_argument;
+    PjsuaCallContext *context = FindToken(token);
+    if (context == nullptr || !OwnsNativeUserData(*context) ||
+        api_.call_answer == nullptr)
+        return Error::invalid_handle;
+    return Native(context->native_id,
+                  api_.call_answer(context->native_id, status, nullptr, nullptr));
+}
+
+Error PjsuaCallManager::Cancel(std::uint32_t token) noexcept {
+    PjsuaCallContext *context = FindToken(token);
+    if (context == nullptr || context->incoming || !OwnsNativeUserData(*context) ||
+        api_.call_hangup == nullptr)
+        return Error::invalid_handle;
+    return Native(context->native_id,
+                  api_.call_hangup(context->native_id, 487, nullptr, nullptr));
+}
+
+Error PjsuaCallManager::Hangup(std::uint32_t token) noexcept {
+    PjsuaCallContext *context = FindToken(token);
+    if (context == nullptr || !OwnsNativeUserData(*context) ||
+        api_.call_hangup == nullptr)
+        return Error::invalid_handle;
+    return Native(context->native_id,
+                  api_.call_hangup(context->native_id, 0, nullptr, nullptr));
+}
+
+Error PjsuaCallManager::SetHeld(std::uint32_t token, bool held) noexcept {
+    PjsuaCallContext *context = FindToken(token);
+    if (context == nullptr || !OwnsNativeUserData(*context))
+        return Error::invalid_handle;
+    if (held) {
+        if (api_.call_set_hold2 == nullptr) return Error::unsupported_configuration;
+        return Native(context->native_id,
+                      api_.call_set_hold2(context->native_id, 0, nullptr));
+    }
+    if (api_.call_setting_default == nullptr || api_.call_reinvite2 == nullptr)
+        return Error::unsupported_configuration;
+    pjsua_call_setting setting{};
+    api_.call_setting_default(&setting);
+    setting.flag |= PJSUA_CALL_UNHOLD;
+    return Native(context->native_id,
+                  api_.call_reinvite2(context->native_id, &setting, nullptr));
+}
+
 PjsuaCallContext *PjsuaCallManager::Reserve(AgentHandle agent,
                                             pjsua_call_id native_id) noexcept {
     if (Find(native_id) != nullptr) return nullptr;

@@ -135,12 +135,12 @@ Error PjsuaRuntimeAdapter::PromoteIncoming(CallHandle call, AgentHandle agent,
                                            std::uint32_t token) noexcept {
     return calls_.PromoteIncoming(call, agent, token);
 }
-Error PjsuaRuntimeAdapter::Answer(std::uint32_t) noexcept { return Error::unsupported_configuration; }
-Error PjsuaRuntimeAdapter::Reject(std::uint32_t, std::uint16_t) noexcept { return Error::unsupported_configuration; }
-Error PjsuaRuntimeAdapter::Cancel(std::uint32_t) noexcept { return Error::unsupported_configuration; }
-Error PjsuaRuntimeAdapter::Hangup(std::uint32_t) noexcept { return Error::unsupported_configuration; }
-Error PjsuaRuntimeAdapter::SetHeld(std::uint32_t, bool) noexcept { return Error::unsupported_configuration; }
-Error PjsuaRuntimeAdapter::BeginCallTeardown(std::uint32_t) noexcept { return Error::unsupported_configuration; }
+Error PjsuaRuntimeAdapter::Answer(std::uint32_t token) noexcept { return calls_.Answer(token); }
+Error PjsuaRuntimeAdapter::Reject(std::uint32_t token, std::uint16_t status) noexcept { return calls_.Reject(token, status); }
+Error PjsuaRuntimeAdapter::Cancel(std::uint32_t token) noexcept { return calls_.Cancel(token); }
+Error PjsuaRuntimeAdapter::Hangup(std::uint32_t token) noexcept { return calls_.Hangup(token); }
+Error PjsuaRuntimeAdapter::SetHeld(std::uint32_t token, bool held) noexcept { return calls_.SetHeld(token, held); }
+Error PjsuaRuntimeAdapter::BeginCallTeardown(std::uint32_t token) noexcept { return calls_.Hangup(token); }
 
 #if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
 void PjsuaRuntimeAdapter::FillNotificationRingForTest() noexcept {

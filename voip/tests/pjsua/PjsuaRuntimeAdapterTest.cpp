@@ -29,15 +29,15 @@ void RunPjsuaRuntimeAdapterTests() {
     assert(!adapter.TryGetNotification(&notification));
     assert(adapter.PromoteOutgoing({}, {}, "sip:peer@example.test", nullptr) == Error::invalid_argument);
     assert(adapter.PromoteIncoming({}, {}, 1) == Error::invalid_handle);
-    assert(adapter.Answer(1) == Error::unsupported_configuration);
-    // Generic Reject remains a Task 5 control; Task 3 only has a private
-    // pre-publication abort handshake.
-    assert(adapter.Reject(1, 486) == Error::unsupported_configuration);
-    assert(adapter.Cancel(1) == Error::unsupported_configuration);
-    assert(adapter.Hangup(1) == Error::unsupported_configuration);
-    assert(adapter.SetHeld(1, true) == Error::unsupported_configuration);
-    assert(adapter.SetHeld(1, false) == Error::unsupported_configuration);
-    assert(adapter.BeginCallTeardown(1) == Error::unsupported_configuration);
+    assert(adapter.Answer(1) == Error::invalid_handle);
+    // Generic Task 5 controls validate the token through the native manager;
+    // the private pre-publication abort handshake remains separate.
+    assert(adapter.Reject(1, 486) == Error::invalid_handle);
+    assert(adapter.Cancel(1) == Error::invalid_handle);
+    assert(adapter.Hangup(1) == Error::invalid_handle);
+    assert(adapter.SetHeld(1, true) == Error::invalid_handle);
+    assert(adapter.SetHeld(1, false) == Error::invalid_handle);
+    assert(adapter.BeginCallTeardown(1) == Error::invalid_handle);
     assert(fake.AnswerCount() == 0 && fake.HangupCount() == 0);
     fake.SetUnregistrationCallbacksDeferred(true);
     assert(adapter.Shutdown() == Error::busy);

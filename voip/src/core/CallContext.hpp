@@ -53,7 +53,10 @@ public:
     CallDirection direction = CallDirection::outgoing;
     CallStateMachine state_machine{};
     std::uint32_t runtime_token = 0;
-    std::uint64_t admitted_at_ms = 0;
+    std::uint64_t queue_started_at_ms = 0;
+    std::uint64_t answer_started_at_ms = 0;
+    bool queue_timer_active = false;
+    bool answer_timer_active = false;
     OperationId operation = 0;
     OperationId signaling_operation = 0;
     PendingOperation pending_operation = PendingOperation::none;

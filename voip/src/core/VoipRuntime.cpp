@@ -250,6 +250,11 @@ void VoipRuntime::ApplyEffects(const SchedulerEffects &effects) noexcept {
         }
         if (effect.direction == CallDirection::outgoing)
             context->runtime_token = token;
+        // Promotion gives a queued call a fresh, full answer window.  The
+        // FIFO clock is never allowed to leak into native negotiation.
+        context->queue_timer_active = false;
+        context->answer_started_at_ms = now_ms_;
+        context->answer_timer_active = true;
         if (effect.direction == CallDirection::outgoing && error == Error::ok)
             (void)operations_.Complete(operation, Error::ok);
         if (effect.answer_on_promotion) {
@@ -435,8 +440,12 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
         }
         if (call_count_ < calls_.size()) {
             calls_[call_count_++] = handle;
-            if (CallContext *context = scheduler_.Resolve(handle))
-                context->admitted_at_ms = now_ms_;
+            if (CallContext *context = scheduler_.Resolve(handle)) {
+                context->queue_started_at_ms = now_ms_;
+                context->queue_timer_active = !promoted;
+                context->answer_started_at_ms = now_ms_;
+                context->answer_timer_active = promoted;
+            }
         }
         PublishAdmission(handle, !promoted);
         ApplyEffects(effects);
@@ -616,7 +625,10 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
             (void)operations_.Complete(command.operation, Error::internal_failure);
             return;
         }
-        context->admitted_at_ms = now_ms_;
+        context->queue_started_at_ms = now_ms_;
+        context->queue_timer_active = !promoted;
+        context->answer_started_at_ms = now_ms_;
+        context->answer_timer_active = promoted;
         BindCallOperation(*context, command.operation);
         context->signaling_operation = 0;
         if (call_count_ < calls_.size()) calls_[call_count_++] = handle;
@@ -640,6 +652,10 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
     context = scheduler_.Resolve(handle);
     if (context == nullptr) {
         (void)operations_.Complete(command.operation, Error::invalid_handle);
+        return;
+    }
+    if (context->pending_operation != CallContext::PendingOperation::none) {
+        (void)operations_.Complete(command.operation, Error::busy);
         return;
     }
     const OperationId signaling_operation = context->signaling_operation;
@@ -733,10 +749,20 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
     const OperationId previous_operation = context->operation;
     if (local_answer) {
         (void)operations_.Complete(command.operation, Error::ok);
+        context->operation = 0;
         context->pending_operation = CallContext::PendingOperation::none;
     } else if (!transition.handle_invalidated)
         BindCallOperation(*context, command.operation);
-    if (command.type == CommandType::set_held) {
+    const bool native_control = !local_answer && !local_transition &&
+        command.type != CommandType::set_held &&
+        (scheduler_.IsPromoted(handle) || deferred_native);
+    if (native_control) {
+        // PJSUA has accepted this local request.  Its copied callback still
+        // owns later state projection/teardown, but the public operation is
+        // complete exactly once at acceptance.
+        (void)operations_.Complete(command.operation, Error::ok);
+        context->pending_operation = CallContext::PendingOperation::none;
+    } else if (command.type == CommandType::set_held) {
         // The state transition and operation completion occur only when the
         // adapter reports the negotiated media change.
     } else if (local_transition && !deferred_native && !scheduler_.IsPromoted(handle)) {
@@ -975,12 +1001,15 @@ void VoipRuntime::ApplyTimers(std::uint64_t now_ms) noexcept {
         const bool queued = !scheduler_.IsPromoted(handle);
         const std::uint32_t timeout = queued ? queue_timeout_ms_
                                              : answer_timeout_ms_;
+        const bool timer_active = queued ? context->queue_timer_active
+                                         : context->answer_timer_active;
+        const std::uint64_t started_at = queued ? context->queue_started_at_ms
+                                                : context->answer_started_at_ms;
         const bool waiting_for_acceptance =
             state == CallState::initiated ||
             (state == CallState::hold &&
              context->state_machine.Snapshot().hold_reason == HoldReason::waiting);
-        if (timeout == 0 || now_ms < context->admitted_at_ms ||
-            now_ms - context->admitted_at_ms < timeout ||
+        if (timeout == 0 || !timer_active || now_ms - started_at < timeout ||
             !waiting_for_acceptance)
             continue;
         ScheduledTransition transition{};
