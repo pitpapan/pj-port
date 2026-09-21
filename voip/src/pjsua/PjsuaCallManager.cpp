@@ -268,33 +268,10 @@ bool PjsuaCallManager::EnqueueCall(PjsuaCallContext &context,
                                    RuntimeNotification::Type type,
                                    const pjsua_call_info &info,
                                    Error error) noexcept {
-    return EnqueueNotification(CopyCall(context, type, info, error));
-}
-
-bool PjsuaCallManager::EnqueueNotification(const RuntimeNotification &notification) noexcept {
-    // Once backpressure starts, keep every later record behind it so native
-    // callback order remains the actor's observable order.
-    if (deferred_notification_size_ != 0 || notification_size_ == notifications_.size()) {
-        if (deferred_notification_size_ == deferred_notifications_.size()) return false;
-        deferred_notifications_[(deferred_notification_head_ + deferred_notification_size_) %
-                                deferred_notifications_.size()].notification = notification;
-        ++deferred_notification_size_;
-        return true;
-    }
+    if (notification_size_ == notifications_.size()) return false;
     notifications_[(notification_head_ + notification_size_) % notifications_.size()].notification = notification;
     ++notification_size_;
     return true;
-}
-
-void PjsuaCallManager::FlushDeferredNotifications() noexcept {
-    while (notification_size_ != notifications_.size() && deferred_notification_size_ != 0) {
-        notifications_[(notification_head_ + notification_size_) % notifications_.size()].notification =
-            deferred_notifications_[deferred_notification_head_].notification;
-        deferred_notification_head_ = (deferred_notification_head_ + 1) %
-                                      deferred_notifications_.size();
-        --deferred_notification_size_;
-        ++notification_size_;
-    }
 }
 
 void PjsuaCallManager::TryRelease(PjsuaCallContext &context) noexcept {
@@ -436,7 +413,6 @@ bool PjsuaCallManager::TryGetNotification(RuntimeNotification *notification) noe
     *notification = notifications_[notification_head_].notification;
     notification_head_ = (notification_head_ + 1) % notifications_.size();
     --notification_size_;
-    FlushDeferredNotifications();
     return true;
 }
 
@@ -460,8 +436,6 @@ void PjsuaCallManager::Reset() noexcept {
         if (context.phase != PjsuaCallPhase::free) Release(context);
     notification_head_ = 0;
     notification_size_ = 0;
-    deferred_notification_head_ = 0;
-    deferred_notification_size_ = 0;
 }
 
 } // namespace voip

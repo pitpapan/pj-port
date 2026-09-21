@@ -46,10 +46,8 @@ private:
     bool EnqueueIncoming(const PjsuaCallContext &, const pjsua_call_info &) noexcept;
     bool EnqueueCall(PjsuaCallContext &, RuntimeNotification::Type,
                      const pjsua_call_info &, Error = Error::ok) noexcept;
-    bool EnqueueNotification(const RuntimeNotification &) noexcept;
     RuntimeNotification CopyCall(const PjsuaCallContext &, RuntimeNotification::Type,
                                  const pjsua_call_info &, Error) const noexcept;
-    void FlushDeferredNotifications() noexcept;
     void FinishCallback(PjsuaCallContext &) noexcept;
     void TryRelease(PjsuaCallContext &) noexcept;
     void Release(PjsuaCallContext &) noexcept;
@@ -60,19 +58,17 @@ private:
     PjsuaAccountManager &accounts_;
     const PjsuaApi &api_;
     std::array<PjsuaCallContext, max_calls> contexts_{};
-    std::array<PjsuaCallNotification, max_calls> notifications_{};
-    static constexpr std::size_t deferred_notification_capacity = max_calls;
-    std::array<PjsuaCallNotification, deferred_notification_capacity> deferred_notifications_{};
+    std::array<PjsuaCallNotification, RuntimeAdapter::notification_capacity> notifications_{};
     std::size_t notification_head_{};
     std::size_t notification_size_{};
-    std::size_t deferred_notification_head_{};
-    std::size_t deferred_notification_size_{};
     std::size_t count_{};
     std::uint32_t next_token_{};
 };
 
 static_assert(PjsuaCallManager::max_calls == 7,
               "PJSUA call manager owns exactly seven native contexts");
+static_assert(RuntimeAdapter::notification_capacity >= PjsuaCallManager::max_calls * 4,
+              "public call ring must retain accepted/held/resumed/finished for every context");
 
 } // namespace voip
 

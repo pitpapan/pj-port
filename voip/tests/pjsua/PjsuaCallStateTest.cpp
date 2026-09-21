@@ -135,8 +135,8 @@ void RunPjsuaCallStateTests() {
            notification.type == RuntimeNotification::Type::call_finished &&
            notification.error == Error::signaling_failed);
 
-    // Seven confirmations fill the public ring. Seven held transitions must
-    // remain ordered and pollable behind that pressure rather than vanishing.
+    // Every native context can produce accepted, held, resumed, and finished
+    // before an actor poll. The fixed public ring retains all 28 records.
     FakePjsuaApi pressure_fake; pressure_fake.Reset();
     PjsuaAccountManager pressure_accounts(pressure_fake.Api());
     assert(pressure_accounts.Initialize(registry, 4) == Error::ok);
@@ -160,6 +160,14 @@ void RunPjsuaCallStateTests() {
         pressure.OnCallMediaState(static_cast<pjsua_call_id>(index));
     }
     for (unsigned index = 0; index < 7; ++index) {
+        state = PJSIP_INV_STATE_CONFIRMED; media = PJMEDIA_DIR_ENCODING_DECODING;
+        pressure.OnCallMediaState(static_cast<pjsua_call_id>(index));
+    }
+    for (unsigned index = 0; index < 7; ++index) {
+        state = PJSIP_INV_STATE_DISCONNECTED; media = PJMEDIA_DIR_NONE;
+        pressure.OnCallState(static_cast<pjsua_call_id>(index));
+    }
+    for (unsigned index = 0; index < 7; ++index) {
         assert(pressure.TryGetNotification(&notification));
         assert(notification.type == RuntimeNotification::Type::call_accepted &&
                notification.token == pressure_tokens[index]);
@@ -167,6 +175,16 @@ void RunPjsuaCallStateTests() {
     for (unsigned index = 0; index < 7; ++index) {
         assert(pressure.TryGetNotification(&notification));
         assert(notification.type == RuntimeNotification::Type::call_held &&
+               notification.token == pressure_tokens[index]);
+    }
+    for (unsigned index = 0; index < 7; ++index) {
+        assert(pressure.TryGetNotification(&notification));
+        assert(notification.type == RuntimeNotification::Type::call_resumed &&
+               notification.token == pressure_tokens[index]);
+    }
+    for (unsigned index = 0; index < 7; ++index) {
+        assert(pressure.TryGetNotification(&notification));
+        assert(notification.type == RuntimeNotification::Type::call_finished &&
                notification.token == pressure_tokens[index]);
     }
     assert(!pressure.TryGetNotification(&notification));

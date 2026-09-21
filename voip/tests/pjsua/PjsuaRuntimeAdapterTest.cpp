@@ -215,7 +215,7 @@ void RunPjsuaRuntimeAdapterTests() {
     fake.DeliverRegistrationFailure(2, PJ_EUNKNOWN);
     assert(pressure.Pump(500, 0) == Error::ok);
     RuntimeNotification staged{};
-    for (std::size_t i = 0; i < RuntimeAdapter::notification_capacity; ++i)
+    for (std::size_t i = 0; i < PjsuaAccountManager::max_accounts; ++i)
         assert(pressure.TryGetNotification(&staged));
     assert(pressure.Pump(501, 0) == Error::ok);
     RuntimeNotification failure{}; RuntimeNotification retry{};

@@ -50,7 +50,9 @@ private:
     PjsuaCallbackRouter router_;
     PjsuaRuntime runtime_;
     PjsuaTransportManager transport_;
-    std::array<RuntimeNotification, notification_capacity> notifications_{};
+    // Account state has at most five producers. Call-state records remain in
+    // the call manager's full public 32-record ring.
+    std::array<RuntimeNotification, PjsuaAccountManager::max_accounts> notifications_{};
     std::size_t notification_head_{};
     std::size_t notification_size_{};
     bool initialized_{};

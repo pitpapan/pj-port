@@ -32,9 +32,8 @@ void PjsuaRuntimeAdapter::DrainAccountNotifications() noexcept {
 }
 
 void PjsuaRuntimeAdapter::DrainCallNotifications() noexcept {
-    RuntimeNotification notification{};
-    while (notification_size_ != notifications_.size() && calls_.TryGetNotification(&notification))
-        (void)Enqueue(notification);
+    // Call records stay in PjsuaCallManager's 32-record public ring.  Do not
+    // copy them through the five-account staging ring and reintroduce loss.
 }
 
 Error PjsuaRuntimeAdapter::Rollback() noexcept {
@@ -111,11 +110,14 @@ Error PjsuaRuntimeAdapter::Pump(std::uint64_t now_ms, std::uint32_t timeout_ms) 
 }
 
 bool PjsuaRuntimeAdapter::TryGetNotification(RuntimeNotification *notification) noexcept {
-    if (notification == nullptr || notification_size_ == 0) return false;
-    *notification = notifications_[notification_head_];
-    notification_head_ = (notification_head_ + 1) % notifications_.size();
-    --notification_size_;
-    return true;
+    if (notification == nullptr) return false;
+    if (notification_size_ != 0) {
+        *notification = notifications_[notification_head_];
+        notification_head_ = (notification_head_ + 1) % notifications_.size();
+        --notification_size_;
+        return true;
+    }
+    return calls_.TryGetNotification(notification);
 }
 
 Error PjsuaRuntimeAdapter::PromoteOutgoing(CallHandle call, AgentHandle agent,
