@@ -33,6 +33,7 @@ public:
     Error SetHeld(std::uint32_t, bool) noexcept;
     Error RejectProvisional(std::uint32_t, std::uint16_t) noexcept;
     bool TryGetNotification(RuntimeNotification *) noexcept;
+    Error BeginShutdown() noexcept;
     void Reset() noexcept;
     std::size_t Count() const noexcept { return count_; }
 
@@ -43,6 +44,13 @@ private:
     PjsuaCallContext *ReserveOutgoing(CallHandle, AgentHandle) noexcept;
     bool OwnsNativeUserData(const PjsuaCallContext &) const noexcept;
     bool EnqueueIncoming(const PjsuaCallContext &, const pjsua_call_info &) noexcept;
+    bool EnqueueCall(PjsuaCallContext &, RuntimeNotification::Type,
+                     const pjsua_call_info &, Error = Error::ok) noexcept;
+    RuntimeNotification CopyCall(const PjsuaCallContext &, RuntimeNotification::Type,
+                                 const pjsua_call_info &, Error) const noexcept;
+    void FlushPendingTerminals() noexcept;
+    void FinishCallback(PjsuaCallContext &) noexcept;
+    void TryRelease(PjsuaCallContext &) noexcept;
     void Release(PjsuaCallContext &) noexcept;
     void Decline(pjsua_call_id, unsigned) noexcept;
     Error Native(pjsua_call_id, pj_status_t) const noexcept;

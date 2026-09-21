@@ -2,6 +2,7 @@
 #define VOIP_PJSUA_CALL_CONTEXT_HPP
 
 #include <pjsua-lib/pjsua.h>
+#include "../core/RuntimeAdapter.hpp"
 #include <voip/VoipTypes.hpp>
 
 #include <cstdint>
@@ -22,6 +23,8 @@ struct PjsuaCallContext {
     PjsuaCallPhase phase = PjsuaCallPhase::free;
     bool incoming = false, logical_bound = false, user_data_bound = false;
     bool media_quiescent = true, terminal_reported = false;
+    bool terminal_pending = false;
+    RuntimeNotification pending_terminal{};
     unsigned callback_depth = 0;
 };
 

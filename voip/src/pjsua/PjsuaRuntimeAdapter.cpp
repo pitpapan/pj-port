@@ -156,6 +156,7 @@ Error PjsuaRuntimeAdapter::Shutdown() noexcept {
     if (!shutdown_started_) {
         router_.BeginQuiescence();
         if (runtime_.EnsureActorRegistered() != Error::ok) return Error::internal_failure;
+        if (calls_.BeginShutdown() != Error::ok) return Error::busy;
         (void)accounts_.BeginShutdown();
         DrainAccountNotifications();
         shutdown_started_ = true;
@@ -166,6 +167,7 @@ Error PjsuaRuntimeAdapter::Shutdown() noexcept {
     // VoipRuntime; elapsed adapter time never authorizes forced teardown.
     if (accounts_.PendingUnregistrations() != 0)
         return Error::busy;
+    if (calls_.BeginShutdown() != Error::ok) return Error::busy;
     return Rollback();
 }
 } // namespace voip
