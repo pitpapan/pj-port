@@ -261,7 +261,7 @@ void VoipRuntime::ApplyEffects(const SchedulerEffects &effects) noexcept {
             // A queued incoming Answer is a local decision. Native 200/Answer
             // must succeed before the business state accepts the call; the
             // resulting copied callback is processed on a later Step().
-            if (adapter_.Answer(token) != Error::ok) {
+            if (adapter_.Answer(context->runtime_token) != Error::ok) {
                 SchedulerEffects timeout_effects{};
                 ScheduledTransition timeout{};
                 if (scheduler_.OnTimeoutDeferred(effect.handle, &timeout,
@@ -270,7 +270,7 @@ void VoipRuntime::ApplyEffects(const SchedulerEffects &effects) noexcept {
                     CompleteOperationIds(signaling_operation, operation,
                                          Error::signaling_failed);
                     context->teardown_pending = false;
-                    if (adapter_.BeginCallTeardown(token) == Error::ok)
+                    if (adapter_.BeginCallTeardown(context->runtime_token) == Error::ok)
                         context->teardown_pending = true;
                 } else {
                     CompleteOperationIds(signaling_operation, operation,
@@ -454,6 +454,18 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
     }
     CallContext *context = FindCall(notification.token);
     if (context == nullptr) return;
+    const CallState current_state = context->state_machine.Snapshot().state;
+    if ((notification.type == RuntimeNotification::Type::call_finished ||
+         notification.type == RuntimeNotification::Type::call_rejected) &&
+        (current_state == CallState::terminated || current_state == CallState::idle)) {
+        // A timer already committed this call's guaranteed terminal event.
+        // Its native callback now permits logical/context lease release.
+        SchedulerEffects terminal_effects{};
+        CompleteCallOperations(*context, Error::cancelled);
+        FinalizeTerminal(context->handle, terminal_effects);
+        ApplyEffects(terminal_effects);
+        return;
+    }
     ScheduledTransition transition{};
     SchedulerEffects effects{};
     Error error = Error::ok;
@@ -504,6 +516,8 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
         const OperationId signaling_operation = context->signaling_operation;
         const OperationId operation = context->operation;
         const CallHandle handle = context->handle;
+        const bool media_pending = context->pending_operation ==
+                                   CallContext::PendingOperation::set_held;
         context->native_terminal_pending = false;
         if (!scheduler_.IsPromoted(handle)) {
             const bool queued = !scheduler_.IsPromoted(handle);
@@ -531,7 +545,8 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
             context->teardown_pending = false;
             ScheduledTransition cleanup{};
             if (scheduler_.OnTeardownComplete(context->handle, &cleanup, effects) == Error::ok) {
-                CompleteOperationIds(signaling_operation, operation, Error::ok);
+                CompleteOperationIds(signaling_operation, operation,
+                                     media_pending ? Error::cancelled : Error::ok);
                 ForgetCall(cleanup.handle);
                 ApplyEffects(effects);
             }
@@ -658,6 +673,20 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
         (void)operations_.Complete(command.operation, Error::busy);
         return;
     }
+    CallContext::PendingOperation requested = CallContext::PendingOperation::none;
+    switch (command.type) {
+    case CommandType::answer: requested = CallContext::PendingOperation::answer; break;
+    case CommandType::reject: requested = CallContext::PendingOperation::reject; break;
+    case CommandType::cancel: requested = CallContext::PendingOperation::cancel; break;
+    case CommandType::hangup: requested = CallContext::PendingOperation::hangup; break;
+    case CommandType::set_held: requested = CallContext::PendingOperation::set_held; break;
+    default: break;
+    }
+    if (!scheduler_.CanControl(handle, requested,
+                              command.type == CommandType::set_held && command.set_held.held)) {
+        (void)operations_.Complete(command.operation, Error::invalid_state);
+        return;
+    }
     const OperationId signaling_operation = context->signaling_operation;
     const CallContext::PendingOperation previous_pending =
         context->pending_operation;
@@ -688,9 +717,17 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
                                     command.reject.sip_status);
         } else if (context->direction == CallDirection::incoming &&
                    context->runtime_token != 0) {
-            deferred_native = true;
             error = adapter_.Reject(context->runtime_token,
                                     command.reject.sip_status);
+            if (error == Error::ok) {
+                // Native decline acceptance alone cannot remove this call
+                // from FIFO: until its copied terminal callback arrives the
+                // context must remain callback-reachable, but it must never
+                // be eligible for promotion again.
+                error = scheduler_.RejectDeferred(handle, &transition, effects);
+                deferred_native = error == Error::ok;
+                local_transition = error == Error::ok;
+            }
         } else {
             const bool queued = !scheduler_.IsPromoted(handle);
             error = queued
@@ -746,17 +783,27 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
          command.type == CommandType::hangup) &&
         (scheduler_.IsPromoted(handle) || deferred_native))
         context->native_terminal_pending = true;
-    const OperationId previous_operation = context->operation;
     if (local_answer) {
         (void)operations_.Complete(command.operation, Error::ok);
         context->operation = 0;
         context->pending_operation = CallContext::PendingOperation::none;
     } else if (!transition.handle_invalidated)
         BindCallOperation(*context, command.operation);
-    const bool native_control = !local_answer && !local_transition &&
+    const bool native_control = !local_answer && (!local_transition || deferred_native) &&
         command.type != CommandType::set_held &&
         (scheduler_.IsPromoted(handle) || deferred_native);
-    if (native_control) {
+    if (local_transition) {
+        PublishTransition(transition);
+        CompleteOperationIds(signaling_operation, command.operation, Error::ok);
+        context->pending_operation = CallContext::PendingOperation::none;
+        if (!deferred_native) {
+            if (transition.handle_invalidated) {
+                ForgetCall(handle);
+            } else {
+                FinalizeTerminal(handle, effects);
+            }
+        }
+    } else if (native_control) {
         // PJSUA has accepted this local request.  Its copied callback still
         // owns later state projection/teardown, but the public operation is
         // complete exactly once at acceptance.
@@ -765,21 +812,6 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
     } else if (command.type == CommandType::set_held) {
         // The state transition and operation completion occur only when the
         // adapter reports the negotiated media change.
-    } else if (local_transition && !deferred_native && !scheduler_.IsPromoted(handle)) {
-        PublishTransition(transition);
-        const Error terminal = command.type == CommandType::cancel
-                                   ? Error::cancelled
-                                   : command.type == CommandType::reject
-                                         ? Error::remote_rejected
-                                         : Error::ok;
-        CompleteOperationIds(signaling_operation, command.operation, terminal);
-        if (previous_operation != 0 && previous_operation != signaling_operation)
-            (void)operations_.Complete(previous_operation, terminal);
-        if (transition.handle_invalidated) {
-            ForgetCall(handle);
-        } else {
-            FinalizeTerminal(handle, effects);
-        }
     }
     ApplyEffects(effects);
 }
@@ -1009,7 +1041,7 @@ void VoipRuntime::ApplyTimers(std::uint64_t now_ms) noexcept {
             state == CallState::initiated ||
             (state == CallState::hold &&
              context->state_machine.Snapshot().hold_reason == HoldReason::waiting);
-        if (timeout == 0 || !timer_active || now_ms - started_at < timeout ||
+        if (context->native_terminal_pending || timeout == 0 || !timer_active || now_ms - started_at < timeout ||
             !waiting_for_acceptance)
             continue;
         ScheduledTransition transition{};
@@ -1023,7 +1055,11 @@ void VoipRuntime::ApplyTimers(std::uint64_t now_ms) noexcept {
             continue;
         PublishTransition(transition);
         CompleteOperationIds(signaling, operation, Error::timed_out);
-        if (queued) {
+        context->queue_timer_active = false;
+        context->answer_timer_active = false;
+        if (queued && context->direction == CallDirection::incoming && token != 0) {
+            context->native_terminal_pending = adapter_.Reject(token, 480) == Error::ok;
+        } else if (queued) {
             FinalizeTerminal(handle, effects);
         } else if (CallContext *live = scheduler_.Resolve(handle)) {
             live->signaling_operation = 0;
@@ -1046,10 +1082,13 @@ void VoipRuntime::RetryPendingTeardowns() noexcept {
         const CallState state = context == nullptr
                                     ? CallState::terminated
                                     : context->state_machine.Snapshot().state;
-        if (context == nullptr || context->teardown_pending ||
+        if (context == nullptr || context->teardown_pending || context->native_terminal_pending ||
             (state != CallState::terminated && state != CallState::idle))
             continue;
-        if (context->runtime_token != 0 &&
+        if (!scheduler_.IsPromoted(context->handle) &&
+            context->direction == CallDirection::incoming && context->runtime_token != 0) {
+            context->native_terminal_pending = adapter_.Reject(context->runtime_token, 480) == Error::ok;
+        } else if (context->runtime_token != 0 &&
             adapter_.BeginCallTeardown(context->runtime_token) == Error::ok)
             context->teardown_pending = true;
     }

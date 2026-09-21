@@ -16,13 +16,29 @@ struct Fixture {
     AgentRegistry registry;
     Fixture() noexcept { assert(registry.Initialize(config) == Error::ok); }
 };
+unsigned hold_calls = 0, resume_calls = 0, answer_calls = 0;
+pj_status_t Hold(pjsua_call_id id, unsigned options, const pjsua_msg_data *data) {
+    assert(id >= 0 && options == 0 && data == nullptr);
+    ++hold_calls; return PJ_SUCCESS;
+}
+pj_status_t Resume(pjsua_call_id id, const pjsua_call_setting *setting, const pjsua_msg_data *data) {
+    assert(id >= 0 && setting != nullptr && (setting->flag & PJSUA_CALL_UNHOLD) != 0 && data == nullptr);
+    ++resume_calls; return PJ_SUCCESS;
+}
+pj_status_t Answer(pjsua_call_id id, const pjsua_call_setting *setting, unsigned status,
+                    const pj_str_t *, const pjsua_msg_data *) {
+    assert(id >= 0 && setting != nullptr && status == 200);
+    ++answer_calls; return PJ_SUCCESS;
+}
 }
 
 void RunPjsuaCallControlTests() {
     Fixture fixture; FakePjsuaApi fake; fake.Reset();
     PjsuaAccountManager accounts(fake.Api());
     assert(accounts.Initialize(fixture.registry, 4) == Error::ok);
-    PjsuaCallManager calls(accounts, fake.Api());
+    auto api = fake.Api();
+    api.call_set_hold2 = Hold; api.call_reinvite2 = Resume; api.call_answer2 = Answer;
+    PjsuaCallManager calls(accounts, api);
     AgentHandle agent{}; assert(fixture.registry.GetAgentHandle(0, &agent) == Error::ok);
 
     CallHandle outgoing{0, 1}; std::uint32_t token = 0;
@@ -34,6 +50,8 @@ void RunPjsuaCallControlTests() {
     assert(fake.HangupCount() == 2 && fake.HangupStatus() == 0);
     assert(calls.SetHeld(token, true) == Error::ok);
     assert(calls.SetHeld(token, false) == Error::ok);
+    assert(hold_calls == 1 && resume_calls == 1);
+    assert(calls.Answer(token) == Error::ok && answer_calls == 1);
 
     // Stale tokens and out-of-range SIP reject statuses must make no native call.
     assert(calls.Answer(token + 1) == Error::invalid_handle);
@@ -41,5 +59,37 @@ void RunPjsuaCallControlTests() {
     assert(calls.Reject(token, 700) == Error::invalid_argument);
     assert(calls.Reject(token, 486) == Error::ok);
     assert(fake.AnswerCount() == 1 && fake.AnswerStatus() == 486);
+    assert(calls.Reject(token, 400) == Error::ok && fake.AnswerStatus() == 400);
+    assert(calls.Reject(token, 699) == Error::ok && fake.AnswerStatus() == 699);
+    fake.FailCall(FakePjsuaApi::CallEntry::hangup, PJ_EUNKNOWN);
+    assert(calls.Hangup(token) == Error::signaling_failed);
+    fake.ClearCallFailures();
+    // Native dispatch trusts actor policy and only validates native ownership.
+    pjsua_call_setting incoming_setting{};
+    api.call_setting_default(&incoming_setting);
+    char remote[] = "sip:incoming@example.test";
+    pj_str_t destination{remote, sizeof(remote) - 1};
+    pjsua_call_id incoming_id = PJSUA_INVALID_ID;
+    assert(api.call_make_call(2, &destination, &incoming_setting, nullptr, nullptr,
+                             &incoming_id) == PJ_SUCCESS);
+    calls.OnIncomingCall(2, incoming_id);
+    RuntimeNotification incoming{};
+    assert(calls.TryGetNotification(&incoming));
+    assert(calls.Cancel(incoming.token) == Error::ok && fake.HangupStatus() == 487);
+    // Accepted controls must retain the callback route and bounded context.
+    assert(calls.Count() == 2 && fake.CallUserData(0) != nullptr);
+    int foreign = 0;
+    assert(api.call_set_user_data(0, &foreign) == PJ_SUCCESS);
+    const auto answers = fake.AnswerCount();
+    const auto hangups = fake.HangupCount();
+    assert(calls.Answer(token) == Error::invalid_handle);
+    assert(calls.Reject(token, 480) == Error::invalid_handle);
+    assert(calls.Cancel(token) == Error::invalid_handle);
+    assert(calls.Hangup(token) == Error::invalid_handle);
+    assert(calls.SetHeld(token, true) == Error::invalid_handle);
+    assert(calls.SetHeld(token, false) == Error::invalid_handle);
+    assert(fake.AnswerCount() == answers && fake.HangupCount() == hangups);
+    assert(hold_calls == 1 && resume_calls == 1 && answer_calls == 1);
+    assert(fake.CallUserData(0) == &foreign && calls.Count() == 2);
 }
 } // namespace voip::test

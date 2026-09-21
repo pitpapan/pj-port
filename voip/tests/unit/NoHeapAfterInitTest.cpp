@@ -215,7 +215,9 @@ void test_no_heap_after_successful_initialization() {
         }
         if (event.type == voip::EventType::operation_terminal &&
             event.operation == cancel_operation) {
-            cancel_seen = event.status.error == voip::Error::cancelled;
+            // Queued outgoing cancel completes when the actor commits its
+            // local terminal mutation; it is not a remote cancellation.
+            cancel_seen = event.status.error == voip::Error::ok;
         }
     }
     assert(cancel_seen);

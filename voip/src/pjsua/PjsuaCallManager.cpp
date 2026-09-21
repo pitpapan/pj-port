@@ -93,7 +93,7 @@ Error PjsuaCallManager::Reject(std::uint32_t token, std::uint16_t status) noexce
 
 Error PjsuaCallManager::Cancel(std::uint32_t token) noexcept {
     PjsuaCallContext *context = FindToken(token);
-    if (context == nullptr || context->incoming || !OwnsNativeUserData(*context) ||
+    if (context == nullptr || !OwnsNativeUserData(*context) ||
         api_.call_hangup == nullptr)
         return Error::invalid_handle;
     return Native(context->native_id,

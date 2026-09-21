@@ -276,7 +276,8 @@ void test_runtime_tokens_and_lease_release_order() {
                                    nullptr, effects) ==
            voip::Error::ok);
     assert(scheduler.Resolve(incoming)->runtime_token == 0x1234u);
-    assert(scheduler.Cancel(incoming, nullptr, effects) == voip::Error::ok);
+    assert(scheduler.Cancel(incoming, nullptr, effects) == voip::Error::invalid_state);
+    assert(scheduler.Reject(incoming, nullptr, effects) == voip::Error::ok);
     assert(scheduler.OnTeardownComplete(incoming, nullptr, effects) ==
            voip::Error::ok);
     assert(!scheduler.IsLive(incoming));
@@ -472,9 +473,38 @@ void test_full_capacity_restores_all_fixed_resources() {
     for (const voip::CallHandle call : calls) assert(!scheduler.IsLive(call));
 }
 
+void test_controls_preserve_policy_and_deferred_terminal_lease() {
+    Fixture fixture;
+    voip::CallScheduler scheduler(fixture.registry);
+    voip::SchedulerEffects effects{};
+    voip::CallHandle active{}, queued{};
+    assert(scheduler.AdmitIncoming(fixture.agent, 10, &active, nullptr, effects) == voip::Error::ok);
+    assert(scheduler.AdmitIncoming(fixture.agent, 11, &queued, nullptr, effects) == voip::Error::ok);
+    assert(scheduler.Answer(queued) == voip::Error::ok);
+    assert(scheduler.Resolve(queued)->answer_on_promotion);
+    assert(scheduler.Snapshot(queued).hold_reason == voip::HoldReason::waiting);
+    assert(scheduler.SetHeld(queued, true) == voip::Error::invalid_state);
+    assert(scheduler.SetHeld(active, true) == voip::Error::invalid_state);
+    assert(scheduler.OnAcceptance(active) == voip::Error::ok);
+    assert(scheduler.SetHeld(active, false) == voip::Error::invalid_state);
+    assert(scheduler.SetHeld(active, true) == voip::Error::ok);
+    assert(scheduler.SetHeld(active, true) == voip::Error::invalid_state);
+    assert(scheduler.SetHeld(active, false) == voip::Error::ok);
+    voip::ScheduledTransition terminal{};
+    assert(scheduler.Hangup(active, &terminal, effects) == voip::Error::ok);
+    assert(terminal.transition.terminal_event_required && !terminal.handle_invalidated);
+    assert(scheduler.IsLive(active) && !scheduler.IsPromoted(queued));
+    assert(scheduler.Hangup(active, &terminal, effects) == voip::Error::invalid_state);
+    assert(scheduler.OnTeardownComplete(active, &terminal, effects) == voip::Error::ok);
+    assert(!scheduler.IsLive(active) && scheduler.IsPromoted(queued));
+    assert(effects.count == 1 && effects.entries[0].answer_on_promotion);
+    assert(effects.entries[0].runtime_token == 11);
+}
+
 } // namespace
 
 int main() {
+    test_controls_preserve_policy_and_deferred_terminal_lease();
     test_immediate_promotion_and_same_agent_fifo();
     test_hol_blocking_and_repeated_promotion();
     test_fifo_capacity_and_middle_cancel();

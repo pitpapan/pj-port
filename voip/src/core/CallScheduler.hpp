@@ -84,6 +84,8 @@ public:
 
     Error Answer(CallHandle handle, ScheduledTransition *result = nullptr) noexcept;
     bool CanAnswer(CallHandle handle) const noexcept;
+    bool CanControl(CallHandle handle, CallContext::PendingOperation operation,
+                    bool held = false) const noexcept;
     Error OnAcceptance(CallHandle handle,
                        ScheduledTransition *result = nullptr) noexcept;
     Error Reject(CallHandle handle, ScheduledTransition *result,

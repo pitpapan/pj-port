@@ -313,6 +313,37 @@ bool CallScheduler::CanAnswer(CallHandle handle) const noexcept {
             projection.hold_reason == HoldReason::waiting);
 }
 
+bool CallScheduler::CanControl(CallHandle handle,
+                              CallContext::PendingOperation operation,
+                              bool held) const noexcept {
+    const CallContext *context = calls_.Resolve(handle);
+    if (context == nullptr || context->native_terminal_pending ||
+        context->phase == Phase::disconnecting) return false;
+    if (operation == CallContext::PendingOperation::answer) return CanAnswer(handle);
+    const auto projection = context->state_machine.Snapshot();
+    const bool waiting = projection.state == CallState::initiated ||
+        (projection.state == CallState::hold && projection.hold_reason == HoldReason::waiting);
+    if (operation == CallContext::PendingOperation::reject &&
+        (context->direction != CallDirection::incoming || !waiting)) return false;
+    if (operation == CallContext::PendingOperation::cancel &&
+        (context->direction != CallDirection::outgoing || !waiting)) return false;
+    if (operation == CallContext::PendingOperation::hangup &&
+        projection.state != CallState::established &&
+        !(projection.state == CallState::hold && projection.hold_reason == HoldReason::media))
+        return false;
+    CallTransition cause = CallTransition::rejection;
+    if (operation == CallContext::PendingOperation::hangup) cause = CallTransition::finish;
+    else if (operation == CallContext::PendingOperation::set_held)
+        cause = held ? CallTransition::hold : CallTransition::resume;
+    else if (operation != CallContext::PendingOperation::reject &&
+             operation != CallContext::PendingOperation::cancel) return false;
+    // Probe the same state-machine policy used by actual transitions without
+    // changing the public projection before native acceptance/confirmation.
+    CallStateMachine candidate = context->state_machine;
+    AppliedCallTransition transition{};
+    return candidate.Apply(CauseFor(*context, cause), &transition) == Error::ok;
+}
+
 Error CallScheduler::OnAcceptance(CallHandle handle,
                                   ScheduledTransition *result) noexcept {
     CallContext *context = calls_.Resolve(handle);
@@ -347,6 +378,8 @@ Error CallScheduler::Reject(CallHandle handle, ScheduledTransition *result,
 
 Error CallScheduler::Cancel(CallHandle handle, ScheduledTransition *result,
                             SchedulerEffects &effects) noexcept {
+    if (!IsLive(handle)) return Error::invalid_handle;
+    if (!CanControl(handle, CallContext::PendingOperation::cancel)) return Error::invalid_state;
     return Reject(handle, result, effects);
 }
 
