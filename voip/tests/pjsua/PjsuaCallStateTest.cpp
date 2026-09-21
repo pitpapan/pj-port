@@ -61,6 +61,57 @@ void RunPjsuaCallStateTests() {
     assert(notification.type == RuntimeNotification::Type::call_finished &&
            notification.token == incoming.token && notification.sip_status == 487);
     assert(calls.Count() == 0 && fake.CallUserData(id) == nullptr);
+
+    // A duplicate terminal callback or a callback after user-data invalidation
+    // must neither create a second event nor resurrect the native lease.
+    calls.OnCallState(id);
+    assert(!calls.TryGetNotification(&notification) && calls.Count() == 0);
+
+    // Confirmation is a one-shot semantic event; media direction, rather than
+    // a second public state store, completes hold/resume controls exactly once.
+    state = PJSIP_INV_STATE_CALLING; code = 0; media = PJMEDIA_DIR_NONE;
+    calls.OnIncomingCall(2, id);
+    assert(calls.TryGetNotification(&incoming));
+    assert(calls.AdmitIncoming({2, 1}, incoming.agent, incoming.token) == Error::ok);
+    state = PJSIP_INV_STATE_EARLY; calls.OnCallState(id);
+    assert(!calls.TryGetNotification(&notification));
+    state = PJSIP_INV_STATE_CONFIRMED; media = PJMEDIA_DIR_ENCODING_DECODING;
+    calls.OnCallState(id);
+    assert(calls.TryGetNotification(&notification) &&
+           notification.type == RuntimeNotification::Type::call_accepted);
+    calls.OnCallState(id);
+    assert(!calls.TryGetNotification(&notification));
+    media = PJMEDIA_DIR_ENCODING;
+    calls.OnCallMediaState(id);
+    assert(calls.TryGetNotification(&notification) &&
+           notification.type == RuntimeNotification::Type::call_held);
+    calls.OnCallMediaState(id);
+    assert(!calls.TryGetNotification(&notification));
+    media = PJMEDIA_DIR_ENCODING_DECODING;
+    calls.OnCallMediaState(id);
+    assert(calls.TryGetNotification(&notification) &&
+           notification.type == RuntimeNotification::Type::call_resumed);
+    state = PJSIP_INV_STATE_DISCONNECTED; media = PJMEDIA_DIR_NONE;
+    calls.OnCallState(id);
+    assert(calls.TryGetNotification(&notification) &&
+           notification.type == RuntimeNotification::Type::call_finished);
+    assert(calls.Count() == 0 && fake.CallUserData(id) == nullptr);
+
+    // A final 3xx–6xx before establishment has a semantic rejection followed
+    // by exactly one final finish, which lets the core commit terminal state.
+    state = PJSIP_INV_STATE_CALLING; code = 0;
+    calls.OnIncomingCall(2, id);
+    assert(calls.TryGetNotification(&incoming));
+    assert(calls.AdmitIncoming({3, 1}, incoming.agent, incoming.token) == Error::ok);
+    state = PJSIP_INV_STATE_EARLY; calls.OnCallState(id);
+    state = PJSIP_INV_STATE_DISCONNECTED; code = 603; media = PJMEDIA_DIR_NONE;
+    calls.OnCallState(id);
+    assert(calls.TryGetNotification(&notification) &&
+           notification.type == RuntimeNotification::Type::call_rejected &&
+           notification.error == Error::remote_rejected && notification.sip_status == 603);
+    assert(calls.TryGetNotification(&notification) &&
+           notification.type == RuntimeNotification::Type::call_finished);
+    assert(!calls.TryGetNotification(&notification) && calls.Count() == 0);
     printk("PjsuaCallStateTest PASSED\n");
 }
 } // namespace voip::test

@@ -277,7 +277,14 @@ bool PjsuaCallManager::EnqueueCall(PjsuaCallContext &context,
 
 void PjsuaCallManager::FlushPendingTerminals() noexcept {
     for (PjsuaCallContext &context : contexts_) {
-        if (!context.terminal_pending || notification_size_ == notifications_.size()) continue;
+        if (context.rejection_pending && notification_size_ != notifications_.size()) {
+            notifications_[(notification_head_ + notification_size_) % notifications_.size()].notification =
+                context.pending_rejection;
+            ++notification_size_;
+            context.rejection_pending = false;
+        }
+        if (!context.terminal_pending || context.rejection_pending ||
+            notification_size_ == notifications_.size()) continue;
         notifications_[(notification_head_ + notification_size_) % notifications_.size()].notification =
             context.pending_terminal;
         ++notification_size_;
@@ -382,12 +389,17 @@ void PjsuaCallManager::OnCallState(pjsua_call_id native_id) noexcept {
             const RuntimeNotification::Type type = rejected
                 ? RuntimeNotification::Type::call_rejected
                 : RuntimeNotification::Type::call_finished;
-            if (EnqueueCall(*context, type, info,
-                            rejected ? Error::remote_rejected : Error::ok))
+            if (rejected && !EnqueueCall(*context, type, info, Error::remote_rejected)) {
+                context->pending_rejection = CopyCall(*context, type, info,
+                                                       Error::remote_rejected);
+                context->rejection_pending = true;
+            }
+            if (EnqueueCall(*context, RuntimeNotification::Type::call_finished, info))
                 context->terminal_reported = true;
             else {
-                context->pending_terminal = CopyCall(*context, type, info,
-                                                      rejected ? Error::remote_rejected : Error::ok);
+                context->pending_terminal = CopyCall(*context,
+                                                      RuntimeNotification::Type::call_finished,
+                                                      info, Error::ok);
                 context->terminal_pending = true;
             }
         }
