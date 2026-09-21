@@ -258,8 +258,8 @@ RuntimeNotification PjsuaCallManager::CopyCall(const PjsuaCallContext &context,
     if (info.last_status_text.ptr != nullptr && info.last_status_text.slen > 0) {
         const std::size_t length = static_cast<std::size_t>(info.last_status_text.slen) > max_reason_length
             ? max_reason_length : static_cast<std::size_t>(info.last_status_text.slen);
-        std::memcpy(notification.reason, info.last_status_text.ptr, length);
-        notification.reason[length] = '\0';
+        std::memcpy(notification.status.reason, info.last_status_text.ptr, length);
+        notification.status.reason[length] = '\0';
     }
     return notification;
 }
@@ -268,29 +268,32 @@ bool PjsuaCallManager::EnqueueCall(PjsuaCallContext &context,
                                    RuntimeNotification::Type type,
                                    const pjsua_call_info &info,
                                    Error error) noexcept {
-    if (notification_size_ == notifications_.size()) return false;
-    notifications_[(notification_head_ + notification_size_) % notifications_.size()].notification =
-        CopyCall(context, type, info, error);
+    return EnqueueNotification(CopyCall(context, type, info, error));
+}
+
+bool PjsuaCallManager::EnqueueNotification(const RuntimeNotification &notification) noexcept {
+    // Once backpressure starts, keep every later record behind it so native
+    // callback order remains the actor's observable order.
+    if (deferred_notification_size_ != 0 || notification_size_ == notifications_.size()) {
+        if (deferred_notification_size_ == deferred_notifications_.size()) return false;
+        deferred_notifications_[(deferred_notification_head_ + deferred_notification_size_) %
+                                deferred_notifications_.size()].notification = notification;
+        ++deferred_notification_size_;
+        return true;
+    }
+    notifications_[(notification_head_ + notification_size_) % notifications_.size()].notification = notification;
     ++notification_size_;
     return true;
 }
 
-void PjsuaCallManager::FlushPendingTerminals() noexcept {
-    for (PjsuaCallContext &context : contexts_) {
-        if (context.rejection_pending && notification_size_ != notifications_.size()) {
-            notifications_[(notification_head_ + notification_size_) % notifications_.size()].notification =
-                context.pending_rejection;
-            ++notification_size_;
-            context.rejection_pending = false;
-        }
-        if (!context.terminal_pending || context.rejection_pending ||
-            notification_size_ == notifications_.size()) continue;
+void PjsuaCallManager::FlushDeferredNotifications() noexcept {
+    while (notification_size_ != notifications_.size() && deferred_notification_size_ != 0) {
         notifications_[(notification_head_ + notification_size_) % notifications_.size()].notification =
-            context.pending_terminal;
+            deferred_notifications_[deferred_notification_head_].notification;
+        deferred_notification_head_ = (deferred_notification_head_ + 1) %
+                                      deferred_notifications_.size();
+        --deferred_notification_size_;
         ++notification_size_;
-        context.terminal_pending = false;
-        context.terminal_reported = true;
-        TryRelease(context);
     }
 }
 
@@ -368,9 +371,14 @@ void PjsuaCallManager::OnCallState(pjsua_call_id native_id) noexcept {
         return;
     }
     context->media_quiescent = info.media_status != PJSUA_CALL_MEDIA_ACTIVE;
-    if (info.state == PJSIP_INV_STATE_CALLING) {
+    if (info.state == PJSIP_INV_STATE_CALLING &&
+        (context->phase == PjsuaCallPhase::calling ||
+         context->phase == PjsuaCallPhase::promoting)) {
         context->phase = PjsuaCallPhase::calling;
-    } else if (info.state == PJSIP_INV_STATE_EARLY) {
+    } else if (info.state == PJSIP_INV_STATE_EARLY &&
+               (context->phase == PjsuaCallPhase::calling ||
+                context->phase == PjsuaCallPhase::promoting ||
+                context->phase == PjsuaCallPhase::admitted_incoming)) {
         context->phase = PjsuaCallPhase::early;
     } else if (info.state == PJSIP_INV_STATE_CONFIRMED) {
         if (context->phase != PjsuaCallPhase::confirmed &&
@@ -386,22 +394,14 @@ void PjsuaCallManager::OnCallState(pjsua_call_id native_id) noexcept {
         if (!context->terminal_reported && context->logical_bound) {
             const bool rejected = info.last_status >= 300 && info.last_status <= 699 &&
                                   !established;
-            const RuntimeNotification::Type type = rejected
-                ? RuntimeNotification::Type::call_rejected
-                : RuntimeNotification::Type::call_finished;
-            if (rejected && !EnqueueCall(*context, type, info, Error::remote_rejected)) {
-                context->pending_rejection = CopyCall(*context, type, info,
-                                                       Error::remote_rejected);
-                context->rejection_pending = true;
-            }
-            if (EnqueueCall(*context, RuntimeNotification::Type::call_finished, info))
+            if (rejected)
+                (void)EnqueueCall(*context, RuntimeNotification::Type::call_rejected,
+                                  info, Error::remote_rejected);
+            const Error terminal_error = info.last_status == 0
+                ? Error::signaling_failed : Error::ok;
+            if (EnqueueCall(*context, RuntimeNotification::Type::call_finished,
+                            info, terminal_error))
                 context->terminal_reported = true;
-            else {
-                context->pending_terminal = CopyCall(*context,
-                                                      RuntimeNotification::Type::call_finished,
-                                                      info, Error::ok);
-                context->terminal_pending = true;
-            }
         }
     }
     FinishCallback(*context);
@@ -416,11 +416,13 @@ void PjsuaCallManager::OnCallMediaState(pjsua_call_id native_id) noexcept {
         context->media_quiescent = info.media_status != PJSUA_CALL_MEDIA_ACTIVE;
         if (context->phase == PjsuaCallPhase::confirmed ||
             context->phase == PjsuaCallPhase::local_hold) {
-            const bool held = info.media_dir == PJMEDIA_DIR_ENCODING;
+            const bool active = info.media_status == PJSUA_CALL_MEDIA_ACTIVE;
+            const bool held = active && info.media_dir == PJMEDIA_DIR_ENCODING;
             if (held && context->phase != PjsuaCallPhase::local_hold) {
                 context->phase = PjsuaCallPhase::local_hold;
                 (void)EnqueueCall(*context, RuntimeNotification::Type::call_held, info);
-            } else if (!held && context->phase == PjsuaCallPhase::local_hold) {
+            } else if (active && info.media_dir == PJMEDIA_DIR_ENCODING_DECODING &&
+                       context->phase == PjsuaCallPhase::local_hold) {
                 context->phase = PjsuaCallPhase::confirmed;
                 (void)EnqueueCall(*context, RuntimeNotification::Type::call_resumed, info);
             }
@@ -434,7 +436,7 @@ bool PjsuaCallManager::TryGetNotification(RuntimeNotification *notification) noe
     *notification = notifications_[notification_head_].notification;
     notification_head_ = (notification_head_ + 1) % notifications_.size();
     --notification_size_;
-    FlushPendingTerminals();
+    FlushDeferredNotifications();
     return true;
 }
 
@@ -458,6 +460,8 @@ void PjsuaCallManager::Reset() noexcept {
         if (context.phase != PjsuaCallPhase::free) Release(context);
     notification_head_ = 0;
     notification_size_ = 0;
+    deferred_notification_head_ = 0;
+    deferred_notification_size_ = 0;
 }
 
 } // namespace voip

@@ -81,10 +81,19 @@ void RunPjsuaCallStateTests() {
            notification.type == RuntimeNotification::Type::call_accepted);
     calls.OnCallState(id);
     assert(!calls.TryGetNotification(&notification));
+    // Out-of-order provisional callbacks cannot roll an established native
+    // phase backward or make the later terminal look like a remote rejection.
+    state = PJSIP_INV_STATE_EARLY; calls.OnCallState(id);
+    state = PJSIP_INV_STATE_CALLING; calls.OnCallState(id);
+    assert(!calls.TryGetNotification(&notification));
+    state = PJSIP_INV_STATE_CONFIRMED;
     media = PJMEDIA_DIR_ENCODING;
     calls.OnCallMediaState(id);
     assert(calls.TryGetNotification(&notification) &&
            notification.type == RuntimeNotification::Type::call_held);
+    calls.OnCallMediaState(id);
+    assert(!calls.TryGetNotification(&notification));
+    media = PJMEDIA_DIR_NONE;
     calls.OnCallMediaState(id);
     assert(!calls.TryGetNotification(&notification));
     media = PJMEDIA_DIR_ENCODING_DECODING;
@@ -112,6 +121,55 @@ void RunPjsuaCallStateTests() {
     assert(calls.TryGetNotification(&notification) &&
            notification.type == RuntimeNotification::Type::call_finished);
     assert(!calls.TryGetNotification(&notification) && calls.Count() == 0);
+
+    // A transport/SDP terminal with no final SIP status is copied as a
+    // signaling failure, never silently converted to a normal finish.
+    state = PJSIP_INV_STATE_CALLING; code = 0;
+    calls.OnIncomingCall(2, id);
+    assert(calls.TryGetNotification(&incoming));
+    assert(calls.AdmitIncoming({4, 1}, incoming.agent, incoming.token) == Error::ok);
+    state = PJSIP_INV_STATE_EARLY; calls.OnCallState(id);
+    state = PJSIP_INV_STATE_DISCONNECTED; media = PJMEDIA_DIR_NONE;
+    calls.OnCallState(id);
+    assert(calls.TryGetNotification(&notification) &&
+           notification.type == RuntimeNotification::Type::call_finished &&
+           notification.error == Error::signaling_failed);
+
+    // Seven confirmations fill the public ring. Seven held transitions must
+    // remain ordered and pollable behind that pressure rather than vanishing.
+    FakePjsuaApi pressure_fake; pressure_fake.Reset();
+    PjsuaAccountManager pressure_accounts(pressure_fake.Api());
+    assert(pressure_accounts.Initialize(registry, 4) == Error::ok);
+    PjsuaApi pressure_api = pressure_fake.Api(); pressure_api.call_get_info = &StateInfo;
+    PjsuaCallManager pressure(pressure_accounts, pressure_api);
+    std::uint32_t pressure_tokens[7]{};
+    for (unsigned index = 0; index < 7; ++index) {
+        pjsua_call_id native = PJSUA_INVALID_ID;
+        assert(pressure_api.call_make_call(0, &destination, &setting, nullptr, nullptr, &native) == PJ_SUCCESS);
+        state = PJSIP_INV_STATE_CALLING; code = 200; media = PJMEDIA_DIR_NONE;
+        pressure.OnIncomingCall(2, native);
+        assert(pressure.TryGetNotification(&incoming));
+        pressure_tokens[index] = incoming.token;
+        assert(pressure.AdmitIncoming({static_cast<std::uint8_t>(index), 2}, incoming.agent,
+                                     incoming.token) == Error::ok);
+        state = PJSIP_INV_STATE_CONFIRMED; media = PJMEDIA_DIR_ENCODING_DECODING;
+        pressure.OnCallState(native);
+    }
+    for (unsigned index = 0; index < 7; ++index) {
+        state = PJSIP_INV_STATE_CONFIRMED; media = PJMEDIA_DIR_ENCODING;
+        pressure.OnCallMediaState(static_cast<pjsua_call_id>(index));
+    }
+    for (unsigned index = 0; index < 7; ++index) {
+        assert(pressure.TryGetNotification(&notification));
+        assert(notification.type == RuntimeNotification::Type::call_accepted &&
+               notification.token == pressure_tokens[index]);
+    }
+    for (unsigned index = 0; index < 7; ++index) {
+        assert(pressure.TryGetNotification(&notification));
+        assert(notification.type == RuntimeNotification::Type::call_held &&
+               notification.token == pressure_tokens[index]);
+    }
+    assert(!pressure.TryGetNotification(&notification));
     printk("PjsuaCallStateTest PASSED\n");
 }
 } // namespace voip::test

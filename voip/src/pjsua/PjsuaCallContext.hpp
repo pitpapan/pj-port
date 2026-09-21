@@ -23,9 +23,6 @@ struct PjsuaCallContext {
     PjsuaCallPhase phase = PjsuaCallPhase::free;
     bool incoming = false, logical_bound = false, user_data_bound = false;
     bool media_quiescent = true, terminal_reported = false;
-    bool rejection_pending = false, terminal_pending = false;
-    RuntimeNotification pending_rejection{};
-    RuntimeNotification pending_terminal{};
     unsigned callback_depth = 0;
 };
 
