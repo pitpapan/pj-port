@@ -11,6 +11,17 @@ struct PjsuaCallNotification {
     RuntimeNotification notification{};
 };
 
+// A compact callback-reachable overflow record. It deliberately contains no
+// PJ pointers/views and is large enough to retain every semantic field core
+// consumes while the public ring is saturated.
+struct PjsuaDeferredCallNotification {
+    RuntimeNotification::Type type = RuntimeNotification::Type::call_finished;
+    AgentHandle agent{};
+    std::uint32_t token = 0;
+    std::uint16_t sip_status = 0;
+    Error error = Error::ok;
+};
+
 } // namespace voip
 
 #endif

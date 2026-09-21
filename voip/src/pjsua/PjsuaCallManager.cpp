@@ -268,10 +268,44 @@ bool PjsuaCallManager::EnqueueCall(PjsuaCallContext &context,
                                    RuntimeNotification::Type type,
                                    const pjsua_call_info &info,
                                    Error error) noexcept {
-    if (notification_size_ == notifications_.size()) return false;
+    const RuntimeNotification notification = CopyCall(context, type, info, error);
+    if (notification_size_ == notifications_.size())
+        return EnqueueDeferred(context, type, info, error);
     notifications_[(notification_head_ + notification_size_) % notifications_.size()].notification = notification;
     ++notification_size_;
     return true;
+}
+
+bool PjsuaCallManager::EnqueueDeferred(const PjsuaCallContext &context,
+                                       RuntimeNotification::Type type,
+                                       const pjsua_call_info &info,
+                                       Error error) noexcept {
+    if (deferred_size_ == deferred_.size()) return false;
+    PjsuaDeferredCallNotification &record =
+        deferred_[(deferred_head_ + deferred_size_) % deferred_.size()];
+    record.type = type;
+    record.agent = context.agent;
+    record.token = context.token;
+    record.sip_status = static_cast<std::uint16_t>(info.last_status);
+    record.error = error;
+    ++deferred_size_;
+    return true;
+}
+
+void PjsuaCallManager::FlushDeferred() noexcept {
+    while (notification_size_ != notifications_.size() && deferred_size_ != 0) {
+        const PjsuaDeferredCallNotification &record = deferred_[deferred_head_];
+        RuntimeNotification notification{};
+        notification.type = record.type;
+        notification.agent = record.agent;
+        notification.token = record.token;
+        notification.sip_status = record.sip_status;
+        notification.error = record.error;
+        notifications_[(notification_head_ + notification_size_) % notifications_.size()].notification = notification;
+        deferred_head_ = (deferred_head_ + 1) % deferred_.size();
+        --deferred_size_;
+        ++notification_size_;
+    }
 }
 
 void PjsuaCallManager::TryRelease(PjsuaCallContext &context) noexcept {
@@ -413,6 +447,7 @@ bool PjsuaCallManager::TryGetNotification(RuntimeNotification *notification) noe
     *notification = notifications_[notification_head_].notification;
     notification_head_ = (notification_head_ + 1) % notifications_.size();
     --notification_size_;
+    FlushDeferred();
     return true;
 }
 
@@ -436,6 +471,8 @@ void PjsuaCallManager::Reset() noexcept {
         if (context.phase != PjsuaCallPhase::free) Release(context);
     notification_head_ = 0;
     notification_size_ = 0;
+    deferred_head_ = 0;
+    deferred_size_ = 0;
 }
 
 } // namespace voip

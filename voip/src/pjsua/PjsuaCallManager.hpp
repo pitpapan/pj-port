@@ -48,6 +48,9 @@ private:
                      const pjsua_call_info &, Error = Error::ok) noexcept;
     RuntimeNotification CopyCall(const PjsuaCallContext &, RuntimeNotification::Type,
                                  const pjsua_call_info &, Error) const noexcept;
+    bool EnqueueDeferred(const PjsuaCallContext &, RuntimeNotification::Type,
+                         const pjsua_call_info &, Error) noexcept;
+    void FlushDeferred() noexcept;
     void FinishCallback(PjsuaCallContext &) noexcept;
     void TryRelease(PjsuaCallContext &) noexcept;
     void Release(PjsuaCallContext &) noexcept;
@@ -59,8 +62,11 @@ private:
     const PjsuaApi &api_;
     std::array<PjsuaCallContext, max_calls> contexts_{};
     std::array<PjsuaCallNotification, RuntimeAdapter::notification_capacity> notifications_{};
+    std::array<PjsuaDeferredCallNotification, max_calls * 4> deferred_{};
     std::size_t notification_head_{};
     std::size_t notification_size_{};
+    std::size_t deferred_head_{};
+    std::size_t deferred_size_{};
     std::size_t count_{};
     std::uint32_t next_token_{};
 };
