@@ -82,7 +82,8 @@ private:
     void RollbackStartup(Error) noexcept;
     Error ReserveOperation(OperationId *) noexcept;
     Error EnqueueControl(VoipCommand &, OperationId *) noexcept;
-    void PublishTransition(const ScheduledTransition &) noexcept;
+    void PublishTransition(const ScheduledTransition &,
+                           const Status * = nullptr) noexcept;
     bool PublishEvent(const Event &) noexcept;
     bool ReserveCallTerminal(VoipEventQueue::Reservation *, std::size_t *) noexcept;
     bool CommitCallTerminal(CallHandle, const Event &) noexcept;
@@ -93,6 +94,7 @@ private:
     void ProcessCommand(const VoipCommand &) noexcept;
     CallContext *FindCall(std::uint32_t token) noexcept;
     const CallContext *FindCall(CallHandle) const noexcept;
+    void CopyCallMetadata(CallContext &, const RuntimeNotification &) noexcept;
     void ForgetCall(CallHandle) noexcept;
     void RefreshResources() noexcept;
     void CompleteCallOperation(const CallContext &, Error) noexcept;

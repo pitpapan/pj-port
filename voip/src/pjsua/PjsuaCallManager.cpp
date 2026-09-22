@@ -4,6 +4,20 @@
 
 namespace voip {
 
+namespace {
+Error TerminalError(const pjsua_call_info &info) noexcept {
+    if (info.last_status == 0) return Error::signaling_failed;
+    if (info.last_status == 487) return Error::cancelled;
+    if (info.last_status == 415 || info.last_status == 488 ||
+        info.last_status == 606)
+        return Error::negotiation_failed;
+    if (info.media_status == PJSUA_CALL_MEDIA_ERROR) return Error::media_failed;
+    if (info.last_status >= 300 && info.last_status <= 699)
+        return Error::remote_rejected;
+    return Error::ok;
+}
+}
+
 std::uint32_t PjsuaCallManager::NextToken() noexcept {
     ++next_token_;
     if (next_token_ == 0) ++next_token_;
@@ -45,6 +59,7 @@ Error PjsuaCallManager::AdmitIncoming(CallHandle logical, AgentHandle agent,
 
 Error PjsuaCallManager::PromoteIncoming(CallHandle logical, AgentHandle agent,
                                         std::uint32_t token) noexcept {
+    if (stopping_) return Error::shutting_down;
     PjsuaCallContext *context = FindToken(token);
     if (context == nullptr || !context->logical_bound ||
         context->logical.slot != logical.slot || context->logical.generation != logical.generation ||
@@ -66,12 +81,13 @@ Error PjsuaCallManager::RejectProvisional(std::uint32_t token,
 
 Error PjsuaCallManager::Native(pjsua_call_id native_id,
                                pj_status_t status) const noexcept {
+    (void)native_id;
     return status == PJ_SUCCESS ? Error::ok : Error::signaling_failed;
 }
 
 Error PjsuaCallManager::Answer(std::uint32_t token) noexcept {
     PjsuaCallContext *context = FindToken(token);
-    if (context == nullptr || !OwnsNativeUserData(*context) ||
+    if (context == nullptr || context->terminal_seen || !OwnsNativeUserData(*context) ||
         api_.call_setting_default == nullptr || api_.call_answer2 == nullptr)
         return Error::invalid_handle;
     pjsua_call_setting setting{};
@@ -113,18 +129,27 @@ Error PjsuaCallManager::SetHeld(std::uint32_t token, bool held) noexcept {
     PjsuaCallContext *context = FindToken(token);
     if (context == nullptr || !OwnsNativeUserData(*context))
         return Error::invalid_handle;
+    if (context->terminal_seen || !context->confirmed_once) return Error::invalid_state;
+    if (context->media_control != PjsuaCallContext::MediaControl::none) return Error::busy;
+    if ((held && context->phase != PjsuaCallPhase::confirmed) ||
+        (!held && context->phase != PjsuaCallPhase::local_hold)) return Error::invalid_state;
+    // Install before entering PJSUA: media callbacks may be synchronous.
+    context->media_control = held ? PjsuaCallContext::MediaControl::hold
+                                  : PjsuaCallContext::MediaControl::resume;
+    Error result = Error::unsupported_configuration;
     if (held) {
-        if (api_.call_set_hold2 == nullptr) return Error::unsupported_configuration;
-        return Native(context->native_id,
+        if (api_.call_set_hold2 != nullptr) result = Native(context->native_id,
                       api_.call_set_hold2(context->native_id, 0, nullptr));
-    }
-    if (api_.call_setting_default == nullptr || api_.call_reinvite2 == nullptr)
-        return Error::unsupported_configuration;
-    pjsua_call_setting setting{};
-    api_.call_setting_default(&setting);
-    setting.flag |= PJSUA_CALL_UNHOLD;
-    return Native(context->native_id,
+    } else if (api_.call_setting_default != nullptr && api_.call_reinvite2 != nullptr) {
+        pjsua_call_setting setting{};
+        api_.call_setting_default(&setting);
+        setting.flag |= PJSUA_CALL_UNHOLD;
+        result = Native(context->native_id,
                   api_.call_reinvite2(context->native_id, &setting, nullptr));
+    }
+    if (result != Error::ok && context->media_control != PjsuaCallContext::MediaControl::result)
+        context->media_control = PjsuaCallContext::MediaControl::none;
+    return result;
 }
 
 PjsuaCallContext *PjsuaCallManager::Reserve(AgentHandle agent,
@@ -164,6 +189,7 @@ PjsuaCallContext *PjsuaCallManager::ReserveOutgoing(CallHandle logical,
 Error PjsuaCallManager::PromoteOutgoing(CallHandle logical, AgentHandle agent,
                                         const char *uri,
                                         std::uint32_t *token) noexcept {
+    if (stopping_) return Error::shutting_down;
     if (uri == nullptr || token == nullptr || !logical.IsValid())
         return Error::invalid_argument;
     *token = 0;
@@ -221,22 +247,9 @@ bool PjsuaCallManager::OwnsNativeUserData(const PjsuaCallContext &context) const
            api_.call_get_user_data(context.native_id) == &context;
 }
 
-bool PjsuaCallManager::EnqueueIncoming(const PjsuaCallContext &context,
+bool PjsuaCallManager::EnqueueIncoming(PjsuaCallContext &context,
                                        const pjsua_call_info &info) noexcept {
-    if (notification_size_ == notifications_.size()) return false;
-    RuntimeNotification notification{};
-    notification.type = RuntimeNotification::Type::incoming_call;
-    notification.agent = context.agent;
-    notification.token = context.token;
-    if (info.remote_info.ptr != nullptr && info.remote_info.slen > 0) {
-        const std::size_t length = static_cast<std::size_t>(info.remote_info.slen) > max_uri_length
-            ? max_uri_length : static_cast<std::size_t>(info.remote_info.slen);
-        std::memcpy(notification.remote_uri, info.remote_info.ptr, length);
-        notification.remote_uri[length] = '\0';
-    }
-    notifications_[(notification_head_ + notification_size_) % notifications_.size()].notification = notification;
-    ++notification_size_;
-    return true;
+    return EnqueueCall(context, RuntimeNotification::Type::incoming_call, info);
 }
 
 RuntimeNotification PjsuaCallManager::CopyCall(const PjsuaCallContext &context,
@@ -249,16 +262,32 @@ RuntimeNotification PjsuaCallManager::CopyCall(const PjsuaCallContext &context,
     notification.token = context.token;
     notification.sip_status = static_cast<std::uint16_t>(info.last_status);
     notification.error = error;
+    notification.status.error = error;
+    notification.status.sip_status = notification.sip_status;
+    notification.media_active = info.media_status == PJSUA_CALL_MEDIA_ACTIVE;
+    notification.media_send_enabled = notification.media_active &&
+        (info.media_dir & PJMEDIA_DIR_ENCODING) != 0;
+    notification.media_receive_enabled = notification.media_active &&
+        (info.media_dir & PJMEDIA_DIR_DECODING) != 0;
     if (info.remote_info.ptr != nullptr && info.remote_info.slen > 0) {
         const std::size_t length = static_cast<std::size_t>(info.remote_info.slen) > max_uri_length
             ? max_uri_length : static_cast<std::size_t>(info.remote_info.slen);
         std::memcpy(notification.remote_uri, info.remote_info.ptr, length);
         notification.remote_uri[length] = '\0';
     }
+    if (info.remote_contact.ptr != nullptr && info.remote_contact.slen > 0) {
+        const std::size_t length = static_cast<std::size_t>(info.remote_contact.slen) > max_address_length
+            ? max_address_length : static_cast<std::size_t>(info.remote_contact.slen);
+        std::memcpy(notification.remote_address, info.remote_contact.ptr, length);
+        notification.remote_address[length] = '\0';
+    }
     if (info.last_status_text.ptr != nullptr && info.last_status_text.slen > 0) {
         const std::size_t length = static_cast<std::size_t>(info.last_status_text.slen) > max_reason_length
             ? max_reason_length : static_cast<std::size_t>(info.last_status_text.slen);
-        std::memcpy(notification.status.reason, info.last_status_text.ptr, length);
+        for (std::size_t i = 0; i < length; ++i) {
+            const unsigned char c = static_cast<unsigned char>(info.last_status_text.ptr[i]);
+            notification.status.reason[i] = c < 32 || c == 127 ? ' ' : static_cast<char>(c);
+        }
         notification.status.reason[length] = '\0';
     }
     return notification;
@@ -268,50 +297,35 @@ bool PjsuaCallManager::EnqueueCall(PjsuaCallContext &context,
                                    RuntimeNotification::Type type,
                                    const pjsua_call_info &info,
                                    Error error) noexcept {
-    const RuntimeNotification notification = CopyCall(context, type, info, error);
-    if (notification_size_ == notifications_.size())
-        return EnqueueDeferred(context, type, info, error);
-    notifications_[(notification_head_ + notification_size_) % notifications_.size()].notification = notification;
-    ++notification_size_;
+    PjsuaCallNotification &record = type == RuntimeNotification::Type::incoming_call
+        ? context.admission : (type == RuntimeNotification::Type::call_held ||
+                              type == RuntimeNotification::Type::call_resumed)
+        ? context.media_result : context.outcome;
+    // Producers are one-shot or gated by media_control until consumption.
+    record.notification = CopyCall(context, type, info, error);
+    if (++next_sequence_ == 0) ++next_sequence_;
+    record.sequence = next_sequence_;
     return true;
-}
-
-bool PjsuaCallManager::EnqueueDeferred(const PjsuaCallContext &context,
-                                       RuntimeNotification::Type type,
-                                       const pjsua_call_info &info,
-                                       Error error) noexcept {
-    if (deferred_size_ == deferred_.size()) return false;
-    PjsuaDeferredCallNotification &record =
-        deferred_[(deferred_head_ + deferred_size_) % deferred_.size()];
-    record.type = type;
-    record.agent = context.agent;
-    record.token = context.token;
-    record.sip_status = static_cast<std::uint16_t>(info.last_status);
-    record.error = error;
-    ++deferred_size_;
-    return true;
-}
-
-void PjsuaCallManager::FlushDeferred() noexcept {
-    while (notification_size_ != notifications_.size() && deferred_size_ != 0) {
-        const PjsuaDeferredCallNotification &record = deferred_[deferred_head_];
-        RuntimeNotification notification{};
-        notification.type = record.type;
-        notification.agent = record.agent;
-        notification.token = record.token;
-        notification.sip_status = record.sip_status;
-        notification.error = record.error;
-        notifications_[(notification_head_ + notification_size_) % notifications_.size()].notification = notification;
-        deferred_head_ = (deferred_head_ + 1) % deferred_.size();
-        --deferred_size_;
-        ++notification_size_;
-    }
 }
 
 void PjsuaCallManager::TryRelease(PjsuaCallContext &context) noexcept {
-    if (context.phase == PjsuaCallPhase::disconnected && context.terminal_reported &&
-        context.media_quiescent && context.callback_depth == 0)
+    if (!context.terminal_seen || context.terminal_reported ||
+        !context.media_quiescent || context.callback_depth != 0 ||
+        !context.future_security_clear) return;
+    if (OwnsNativeUserData(context)) {
+        if (api_.call_set_user_data == nullptr ||
+            api_.call_set_user_data(context.native_id, nullptr) != PJ_SUCCESS) return;
+    }
+    context.user_data_bound = false;
+    if (!context.logical_bound && context.admission.sequence == 0) {
         Release(context);
+        return;
+    }
+    // Native ownership is unreachable. Retain copied records and the context
+    // reservation until the actor consumes finish; never reuse behind a backlog.
+    context.terminal_reported = true;
+    if (++next_sequence_ == 0) ++next_sequence_;
+    context.finish.sequence = next_sequence_;
 }
 
 void PjsuaCallManager::FinishCallback(PjsuaCallContext &context) noexcept {
@@ -334,6 +348,7 @@ void PjsuaCallManager::Release(PjsuaCallContext &context) noexcept {
 }
 
 void PjsuaCallManager::OnIncomingCall(pjsua_acc_id account, pjsua_call_id native_id) noexcept {
+    if (stopping_) { Decline(native_id, 486); return; }
     PjsuaAccountContext *account_context = accounts_.Resolve(account);
     if (account_context == nullptr) {
         Decline(native_id, 404);
@@ -391,28 +406,25 @@ void PjsuaCallManager::OnCallState(pjsua_call_id native_id) noexcept {
                 context->phase == PjsuaCallPhase::promoting ||
                 context->phase == PjsuaCallPhase::admitted_incoming)) {
         context->phase = PjsuaCallPhase::early;
-    } else if (info.state == PJSIP_INV_STATE_CONFIRMED) {
-        if (context->phase != PjsuaCallPhase::confirmed &&
-            context->phase != PjsuaCallPhase::local_hold) {
+    } else if (info.state == PJSIP_INV_STATE_CONFIRMED && !context->terminal_seen) {
+        if (!context->confirmed_once) {
+            context->confirmed_once = true;
             context->phase = PjsuaCallPhase::confirmed;
             (void)EnqueueCall(*context, RuntimeNotification::Type::call_accepted,
                               info);
         }
     } else if (info.state == PJSIP_INV_STATE_DISCONNECTED) {
-        const bool established = context->phase == PjsuaCallPhase::confirmed ||
-                                 context->phase == PjsuaCallPhase::local_hold;
         context->phase = PjsuaCallPhase::disconnected;
-        if (!context->terminal_reported && context->logical_bound) {
+        if (!context->terminal_seen) {
+            context->terminal_seen = true;
             const bool rejected = info.last_status >= 300 && info.last_status <= 699 &&
-                                  !established;
-            if (rejected)
+                                  !context->confirmed_once;
+            if (rejected && context->logical_bound)
                 (void)EnqueueCall(*context, RuntimeNotification::Type::call_rejected,
-                                  info, Error::remote_rejected);
-            const Error terminal_error = info.last_status == 0
-                ? Error::signaling_failed : Error::ok;
-            if (EnqueueCall(*context, RuntimeNotification::Type::call_finished,
-                            info, terminal_error))
-                context->terminal_reported = true;
+                                  info, TerminalError(info));
+            const Error terminal_error = TerminalError(info);
+            context->finish.notification = CopyCall(*context,
+                RuntimeNotification::Type::call_finished, info, terminal_error);
         }
     }
     FinishCallback(*context);
@@ -427,13 +439,23 @@ void PjsuaCallManager::OnCallMediaState(pjsua_call_id native_id) noexcept {
         context->media_quiescent = info.media_status != PJSUA_CALL_MEDIA_ACTIVE;
         if (context->phase == PjsuaCallPhase::confirmed ||
             context->phase == PjsuaCallPhase::local_hold) {
+            if (info.media_status == PJSUA_CALL_MEDIA_ERROR &&
+                (context->media_control == PjsuaCallContext::MediaControl::hold ||
+                 context->media_control == PjsuaCallContext::MediaControl::resume)) {
+                const auto type = context->media_control == PjsuaCallContext::MediaControl::hold
+                    ? RuntimeNotification::Type::call_held : RuntimeNotification::Type::call_resumed;
+                context->media_control = PjsuaCallContext::MediaControl::result;
+                (void)EnqueueCall(*context, type, info, Error::signaling_failed);
+            }
             const bool active = info.media_status == PJSUA_CALL_MEDIA_ACTIVE;
             const bool held = active && info.media_dir == PJMEDIA_DIR_ENCODING;
-            if (held && context->phase != PjsuaCallPhase::local_hold) {
+            if (held && context->media_control == PjsuaCallContext::MediaControl::hold) {
+                context->media_control = PjsuaCallContext::MediaControl::result;
                 context->phase = PjsuaCallPhase::local_hold;
                 (void)EnqueueCall(*context, RuntimeNotification::Type::call_held, info);
             } else if (active && info.media_dir == PJMEDIA_DIR_ENCODING_DECODING &&
-                       context->phase == PjsuaCallPhase::local_hold) {
+                       context->media_control == PjsuaCallContext::MediaControl::resume) {
+                context->media_control = PjsuaCallContext::MediaControl::result;
                 context->phase = PjsuaCallPhase::confirmed;
                 (void)EnqueueCall(*context, RuntimeNotification::Type::call_resumed, info);
             }
@@ -443,22 +465,37 @@ void PjsuaCallManager::OnCallMediaState(pjsua_call_id native_id) noexcept {
 }
 
 bool PjsuaCallManager::TryGetNotification(RuntimeNotification *notification) noexcept {
-    if (notification == nullptr || notification_size_ == 0) return false;
-    *notification = notifications_[notification_head_].notification;
-    notification_head_ = (notification_head_ + 1) % notifications_.size();
-    --notification_size_;
-    FlushDeferred();
+    if (notification == nullptr) return false;
+    PjsuaCallNotification *oldest = nullptr;
+    PjsuaCallContext *owner = nullptr;
+    for (auto &context : contexts_) {
+        TryRelease(context);
+        for (auto *record : {&context.admission, &context.outcome,
+                             &context.media_result, &context.finish}) {
+            if (record->sequence != 0 && (oldest == nullptr ||
+                static_cast<std::int64_t>(record->sequence - oldest->sequence) < 0)) {
+                oldest = record; owner = &context;
+            }
+        }
+    }
+    if (oldest == nullptr) return false;
+    *notification = oldest->notification;
+    oldest->sequence = 0;
+    if (oldest == &owner->media_result)
+        owner->media_control = PjsuaCallContext::MediaControl::none;
+    if (oldest == &owner->finish) Release(*owner);
     return true;
 }
 
 Error PjsuaCallManager::BeginShutdown() noexcept {
+    stopping_ = true;
     bool pending = false;
     for (PjsuaCallContext &context : contexts_) {
         if (context.phase == PjsuaCallPhase::free) continue;
         if (context.phase != PjsuaCallPhase::disconnected &&
             context.phase != PjsuaCallPhase::disconnecting && api_.call_hangup != nullptr) {
-            (void)api_.call_hangup(context.native_id, 0, nullptr, nullptr);
             context.phase = PjsuaCallPhase::disconnecting;
+            (void)api_.call_hangup(context.native_id, 0, nullptr, nullptr);
         }
         TryRelease(context);
         if (context.phase != PjsuaCallPhase::free) pending = true;
@@ -469,10 +506,8 @@ Error PjsuaCallManager::BeginShutdown() noexcept {
 void PjsuaCallManager::Reset() noexcept {
     for (PjsuaCallContext &context : contexts_)
         if (context.phase != PjsuaCallPhase::free) Release(context);
-    notification_head_ = 0;
-    notification_size_ = 0;
-    deferred_head_ = 0;
-    deferred_size_ = 0;
+    next_sequence_ = 0;
+    stopping_ = false;
 }
 
 } // namespace voip

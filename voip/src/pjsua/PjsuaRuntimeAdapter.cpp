@@ -32,8 +32,9 @@ void PjsuaRuntimeAdapter::DrainAccountNotifications() noexcept {
 }
 
 void PjsuaRuntimeAdapter::DrainCallNotifications() noexcept {
-    // Call records stay in PjsuaCallManager's 32-record public ring.  Do not
-    // copy them through the five-account staging ring and reintroduce loss.
+    // Call records stay in PjsuaCallManager's ordered per-context storage.
+    // Do not copy them through the five-account staging ring and reintroduce
+    // either loss or a second lifetime owner.
 }
 
 Error PjsuaRuntimeAdapter::Rollback() noexcept {

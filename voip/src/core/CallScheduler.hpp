@@ -116,6 +116,8 @@ public:
                          SchedulerEffects &effects) noexcept;
     Error OnTimeoutDeferred(CallHandle handle, ScheduledTransition *result,
                             SchedulerEffects &effects) noexcept;
+    Error AwaitPromotionTerminal(CallHandle handle,
+                                 SchedulerEffects &effects) noexcept;
     Error FinalizeTerminal(CallHandle handle, SchedulerEffects &effects) noexcept;
     Error OnTimeout(CallHandle handle, SchedulerEffects &effects) noexcept {
         return OnTimeout(handle, nullptr, effects);

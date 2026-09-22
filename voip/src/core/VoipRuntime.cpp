@@ -197,7 +197,8 @@ void VoipRuntime::PublishAdmission(CallHandle handle, bool waiting) noexcept {
     (void)PublishEvent(event);
 }
 
-void VoipRuntime::PublishTransition(const ScheduledTransition &transition) noexcept {
+void VoipRuntime::PublishTransition(const ScheduledTransition &transition,
+                                    const Status *status) noexcept {
     Event event{};
     event.type = EventType::call_state;
     event.call = transition.handle;
@@ -207,6 +208,7 @@ void VoipRuntime::PublishTransition(const ScheduledTransition &transition) noexc
     event.source_state = transition.transition.before.state;
     event.destination_state = transition.transition.after.state;
     event.transition = transition.transition.cause;
+    if (status != nullptr) event.status = *status;
     if (transition.transition.terminal_event_required) {
         if (!CommitCallTerminal(transition.handle, event))
             event_publication_failed_ = true;
@@ -216,8 +218,25 @@ void VoipRuntime::PublishTransition(const ScheduledTransition &transition) noexc
 }
 
 void VoipRuntime::ApplyEffects(const SchedulerEffects &effects) noexcept {
-    for (std::size_t i = 0; i < effects.count; ++i) {
-        const PromotionEffect &effect = effects.entries[i];
+    // A failed effect can free a lease and produce another FIFO promotion.
+    // Append those continuations behind every effect already selected by the
+    // scheduler; recursive dispatch would let a later FIFO entry overtake the
+    // unprocessed tail of the original two-effect batch. A logical call can
+    // enter this work list at most once, so seven slots are a complete bound.
+    std::array<PromotionEffect, CallScheduler::logical_call_capacity> work{};
+    std::size_t work_count = effects.count;
+    for (std::size_t i = 0; i < effects.count; ++i) work[i] = effects.entries[i];
+    const auto append = [&](const SchedulerEffects &continuation) noexcept {
+        for (std::size_t i = 0; i < continuation.count; ++i) {
+            if (work_count == work.size()) {
+                event_publication_failed_ = true;
+                return;
+            }
+            work[work_count++] = continuation.entries[i];
+        }
+    };
+    for (std::size_t i = 0; i < work_count; ++i) {
+        const PromotionEffect &effect = work[i];
         CallContext *context = scheduler_.Resolve(effect.handle);
         if (context == nullptr) continue;
         const OperationId signaling_operation = context->signaling_operation;
@@ -231,6 +250,19 @@ void VoipRuntime::ApplyEffects(const SchedulerEffects &effects) noexcept {
             error = adapter_.PromoteOutgoing(effect.handle, context->agent, context->remote_uri,
                                              &token);
         if (error != Error::ok) {
+            if (effect.direction == CallDirection::incoming &&
+                error == Error::invalid_handle && context->runtime_token != 0) {
+                // A queued native incoming call can disconnect before its FIFO
+                // promotion reaches the adapter. Its copied rejection/finish
+                // records are still authoritative, so relinquish only the
+                // promoted lease and keep the logical handle until finish.
+                SchedulerEffects continuation{};
+                context->native_terminal_pending = true;
+                if (scheduler_.AwaitPromotionTerminal(effect.handle,
+                                                       continuation) == Error::ok)
+                    append(continuation);
+                continue;
+            }
             // Promotion did not acquire a native call. Keep the scheduler
             // context live while committing its reserved terminal event so
             // the event can carry the operation and a valid handle. Explicit
@@ -242,7 +274,7 @@ void VoipRuntime::ApplyEffects(const SchedulerEffects &effects) noexcept {
                 PublishTransition(transition);
                 CompleteOperationIds(signaling_operation, operation, error);
                 FinalizeTerminal(effect.handle, terminal_effects);
-                ApplyEffects(terminal_effects);
+                append(terminal_effects);
             } else {
                 CompleteOperationIds(signaling_operation, operation, error);
             }
@@ -293,6 +325,16 @@ CallContext *VoipRuntime::FindCall(std::uint32_t token) noexcept {
         if (context != nullptr && context->runtime_token == token) return context;
     }
     return nullptr;
+}
+
+void VoipRuntime::CopyCallMetadata(
+    CallContext &context, const RuntimeNotification &notification) noexcept {
+    if (notification.remote_uri[0] != '\0')
+        std::memcpy(context.remote_uri, notification.remote_uri,
+                    sizeof(context.remote_uri));
+    std::memcpy(context.remote_address, notification.remote_address,
+                sizeof(context.remote_address));
+    context.sip_status = notification.sip_status;
 }
 
 const CallContext *VoipRuntime::FindCall(CallHandle handle) const noexcept {
@@ -364,6 +406,9 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
         (void)PublishEvent(event);
         return;
     }
+    Status call_status = notification.status;
+    call_status.error = notification.error;
+    call_status.sip_status = notification.sip_status;
     if (notification.type == RuntimeNotification::Type::incoming_call) {
         Event incoming{};
         incoming.type = EventType::incoming_call;
@@ -372,6 +417,10 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
         incoming.call_snapshot.agent = notification.agent;
         std::strncpy(incoming.call_snapshot.remote_uri, notification.remote_uri,
                      max_uri_length);
+        std::strncpy(incoming.call_snapshot.remote_address,
+                     notification.remote_address, max_address_length);
+        incoming.call_snapshot.sip_status = notification.sip_status;
+        incoming.status = call_status;
         VoipEventQueue::Reservation admission_reservation;
         if (!events_.ReserveGuaranteed(incoming, &admission_reservation)) {
             (void)adapter_.AbortIncoming(notification.token, 486);
@@ -418,6 +467,8 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
             RefreshResources();
             return;
         }
+        if (CallContext *context = scheduler_.Resolve(handle))
+            CopyCallMetadata(*context, notification);
         call_terminal_handles_[terminal_index] = handle;
         incoming.call = handle;
         incoming.call_snapshot = scheduler_.Snapshot(handle);
@@ -454,9 +505,9 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
     }
     CallContext *context = FindCall(notification.token);
     if (context == nullptr) return;
+    CopyCallMetadata(*context, notification);
     const CallState current_state = context->state_machine.Snapshot().state;
-    if ((notification.type == RuntimeNotification::Type::call_finished ||
-         notification.type == RuntimeNotification::Type::call_rejected) &&
+    if (notification.type == RuntimeNotification::Type::call_finished &&
         (current_state == CallState::terminated || current_state == CallState::idle)) {
         // A timer already committed this call's guaranteed terminal event.
         // Its native callback now permits logical/context lease release.
@@ -473,7 +524,7 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
     case RuntimeNotification::Type::call_accepted:
         error = scheduler_.OnAcceptance(context->handle, &transition);
         if (error == Error::ok) {
-            PublishTransition(transition);
+            PublishTransition(transition, &call_status);
             if (context->signaling_operation != 0) {
                 (void)operations_.Complete(context->signaling_operation, Error::ok);
                 context->signaling_operation = 0;
@@ -484,18 +535,18 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
         break;
     case RuntimeNotification::Type::call_rejected:
         {
-        const OperationId signaling_operation = context->signaling_operation;
-        const OperationId operation = context->operation;
         const std::uint32_t token = context->runtime_token;
-        context->native_terminal_pending = false;
+        // A rejection classifies the terminal outcome, but only finish proves
+        // callback/media quiescence. Keep even queued native ownership alive.
         const bool queued = !scheduler_.IsPromoted(context->handle);
+        context->native_terminal_pending = queued;
         error = queued
                     ? scheduler_.RejectDeferred(context->handle, &transition,
                                                 effects)
                     : scheduler_.Reject(context->handle, &transition, effects);
         if (error == Error::ok) {
-            PublishTransition(transition);
-            CompleteOperationIds(signaling_operation, operation,
+            PublishTransition(transition, &call_status);
+            CompleteCallOperations(*context,
                                  notification.error == Error::ok
                                      ? Error::remote_rejected
                                      : notification.error);
@@ -506,7 +557,6 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
                     context->teardown_pending = false;
                 }
             }
-            if (queued) FinalizeTerminal(context->handle, effects);
             ApplyEffects(effects);
         }
         }
@@ -520,17 +570,11 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
                                    CallContext::PendingOperation::set_held;
         context->native_terminal_pending = false;
         if (!scheduler_.IsPromoted(handle)) {
-            const bool queued = !scheduler_.IsPromoted(handle);
-            const Error cancel_error = queued
-                                           ? scheduler_.CancelDeferred(
-                                                 handle, &transition, effects)
-                                           : scheduler_.Cancel(handle, &transition,
-                                                               effects);
+            const Error cancel_error = scheduler_.RejectDeferred(handle, &transition, effects);
             if (cancel_error == Error::ok) {
                 PublishTransition(transition);
                 CompleteOperationIds(signaling_operation, operation, Error::cancelled);
-                if (queued) FinalizeTerminal(handle, effects);
-                else ForgetCall(handle);
+                FinalizeTerminal(handle, effects);
                 ApplyEffects(effects);
             }
             break;
@@ -539,13 +583,14 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
             context->state_machine.Snapshot().state != CallState::terminated &&
             context->state_machine.Snapshot().state != CallState::idle) {
             error = scheduler_.Hangup(context->handle, &transition, effects);
-            if (error == Error::ok) PublishTransition(transition);
+            if (error == Error::ok) PublishTransition(transition, &call_status);
         }
         if (scheduler_.IsLive(context->handle)) {
             context->teardown_pending = false;
             ScheduledTransition cleanup{};
             if (scheduler_.OnTeardownComplete(context->handle, &cleanup, effects) == Error::ok) {
                 CompleteOperationIds(signaling_operation, operation,
+                                     notification.error != Error::ok ? notification.error :
                                      media_pending ? Error::cancelled : Error::ok);
                 ForgetCall(cleanup.handle);
                 ApplyEffects(effects);
@@ -581,16 +626,16 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
         }
         break;
     case RuntimeNotification::Type::call_held:
-        error = scheduler_.SetHeld(context->handle, true, &transition);
-        if (error == Error::ok) {
-            PublishTransition(transition);
-            CompleteCallOperations(*context, Error::ok);
-        }
-        break;
     case RuntimeNotification::Type::call_resumed:
-        error = scheduler_.SetHeld(context->handle, false, &transition);
+        if (context->pending_operation != CallContext::PendingOperation::set_held) break;
+        if (notification.error != Error::ok) {
+            CompleteCallOperations(*context, notification.error);
+            break;
+        }
+        error = scheduler_.SetHeld(context->handle,
+            notification.type == RuntimeNotification::Type::call_held, &transition);
         if (error == Error::ok) {
-            PublishTransition(transition);
+            PublishTransition(transition, &call_status);
             CompleteCallOperations(*context, Error::ok);
         }
         break;

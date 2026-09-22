@@ -219,8 +219,9 @@ void CallScheduler::FillTransition(const CallContext &context,
     result->snapshot.hold_reason = transition.after.hold_reason;
     std::memcpy(result->snapshot.remote_uri, context.remote_uri,
                 sizeof(context.remote_uri));
-    result->snapshot.remote_address[0] = '\0';
-    result->snapshot.sip_status = 0;
+    std::memcpy(result->snapshot.remote_address, context.remote_address,
+                sizeof(context.remote_address));
+    result->snapshot.sip_status = context.sip_status;
     result->handle_invalidated = false;
 }
 
@@ -477,6 +478,19 @@ Error CallScheduler::OnTimeoutDeferred(
     return Error::ok;
 }
 
+Error CallScheduler::AwaitPromotionTerminal(
+    CallHandle handle, SchedulerEffects &effects) noexcept {
+    effects.Clear();
+    CallContext *context = calls_.Resolve(handle);
+    if (context == nullptr) return Error::invalid_handle;
+    if (context->phase != Phase::incoming && context->phase != Phase::outgoing)
+        return Error::invalid_state;
+    ClearAgentLease(*context);
+    context->phase = Phase::disconnecting;
+    (void)OnCapacityChanged(effects);
+    return Error::ok;
+}
+
 Error CallScheduler::FinalizeTerminal(CallHandle handle,
                                       SchedulerEffects &effects) noexcept {
     effects.Clear();
@@ -554,7 +568,9 @@ CallSnapshot CallScheduler::Snapshot(CallHandle handle) const noexcept {
     snapshot.hold_reason = projection.hold_reason;
     std::memcpy(snapshot.remote_uri, context->remote_uri,
                 sizeof(context->remote_uri));
-    snapshot.remote_address[0] = '\0';
+    std::memcpy(snapshot.remote_address, context->remote_address,
+                sizeof(context->remote_address));
+    snapshot.sip_status = context->sip_status;
     return snapshot;
 }
 

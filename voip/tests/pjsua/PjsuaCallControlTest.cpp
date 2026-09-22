@@ -17,6 +17,12 @@ struct Fixture {
     Fixture() noexcept { assert(registry.Initialize(config) == Error::ok); }
 };
 unsigned hold_calls = 0, resume_calls = 0, answer_calls = 0;
+pjsua_call_info control_info[7]{};
+pj_status_t ControlInfo(pjsua_call_id id, pjsua_call_info *info) {
+    if (id < 0 || id >= 7 || info == nullptr) return PJ_EINVAL;
+    *info = control_info[id];
+    return PJ_SUCCESS;
+}
 pj_status_t Hold(pjsua_call_id id, unsigned options, const pjsua_msg_data *data) {
     assert(id >= 0 && options == 0 && data == nullptr);
     ++hold_calls; return PJ_SUCCESS;
@@ -33,10 +39,13 @@ pj_status_t Answer(pjsua_call_id id, const pjsua_call_setting *setting, unsigned
 }
 
 void RunPjsuaCallControlTests() {
+    hold_calls = 0; resume_calls = 0; answer_calls = 0;
+    for (auto &info : control_info) info = {};
     Fixture fixture; FakePjsuaApi fake; fake.Reset();
     PjsuaAccountManager accounts(fake.Api());
     assert(accounts.Initialize(fixture.registry, 4) == Error::ok);
     auto api = fake.Api();
+    api.call_get_info = ControlInfo;
     api.call_set_hold2 = Hold; api.call_reinvite2 = Resume; api.call_answer2 = Answer;
     PjsuaCallManager calls(accounts, api);
     AgentHandle agent{}; assert(fixture.registry.GetAgentHandle(0, &agent) == Error::ok);
@@ -48,8 +57,22 @@ void RunPjsuaCallControlTests() {
     assert(fake.HangupCount() == 1 && fake.HangupStatus() == 487);
     assert(calls.Hangup(token) == Error::ok);
     assert(fake.HangupCount() == 2 && fake.HangupStatus() == 0);
+    control_info[0].state = PJSIP_INV_STATE_CONFIRMED;
+    calls.OnCallState(0);
+    RuntimeNotification media_result{};
+    assert(calls.TryGetNotification(&media_result) &&
+           media_result.type == RuntimeNotification::Type::call_accepted);
     assert(calls.SetHeld(token, true) == Error::ok);
+    control_info[0].media_status = PJSUA_CALL_MEDIA_ACTIVE;
+    control_info[0].media_dir = PJMEDIA_DIR_ENCODING;
+    calls.OnCallMediaState(0);
+    assert(calls.TryGetNotification(&media_result) &&
+           media_result.type == RuntimeNotification::Type::call_held);
     assert(calls.SetHeld(token, false) == Error::ok);
+    control_info[0].media_dir = PJMEDIA_DIR_ENCODING_DECODING;
+    calls.OnCallMediaState(0);
+    assert(calls.TryGetNotification(&media_result) &&
+           media_result.type == RuntimeNotification::Type::call_resumed);
     assert(hold_calls == 1 && resume_calls == 1);
     assert(calls.Answer(token) == Error::ok && answer_calls == 1);
 

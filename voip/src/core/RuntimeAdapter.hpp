@@ -30,6 +30,10 @@ struct RuntimeNotification {
     RegistrationState registration = RegistrationState::disabled;
     Status status{};
     char remote_uri[max_uri_length + 1]{};
+    char remote_address[max_address_length + 1]{};
+    bool media_active = false;
+    bool media_send_enabled = false;
+    bool media_receive_enabled = false;
 };
 
 struct RuntimeRequest {

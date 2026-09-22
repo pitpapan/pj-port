@@ -64,6 +64,8 @@ public:
     bool native_terminal_pending = false;
     bool answer_on_promotion = false;
     char remote_uri[max_uri_length + 1]{};
+    char remote_address[max_address_length + 1]{};
+    std::uint16_t sip_status = 0;
 
     CallContext() noexcept = default;
     ~CallContext() noexcept = default;

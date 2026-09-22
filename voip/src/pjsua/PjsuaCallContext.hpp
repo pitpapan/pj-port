@@ -3,6 +3,7 @@
 
 #include <pjsua-lib/pjsua.h>
 #include "../core/RuntimeAdapter.hpp"
+#include "PjsuaCallRecords.hpp"
 #include <voip/VoipTypes.hpp>
 
 #include <cstdint>
@@ -23,6 +24,17 @@ struct PjsuaCallContext {
     PjsuaCallPhase phase = PjsuaCallPhase::free;
     bool incoming = false, logical_bound = false, user_data_bound = false;
     bool media_quiescent = true, terminal_reported = false;
+    bool confirmed_once = false, terminal_seen = false;
+    bool future_security_clear = true;
+    enum class MediaControl : std::uint8_t { none, hold, resume, result };
+    MediaControl media_control = MediaControl::none;
+    // A context owns four independent obligations, not a best-effort ring:
+    // admission; confirmation OR rejection; one pending media result; finish.
+    // Confirmation and rejection are mutually exclusive. A new media control
+    // is refused until its previous result has been consumed. Context reuse
+    // waits for finish consumption. Thus no callback sequence can overwrite
+    // a required record, even when the consumer stops indefinitely.
+    PjsuaCallNotification admission{}, outcome{}, media_result{}, finish{};
     unsigned callback_depth = 0;
 };
 

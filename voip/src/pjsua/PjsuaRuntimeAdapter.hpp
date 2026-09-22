@@ -51,7 +51,7 @@ private:
     PjsuaRuntime runtime_;
     PjsuaTransportManager transport_;
     // Account state has at most five producers. Call-state records remain in
-    // the call manager's full public 32-record ring.
+    // the call manager's ordered per-context storage.
     std::array<RuntimeNotification, PjsuaAccountManager::max_accounts> notifications_{};
     std::size_t notification_head_{};
     std::size_t notification_size_{};

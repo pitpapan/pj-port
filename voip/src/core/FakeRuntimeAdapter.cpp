@@ -149,6 +149,11 @@ Error FakeRuntimeAdapter::AbortIncoming(std::uint32_t token,
     notification.token = token;
     notification.sip_status = status;
     notification.error = Error::remote_rejected;
+    if ((callbacks_deferred_ ? deferred_count_ : count_) > capacity - 2)
+        return Error::resource_exhausted;
+    const Error rejected = Enqueue(notification);
+    if (rejected != Error::ok) return rejected;
+    notification.type = RuntimeNotification::Type::call_finished;
     return Enqueue(notification);
 }
 
@@ -212,6 +217,11 @@ Error FakeRuntimeAdapter::Reject(std::uint32_t token, std::uint16_t status) noex
     notification.token = token;
     notification.sip_status = status;
     notification.error = Error::remote_rejected;
+    if ((callbacks_deferred_ ? deferred_count_ : count_) > capacity - 2)
+        return Error::resource_exhausted;
+    const Error rejected = Enqueue(notification);
+    if (rejected != Error::ok) return rejected;
+    notification.type = RuntimeNotification::Type::call_finished;
     return Enqueue(notification);
 }
 
@@ -226,6 +236,11 @@ Error FakeRuntimeAdapter::Cancel(std::uint32_t token) noexcept {
     notification.type = RuntimeNotification::Type::call_rejected;
     notification.token = token;
     notification.error = Error::cancelled;
+    if ((callbacks_deferred_ ? deferred_count_ : count_) > capacity - 2)
+        return Error::resource_exhausted;
+    const Error rejected = Enqueue(notification);
+    if (rejected != Error::ok) return rejected;
+    notification.type = RuntimeNotification::Type::call_finished;
     return Enqueue(notification);
 }
 

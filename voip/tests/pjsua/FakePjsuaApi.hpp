@@ -253,7 +253,7 @@ private:
     // Task 5 includes five account add/register/unregister/delete records;
     // retain the complete ordering trace without overwriting fake state.
     char sequence_[512]{}; std::size_t used_ = 0;
-    char teardown_sequence_[256]{}; std::size_t teardown_used_ = 0;
+    char teardown_sequence_[1024]{}; std::size_t teardown_used_ = 0;
     pjsua_config ua_{}; pjsua_media_config media_{}; pjsua_logging_config log_{};
     std::atomic<unsigned> answer_count_{0}; std::atomic<unsigned> hangup_count_{0};
     std::atomic<unsigned> answer_status_{0}; std::atomic<unsigned> hangup_status_{0};
@@ -483,6 +483,7 @@ private:
         if (fake.CallFailure(CallEntry::set_user_data) != PJ_SUCCESS)
             return fake.CallFailure(CallEntry::set_user_data);
         if (!fake.ValidCallId(call_id)) return PJ_EINVAL;
+        if (user_data == nullptr) fake.RecordTeardown("clear-call");
         fake.call_records_[static_cast<std::size_t>(call_id)].user_data = user_data;
         return PJ_SUCCESS;
     }

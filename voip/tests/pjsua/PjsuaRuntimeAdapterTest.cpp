@@ -4,10 +4,21 @@
 #include "../../src/pjsua/PjsuaCallbackRouter.hpp"
 
 #include <cassert>
+#ifdef __ZEPHYR__
 #include <zephyr/sys/printk.h>
+#else
+#include <cstdio>
+#define printk std::printf
+#endif
 
 namespace voip::test {
 namespace {
+pjsua_call_info adapter_call_info[7]{};
+pj_status_t AdapterCallInfo(pjsua_call_id id, pjsua_call_info *info) {
+    if (id < 0 || id >= 7 || info == nullptr) return PJ_EINVAL;
+    *info = adapter_call_info[id];
+    return PJ_SUCCESS;
+}
 class Source final : public PcmSource { public: PcmFormat Format() const noexcept override { return {8000, 160, 1, SampleFormat::signed_16}; } Error Read(std::int16_t *, std::size_t, std::uint64_t) noexcept override { return Error::ok; } };
 class Sink final : public PcmSink { public: PcmFormat Format() const noexcept override { return {8000, 160, 1, SampleFormat::signed_16}; } Error Write(const std::int16_t *, std::size_t, std::uint64_t) noexcept override { return Error::ok; } void Flush() noexcept override {} };
 struct Fixture {
@@ -344,7 +355,10 @@ void RunPjsuaRuntimeAdapterTests() {
         // that notification, so this is intentionally asserted at the adapter
         // boundary rather than against the fake's callback dispatch.
         fake.Reset();
-        PjsuaRuntimeAdapter errored(fake.Api());
+        for (auto &info : adapter_call_info) info = {};
+        PjsuaApi error_api = fake.Api();
+        error_api.call_get_info = AdapterCallInfo;
+        PjsuaRuntimeAdapter errored(error_api);
         assert(errored.Initialize(registry, fixture.config.security,
                                   fixture.config.conference_format) == Error::ok);
         pjsua_call_setting setting{};
@@ -369,6 +383,14 @@ void RunPjsuaRuntimeAdapterTests() {
         assert(errored.Pump(301, 0) == Error::internal_failure);
         assert(!errored.TryGetNotification(&notification));
         fake.SetThreadRegistered(true);
+        assert(errored.Shutdown() == Error::busy);
+        assert(errored.Shutdown() == Error::busy);
+        assert(fake.CallUserData(native_id) != nullptr &&
+               fake.AccountClearCount() == 0);
+        adapter_call_info[native_id].state = PJSIP_INV_STATE_DISCONNECTED;
+        adapter_call_info[native_id].media_status = PJSUA_CALL_MEDIA_NONE;
+        fake.UaConfig().cb.on_call_state(native_id, nullptr);
+        assert(fake.CallUserData(native_id) == nullptr);
         assert(errored.Shutdown() == Error::busy);
         assert(errored.Shutdown() == Error::ok);
     };

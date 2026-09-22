@@ -136,17 +136,29 @@ void RunPjsuaCallContextTests() {
     calls.Reset();
     AssertCallResourceBaseline(calls, fake);
 
-    // The copied notification ring remains bounded even when native contexts
-    // are released before the actor gets a chance to drain it.
+    // Disconnected contexts retain their copied admission and finish records
+    // until the actor drains them; their storage cannot be reused behind the
+    // backlog even though native user data is already unreachable.
     PjsuaApi pressure_api = fake.Api();
     pressure_api.call_get_info = &DisconnectedInfo;
     PjsuaCallManager pressure(accounts, pressure_api);
     for (pjsua_call_id id : ids) pressure.OnIncomingCall(2, id);
     for (pjsua_call_id id : ids) pressure.OnCallState(id);
-    assert(pressure.Count() == 0);
+    assert(pressure.Count() == 7);
+    for (pjsua_call_id id : ids) assert(fake.CallUserData(id) == nullptr);
     pressure.OnIncomingCall(2, 6);
-    assert(pressure.Count() == 0 && fake.AnswerStatus() == 486 && fake.HangupStatus() == 486);
-    pressure.Reset();
+    assert(pressure.Count() == 7 && fake.AnswerStatus() == 486 && fake.HangupStatus() == 486);
+    std::uint32_t retained_tokens[7]{};
+    for (std::size_t index = 0; index < 7; ++index) {
+        assert(pressure.TryGetNotification(&notification));
+        assert(notification.type == RuntimeNotification::Type::incoming_call);
+        retained_tokens[index] = notification.token;
+    }
+    for (std::size_t index = 0; index < 7; ++index) {
+        assert(pressure.TryGetNotification(&notification));
+        assert(notification.type == RuntimeNotification::Type::call_finished &&
+               notification.token == retained_tokens[index]);
+    }
     AssertCallResourceBaseline(pressure, fake);
     printk("PjsuaCallContextTest PASSED\n");
 }
