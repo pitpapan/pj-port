@@ -79,4 +79,8 @@ config VOIP_PJSUA_REGISTRATION_TEST
 	bool "PJSUA Plan 3 five-account TCP Digest registration validation"
 	depends on VOIP_SERVICE && VOIP_PJSUA && PJSUA && PJSIP_REGC && PJSIP_TCP_TRANSPORT
 
+config VOIP_PJSUA_TWO_CALL_TEST
+	bool "PJSUA two-call scripted SIP peer validation"
+	depends on VOIP_SERVICE && VOIP_PJSUA && PJSUA && PJSIP_INVITE && PJSIP_TCP_TRANSPORT
+
 endmenu
