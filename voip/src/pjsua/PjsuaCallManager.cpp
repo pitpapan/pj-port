@@ -445,7 +445,7 @@ void PjsuaCallManager::OnCallMediaState(pjsua_call_id native_id) noexcept {
                 const auto type = context->media_control == PjsuaCallContext::MediaControl::hold
                     ? RuntimeNotification::Type::call_held : RuntimeNotification::Type::call_resumed;
                 context->media_control = PjsuaCallContext::MediaControl::result;
-                (void)EnqueueCall(*context, type, info, Error::signaling_failed);
+                (void)EnqueueCall(*context, type, info, Error::media_failed);
             }
             const bool active = info.media_status == PJSUA_CALL_MEDIA_ACTIVE;
             const bool held = active && info.media_dir == PJMEDIA_DIR_ENCODING;

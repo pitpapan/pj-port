@@ -105,8 +105,8 @@ void LifecycleAndControlMatrix() {
         snapshot[0].media_status=PJSUA_CALL_MEDIA_ERROR;
         f.calls.OnCallMediaState(0);
         auto failure=f.Pop(held ? RuntimeNotification::Type::call_held : RuntimeNotification::Type::call_resumed,token);
-        assert(failure.error==Error::signaling_failed &&
-               failure.status.error==Error::signaling_failed &&
+        assert(failure.error==Error::media_failed &&
+               failure.status.error==Error::media_failed &&
                !failure.media_active); f.Empty();
         assert(f.calls.SetHeld(token,held)==Error::ok);
         f.Media(0,PJMEDIA_DIR_NONE); f.Empty();
@@ -209,6 +209,35 @@ void IncomingCancelAndConfirmation() {
     f.State(id,PJSIP_INV_STATE_DISCONNECTED); f.Pop(RuntimeNotification::Type::call_finished,incoming.token);
     f.Empty();
 }
+void FinishOnlyIncomingFailuresPreserveStatus() {
+    const Error errors[]={Error::signaling_failed,Error::media_failed};
+    const unsigned statuses[]={0,200};
+    const pjsua_call_media_status media[]={PJSUA_CALL_MEDIA_NONE,
+                                           PJSUA_CALL_MEDIA_ERROR};
+    for (unsigned i=0;i<2;++i) {
+        Fixture f;
+        pjsua_call_setting setting{}; f.api.call_setting_default(&setting);
+        char uri[]="sip:finish-only@example.test";
+        pj_str_t destination{uri,sizeof(uri)-1};
+        pjsua_call_id id{};
+        assert(f.api.call_make_call(2,&destination,&setting,nullptr,nullptr,&id)==PJ_SUCCESS);
+        f.calls.OnIncomingCall(2,id);
+        RuntimeNotification incoming{};
+        assert(f.calls.TryGetNotification(&incoming));
+        assert(incoming.type==RuntimeNotification::Type::incoming_call);
+        assert(f.calls.AdmitIncoming({1,1},f.agent_handle,incoming.token)==Error::ok);
+        snapshot[id].state=PJSIP_INV_STATE_DISCONNECTED;
+        snapshot[id].last_status=static_cast<pjsip_status_code>(statuses[i]);
+        snapshot[id].media_status=media[i];
+        f.calls.OnCallState(id);
+        const auto finish=f.Pop(RuntimeNotification::Type::call_finished,incoming.token);
+        assert(finish.error==errors[i] && finish.status.error==errors[i]);
+        assert(finish.sip_status==statuses[i] &&
+               finish.status.sip_status==statuses[i]);
+        f.Empty();
+        assert(f.calls.Count()==0 && f.fake.CallUserData(id)==nullptr);
+    }
+}
 void LiveShutdownRetainsStorageAndOrdersCleanup() {
     Fixture f;
     // The adapter composes the real managers; fake only the native boundary.
@@ -247,7 +276,8 @@ void RunPjsuaCallStateTests() {
     UnsolicitedMediaCannotOverflow(); LifecycleAndControlMatrix();
     RejectionsAndCopiedPressure(); OnePendingControlBoundsStorage();
     ReentrantDisconnectRetainsLease();
-    IncomingCancelAndConfirmation(); LiveShutdownRetainsStorageAndOrdersCleanup();
+    IncomingCancelAndConfirmation(); FinishOnlyIncomingFailuresPreserveStatus();
+    LiveShutdownRetainsStorageAndOrdersCleanup();
     printk("PjsuaCallStateTest PASSED\n");
 }
 } // namespace voip::test

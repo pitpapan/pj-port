@@ -1978,7 +1978,7 @@ void test_task6_media_results_complete_once() {
             voip::RuntimeNotification n{};
             n.token=810;
             n.type=held ? voip::RuntimeNotification::Type::call_held : voip::RuntimeNotification::Type::call_resumed;
-            n.error=failure ? voip::Error::signaling_failed : voip::Error::ok;
+            n.error=failure ? voip::Error::media_failed : voip::Error::ok;
             assert(f.runtime.InjectNotification(n)==voip::Error::ok); f.Step(f.now);
             assert(f.Completions(operation,n.error)==1);
             voip::CallSnapshot state{}; assert(f.runtime.GetCallSnapshot(call,&state)==voip::Error::ok);
@@ -1988,6 +1988,96 @@ void test_task6_media_results_complete_once() {
             assert(f.count==before && f.Completions(operation,n.error)==1);
         }
     }
+}
+
+void test_task6_queued_finish_only_failure_preserves_status_and_fifo() {
+    ControlFixture incoming;
+    const auto active=incoming.Incoming(830);
+    const auto failed=incoming.Incoming(831);
+    const auto next=incoming.Incoming(832);
+    voip::OperationId answer{};
+    assert(incoming.runtime.Answer(failed,&answer)==voip::Error::ok);
+    incoming.Step(incoming.now);
+    assert(incoming.Completions(answer,voip::Error::ok)==1);
+    assert(incoming.Requests(voip::RuntimeRequest::Type::answer,831)==0);
+    voip::RuntimeNotification finish{};
+    finish.type=voip::RuntimeNotification::Type::call_finished;
+    finish.token=831;
+    finish.error=voip::Error::signaling_failed;
+    finish.status.error=voip::Error::signaling_failed;
+    std::strcpy(finish.status.reason,"Transport failure");
+    const auto before=incoming.count;
+    assert(incoming.runtime.InjectNotification(finish)==voip::Error::ok);
+    incoming.Step(incoming.now);
+    assert(!incoming.Live(failed) && incoming.Terminals(failed)==1);
+    assert(incoming.Completions(answer,voip::Error::ok)==1);
+    assert(incoming.Requests(voip::RuntimeRequest::Type::promote_incoming,832)==0);
+    bool copied_terminal=false;
+    for (std::size_t i=before;i<incoming.count;++i) {
+        const auto &event=incoming.events[i];
+        if (event.type!=voip::EventType::call_state ||
+            event.call.slot!=failed.slot ||
+            event.call.generation!=failed.generation ||
+            event.destination_state!=voip::CallState::terminated) continue;
+        assert(event.status.error==voip::Error::signaling_failed);
+        assert(event.status.sip_status==0);
+        assert(std::strcmp(event.status.reason,"Transport failure")==0);
+        copied_terminal=true;
+    }
+    assert(copied_terminal);
+    const auto after_finish=incoming.count;
+    assert(incoming.runtime.InjectNotification(finish)==voip::Error::ok);
+    incoming.Step(incoming.now);
+    assert(incoming.count==after_finish && incoming.Terminals(failed)==1);
+    assert(incoming.Completions(answer,voip::Error::ok)==1);
+    incoming.Notify(voip::RuntimeNotification::Type::call_finished,830);
+    assert(!incoming.Live(active));
+    assert(incoming.Requests(voip::RuntimeRequest::Type::promote_incoming,832)==1);
+    assert(incoming.Live(next));
+}
+
+void test_task6_finish_only_failure_completes_pending_operation_once() {
+    ControlFixture pending;
+    const auto established=pending.Incoming(840);
+    pending.Notify(voip::RuntimeNotification::Type::call_accepted,840);
+    voip::OperationId hold{};
+    assert(pending.runtime.SetHeld(established,true,&hold)==voip::Error::ok);
+    pending.Step(pending.now);
+    assert(pending.Completions(hold,voip::Error::media_failed)==0);
+    voip::RuntimeNotification finish{};
+    finish.type=voip::RuntimeNotification::Type::call_finished;
+    finish.token=840;
+    finish.error=voip::Error::media_failed;
+    finish.status.error=voip::Error::media_failed;
+    std::strcpy(finish.status.reason,"Media failure");
+    const auto operation_before=pending.count;
+    assert(pending.runtime.InjectNotification(finish)==voip::Error::ok);
+    pending.Step(pending.now);
+    assert(!pending.Live(established) && pending.Terminals(established)==1);
+    assert(pending.Completions(hold,voip::Error::media_failed)==1);
+    std::size_t terminal_index=pending.count;
+    std::size_t operation_index=pending.count;
+    for (std::size_t i=operation_before;i<pending.count;++i) {
+        const auto &event=pending.events[i];
+        if (event.type==voip::EventType::call_state &&
+            event.call.slot==established.slot &&
+            event.call.generation==established.generation &&
+            event.destination_state==voip::CallState::terminated) {
+            assert(event.status.error==voip::Error::media_failed);
+            assert(std::strcmp(event.status.reason,"Media failure")==0);
+            terminal_index=i;
+        } else if (event.type==voip::EventType::operation_terminal &&
+                   event.operation==hold) {
+            assert(event.status.error==voip::Error::media_failed);
+            operation_index=i;
+        }
+    }
+    assert(terminal_index<operation_index && operation_index<pending.count);
+    const auto after_operation=pending.count;
+    assert(pending.runtime.InjectNotification(finish)==voip::Error::ok);
+    pending.Step(pending.now);
+    assert(pending.count==after_operation);
+    assert(pending.Completions(hold,voip::Error::media_failed)==1);
 }
 
 void test_task6_cancel_before_promotion_releases_only_on_finish() {
@@ -2013,7 +2103,7 @@ void test_task6_cancel_before_promotion_releases_only_on_finish() {
 
 int main(int argc, char **argv) {
     if (argc == 2) {
-        if (std::strcmp(argv[1], "--task6") == 0) { test_task6_cancel_retains_native_until_finish(); test_task6_media_results_complete_once(); test_task6_cancel_before_promotion_releases_only_on_finish(); }
+        if (std::strcmp(argv[1], "--task6") == 0) { test_task6_cancel_retains_native_until_finish(); test_task6_media_results_complete_once(); test_task6_queued_finish_only_failure_preserves_status_and_fifo(); test_task6_finish_only_failure_completes_pending_operation_once(); test_task6_cancel_before_promotion_releases_only_on_finish(); }
         else if (std::strcmp(argv[1], "--task5-matrix") == 0) test_task5_command_state_matrix();
         else if (std::strcmp(argv[1], "--task5-preanswer") == 0) test_task5_preanswer_and_terminal_acceptance();
         else if (std::strcmp(argv[1], "--task5-timers") == 0) test_task5_independent_timer_epochs_and_wrap();
@@ -2024,6 +2114,8 @@ int main(int argc, char **argv) {
     }
     test_task6_cancel_retains_native_until_finish();
     test_task6_media_results_complete_once();
+    test_task6_queued_finish_only_failure_preserves_status_and_fifo();
+    test_task6_finish_only_failure_completes_pending_operation_once();
     test_task6_cancel_before_promotion_releases_only_on_finish();
     test_task5_command_state_matrix();
     test_task5_preanswer_and_terminal_acceptance();

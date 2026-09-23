@@ -572,8 +572,11 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
         if (!scheduler_.IsPromoted(handle)) {
             const Error cancel_error = scheduler_.RejectDeferred(handle, &transition, effects);
             if (cancel_error == Error::ok) {
-                PublishTransition(transition);
-                CompleteOperationIds(signaling_operation, operation, Error::cancelled);
+                PublishTransition(transition, &call_status);
+                CompleteOperationIds(signaling_operation, operation,
+                                     notification.error != Error::ok
+                                         ? notification.error
+                                         : Error::cancelled);
                 FinalizeTerminal(handle, effects);
                 ApplyEffects(effects);
             }
