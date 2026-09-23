@@ -13,6 +13,17 @@ struct SipPeerStats {
     unsigned acks;
     unsigned byes;
     unsigned cancels;
+    unsigned trying;
+    unsigned ringing;
+    unsigned reinvites;
+    unsigned reinvite_responses;
+    unsigned reinvite_acks;
+    unsigned registrations;
+    unsigned incoming_trying;
+    unsigned incoming_ringing;
+    unsigned cancel_responses;
+    unsigned cancelled_invites;
+    unsigned minimum_stack_unused;
     unsigned parse_failures;
 };
 
@@ -24,9 +35,9 @@ public:
     static constexpr unsigned pjsua_listener_port = 5097;
 
     static ScriptedSipPeer &Instance() noexcept;
-    void Reset() noexcept;
     bool Start() noexcept;
-    void Pump() noexcept;
+    static bool FramingChecks() noexcept;
+    static bool ZeroWorkerConfiguration() noexcept;
     void SetNextOutgoing(SipPeerScript script) noexcept;
     bool StartIncoming(SipPeerScript script) noexcept;
     SipPeerStats Stats() const noexcept;

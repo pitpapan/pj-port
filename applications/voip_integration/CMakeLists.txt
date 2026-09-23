@@ -134,6 +134,7 @@ if(CONFIG_VOIP_PJSUA_REGISTRATION_TEST AND NOT CONFIG_VOIP_PJSUA_TWO_CALL_TEST)
   )
 endif()
 if(CONFIG_VOIP_PJSUA_TWO_CALL_TEST)
+  target_link_options(app INTERFACE -Wl,--wrap=pjsua_init)
   # Reuse the deliberately test-only listener-port hook so incoming TCP SIP
   # reaches a deterministic PJSUA transport without exposing it publicly.
   target_compile_definitions(app PRIVATE CONFIG_VOIP_PJSUA_REGISTRATION_TEST=1)
