@@ -162,6 +162,25 @@ void RejectionsAndCopiedPressure() {
     }
     f.Empty(); assert(f.calls.Count()==0);
 }
+void TransportEof503IsNotRemote503() {
+    Fixture f; const auto eof_token = f.Outgoing(0); const auto remote_token = f.Outgoing(1);
+    char eof_reason[] = "End of file (PJ_EEOF)";
+    char remote_reason[] = "Service Unavailable";
+    snapshot[0].last_status_text = {eof_reason, static_cast<pj_ssize_t>(sizeof(eof_reason) - 1)};
+    snapshot[1].last_status_text = {remote_reason, static_cast<pj_ssize_t>(sizeof(remote_reason) - 1)};
+    f.State(0, PJSIP_INV_STATE_DISCONNECTED, 503, true);
+    f.State(1, PJSIP_INV_STATE_DISCONNECTED, 503, true);
+    f.Media(0, PJMEDIA_DIR_NONE); f.Media(1, PJMEDIA_DIR_NONE);
+    const auto eof_rejected = f.Pop(RuntimeNotification::Type::call_rejected, eof_token);
+    const auto remote_rejected = f.Pop(RuntimeNotification::Type::call_rejected, remote_token);
+    assert(eof_rejected.error == Error::signaling_failed);
+    assert(remote_rejected.error == Error::remote_rejected);
+    const auto eof_finished = f.Pop(RuntimeNotification::Type::call_finished, eof_token);
+    const auto remote_finished = f.Pop(RuntimeNotification::Type::call_finished, remote_token);
+    assert(eof_finished.error == Error::signaling_failed);
+    assert(remote_finished.error == Error::remote_rejected);
+    f.Empty();
+}
 void OnePendingControlBoundsStorage() {
     Fixture f; std::uint32_t tokens[7]{};
     for (unsigned i=0;i<7;++i) { tokens[i]=f.Outgoing(i); f.State(i,PJSIP_INV_STATE_CONFIRMED); }
@@ -274,7 +293,7 @@ void LiveShutdownRetainsStorageAndOrdersCleanup() {
 }
 void RunPjsuaCallStateTests() {
     UnsolicitedMediaCannotOverflow(); LifecycleAndControlMatrix();
-    RejectionsAndCopiedPressure(); OnePendingControlBoundsStorage();
+    RejectionsAndCopiedPressure(); TransportEof503IsNotRemote503(); OnePendingControlBoundsStorage();
     ReentrantDisconnectRetainsLease();
     IncomingCancelAndConfirmation(); FinishOnlyIncomingFailuresPreserveStatus();
     LiveShutdownRetainsStorageAndOrdersCleanup();

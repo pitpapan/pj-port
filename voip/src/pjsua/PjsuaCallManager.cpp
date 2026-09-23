@@ -5,8 +5,21 @@
 namespace voip {
 
 namespace {
+bool IsTransportEof503(const pjsua_call_info &info) noexcept {
+    if (info.last_status != 503 || info.last_status_text.ptr == nullptr ||
+        info.last_status_text.slen <= 0)
+        return false;
+    char reason[max_reason_length + 1]{};
+    const std::size_t length = static_cast<std::size_t>(info.last_status_text.slen) > max_reason_length
+        ? max_reason_length : static_cast<std::size_t>(info.last_status_text.slen);
+    std::memcpy(reason, info.last_status_text.ptr, length);
+    return std::strstr(reason, "PJ_EEOF") != nullptr;
+}
 Error TerminalError(const pjsua_call_info &info) noexcept {
     if (info.last_status == 0) return Error::signaling_failed;
+    // PJSIP represents a TCP peer close as a locally synthesized 503. The
+    // bounded copied reason differentiates it from a remote SIP 503.
+    if (IsTransportEof503(info)) return Error::signaling_failed;
     if (info.last_status == 487) return Error::cancelled;
     if (info.last_status == 415 || info.last_status == 488 ||
         info.last_status == 606)

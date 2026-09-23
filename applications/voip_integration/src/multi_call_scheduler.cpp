@@ -11,34 +11,45 @@ int failures;
 #define CHECK(x) do { if (!(x)) { printk("[two-call] FAIL %d: %s\n", __LINE__, #x); ++failures; } } while (false)
 class Source final : public voip::PcmSource { public: voip::PcmFormat Format() const noexcept override { return format; } voip::Error Read(std::int16_t *, std::size_t, std::uint64_t) noexcept override { return voip::Error::ok; } };
 class Sink final : public voip::PcmSink { public: voip::PcmFormat Format() const noexcept override { return format; } voip::Error Write(const std::int16_t *, std::size_t, std::uint64_t) noexcept override { return voip::Error::ok; } void Flush() noexcept override {} };
-struct Seen { voip::CallHandle calls[12]{}; voip::AgentHandle agents[12]{}; voip::Error errors[12]{}; char remote[12][256]{}; unsigned incoming{}, accepted{}, finished{}; };
+struct Seen { voip::CallHandle calls[12]{}; voip::AgentHandle agents[12]{}; voip::CallHandle finished_calls[12]{}; voip::Error errors[12]{}; char remote[12][256]{}; unsigned registered[5]{}; unsigned incoming{}, accepted{}, finished{}; };
 void Record(const voip::Event &event, Seen &seen) {
+    if (event.type == voip::EventType::agent_snapshot && event.agent.slot < 5 && event.agent_snapshot.registration == voip::RegistrationState::registered) ++seen.registered[event.agent.slot];
     if (event.type == voip::EventType::incoming_call) { ++seen.incoming; seen.calls[seen.incoming - 1] = event.call; }
-    if (event.type == voip::EventType::call_state && event.destination_state == voip::CallState::established && seen.accepted < 12) { seen.calls[seen.accepted] = event.call; seen.agents[seen.accepted] = event.agent; std::snprintf(seen.remote[seen.accepted], sizeof(seen.remote[0]), "%s", event.call_snapshot.remote_uri); ++seen.accepted; }
-    if (event.type == voip::EventType::call_state && event.destination_state == voip::CallState::terminated && seen.finished < 12) seen.errors[seen.finished++] = event.status.error;
+    if (event.type == voip::EventType::call_state && event.destination_state == voip::CallState::established && seen.accepted < 12) { seen.calls[seen.accepted] = event.call; seen.agents[seen.accepted] = event.call_snapshot.agent; std::snprintf(seen.remote[seen.accepted], sizeof(seen.remote[0]), "%s", event.call_snapshot.remote_uri); ++seen.accepted; }
+    if (event.type == voip::EventType::call_state && event.destination_state == voip::CallState::terminated && seen.finished < 12) { printk("[two-call] terminal call=%u/%u error=%u sip=%u reason=%s\n", event.call.slot, event.call.generation, static_cast<unsigned>(event.status.error), event.status.sip_status, event.status.reason); seen.finished_calls[seen.finished] = event.call; seen.errors[seen.finished++] = event.status.error; }
 }
-bool Wait(voip::VoipService &service, Seen &seen, unsigned *value, unsigned want) { for (unsigned ms = 0; ms < 12000 && *value < want; ms += 50) { voip::Event event{}; if (service.WaitForEvent(&event, 50) == voip::Error::ok) Record(event, seen); } return *value >= want; }
+bool Wait(voip::VoipService &service, Seen &seen, unsigned *value, unsigned want) { const int64_t deadline = k_uptime_get() + 3000; while (k_uptime_get() < deadline && *value < want) { voip_integration::ScriptedSipPeer::Instance().Pump(); voip::Event event{}; if (service.WaitForEvent(&event, 5) == voip::Error::ok) Record(event, seen); k_sleep(K_MSEC(5)); } return *value >= want; }
+void Drain(voip::VoipService &service, Seen &seen) { const int64_t deadline = k_uptime_get() + 600; while (k_uptime_get() < deadline) { voip_integration::ScriptedSipPeer::Instance().Pump(); voip::Event event{}; if (service.WaitForEvent(&event, 5) == voip::Error::ok) Record(event, seen); k_sleep(K_MSEC(5)); } }
 bool Has(const Seen &seen, voip::Error error) { for (unsigned i = 0; i < seen.finished; ++i) if (seen.errors[i] == error) return true; return false; }
+bool Registered(const Seen &seen) { return seen.registered[0] != 0 && seen.registered[1] != 0 && seen.registered[2] != 0 && seen.registered[3] != 0 && seen.registered[4] != 0; }
+unsigned TerminalCount(const Seen &seen, voip::CallHandle handle) { unsigned count{}; for (unsigned i = 0; i < seen.finished; ++i) if (seen.finished_calls[i].slot == handle.slot && seen.finished_calls[i].generation == handle.generation) ++count; return count; }
 }
 int main() {
     using voip_integration::ScriptedSipPeer; using voip_integration::SipPeerScript;
     auto &peer = ScriptedSipPeer::Instance(); peer.Reset(); CHECK(peer.Start());
     Source sources[5]; Sink sinks[5]; char identities[5][64]{}; voip::AgentConfig agents[5]{};
-    for (unsigned i = 0; i < 5; ++i) { std::snprintf(identities[i], sizeof(identities[i]), "<sip:agent%u@127.0.0.1>", i); agents[i] = {{identities[i], "sip:127.0.0.1:5098;transport=tcp", "agent", "password"}, {&sources[i], &sinks[i]}, false}; }
-    voip::VoipService service; CHECK(service.Initialize({agents, 5, 1000, 1000, format, {voip::SignalingSecurity::none, voip::MediaSecurity::none}}) == voip::Error::ok);
+    for (unsigned i = 0; i < 5; ++i) { std::snprintf(identities[i], sizeof(identities[i]), "<sip:agent%u@127.0.0.1>", i); agents[i] = {{identities[i], "sip:127.0.0.1:5098;transport=tcp", "agent", "password"}, {&sources[i], &sinks[i]}, true}; }
+    static voip::VoipService service;
+    CHECK(service.Initialize({agents, 5, 1000, 1000, format, {voip::SignalingSecurity::none, voip::MediaSecurity::none}}) == voip::Error::ok);
     voip::AgentHandle a{}, b{}; CHECK(service.GetAgentHandle(0, &a) == voip::Error::ok); CHECK(service.GetAgentHandle(1, &b) == voip::Error::ok);
     Seen seen{}; voip::OperationId operation{};
-    CHECK(service.Dial(a, {"sip:remote-a@127.0.0.1:5098;transport=tcp"}, &operation) == voip::Error::ok);
+    const int64_t registration_deadline = k_uptime_get() + 3000;
+    while (k_uptime_get() < registration_deadline && !Registered(seen)) { peer.Pump(); voip::Event event{}; if (service.WaitForEvent(&event, 5) == voip::Error::ok) Record(event, seen); k_sleep(K_MSEC(5)); }
+    CHECK(Registered(seen));
+    CHECK(service.Dial(b, {"sip:remote-a@127.0.0.1:5098;transport=tcp"}, &operation) == voip::Error::ok);
     CHECK(peer.StartIncoming(SipPeerScript::answer)); CHECK(Wait(service, seen, &seen.incoming, 1)); CHECK(service.Answer(seen.calls[0], &operation) == voip::Error::ok); CHECK(Wait(service, seen, &seen.accepted, 2));
     const auto resources = service.GetResourceSnapshot(); CHECK(resources.promoted_calls == 2); CHECK(seen.agents[0].slot != seen.agents[1].slot); CHECK(std::strstr(seen.remote[0], "remote-") != nullptr); CHECK(std::strstr(seen.remote[1], "remote-") != nullptr);
+    // Release both initial leases before fault scripts; subsequent calls must
+    // therefore reuse the two fixed promoted-call reservations.
+    CHECK(service.Hangup(seen.calls[0], &operation) == voip::Error::ok); CHECK(service.Hangup(seen.calls[1], &operation) == voip::Error::ok);
+    CHECK(Wait(service, seen, &seen.finished, 2)); CHECK(service.GetResourceSnapshot().promoted_calls == 0);
     // Each fault is a separate, reusable promoted lease; outcomes are public events.
     const SipPeerScript fault_scripts[] = {SipPeerScript::malformed_sdp, SipPeerScript::reject_486, SipPeerScript::close_transport, SipPeerScript::bye_after_ack};
-    for (SipPeerScript script : fault_scripts) { peer.SetNextOutgoing(script); CHECK(service.Dial(a, {"sip:fault@127.0.0.1:5098;transport=tcp"}, &operation) == voip::Error::ok); (void)Wait(service, seen, &seen.finished, seen.finished + 1); }
-    CHECK(peer.StartIncoming(SipPeerScript::cancel_incoming)); CHECK(Wait(service, seen, &seen.incoming, 2)); CHECK(Wait(service, seen, &seen.finished, 5));
+    for (SipPeerScript script : fault_scripts) { peer.SetNextOutgoing(script); CHECK(service.Dial(a, {"sip:fault@127.0.0.1:5098;transport=tcp"}, &operation) == voip::Error::ok); CHECK(Wait(service, seen, &seen.finished, seen.finished + 1)); Drain(service, seen); }
+    CHECK(peer.StartIncoming(SipPeerScript::cancel_incoming)); CHECK(Wait(service, seen, &seen.incoming, 2)); CHECK(Wait(service, seen, &seen.finished, 7));
     CHECK(Has(seen, voip::Error::negotiation_failed)); CHECK(Has(seen, voip::Error::remote_rejected)); CHECK(Has(seen, voip::Error::signaling_failed)); CHECK(Has(seen, voip::Error::cancelled));
-    CHECK(peer.Stats().parse_failures == 0); CHECK(service.GetResourceSnapshot().promoted_calls == 2);
-    for (unsigned i = 0; i < seen.accepted; ++i) (void)service.Hangup(seen.calls[i], &operation);
-    (void)Wait(service, seen, &seen.finished, 7); CHECK(service.Shutdown() == voip::Error::ok || service.Shutdown() == voip::Error::busy);
+    CHECK(peer.Stats().parse_failures == 0); CHECK(TerminalCount(seen, seen.calls[2]) == 1); CHECK(service.GetResourceSnapshot().promoted_calls == 0);
+    CHECK(service.Shutdown() == voip::Error::ok || service.Shutdown() == voip::Error::busy);
     if (failures == 0) printk("VOIP PJSUA TWO CALL SMOKE: PASSED (2 promoted, 2 agents)\n");
     return failures == 0 ? 0 : 1;
 }

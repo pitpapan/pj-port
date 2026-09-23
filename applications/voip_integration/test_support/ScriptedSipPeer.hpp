@@ -26,6 +26,7 @@ public:
     static ScriptedSipPeer &Instance() noexcept;
     void Reset() noexcept;
     bool Start() noexcept;
+    void Pump() noexcept;
     void SetNextOutgoing(SipPeerScript script) noexcept;
     bool StartIncoming(SipPeerScript script) noexcept;
     SipPeerStats Stats() const noexcept;

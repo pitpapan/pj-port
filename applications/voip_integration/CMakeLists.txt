@@ -102,9 +102,12 @@ target_sources_ifdef(CONFIG_VOIP_PJSUA_PLAN4_COMPONENT_TEST app PRIVATE
   ../../voip/tests/pjsua/PjsuaCallControlTest.cpp
   ../../voip/tests/pjsua/PjsuaCallStateTest.cpp
   ../../voip/src/pjsua/PjsuaApi.cpp
+  ../../voip/src/pjsua/PjsuaRuntime.cpp
+  ../../voip/src/pjsua/PjsuaTransportManager.cpp
   ../../voip/src/pjsua/PjsuaCallbackRouter.cpp
   ../../voip/src/pjsua/PjsuaAccountManager.cpp
   ../../voip/src/pjsua/PjsuaCallManager.cpp
+  ../../voip/src/pjsua/PjsuaRuntimeAdapter.cpp
   ../../voip/src/core/AgentRegistry.cpp
 )
 if(CONFIG_VOIP_PJSUA_REGISTRATION_TEST AND NOT CONFIG_VOIP_PJSUA_TWO_CALL_TEST)
@@ -137,6 +140,7 @@ if(CONFIG_VOIP_PJSUA_TWO_CALL_TEST)
   target_sources(app PRIVATE
     src/multi_call_scheduler.cpp
     test_support/ScriptedSipPeer.cpp
+    ../../voip/src/pjsua/PjsuaCallManager.cpp
   )
 endif()
 target_sources_ifdef(CONFIG_VOIP_CORE_SERVICE_TEST app PRIVATE
