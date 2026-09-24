@@ -1887,6 +1887,27 @@ void test_task5_independent_timer_epochs_and_wrap() {
     }
 }
 
+void test_full_fifo_reports_queue_full_before_terminal_reservation() {
+    ControlFixture f;
+    (void)f.Incoming(900);
+    voip::AgentHandle second{};
+    assert(f.runtime.GetAgentHandle(1, &second) == voip::Error::ok);
+    voip::OperationId operation{};
+    assert(f.runtime.Dial(second, {"sip:second@example.test"}, &operation) == voip::Error::ok);
+    f.Step(f.now);
+    for (unsigned i = 0; i < 5; ++i) (void)f.Incoming(901 + i);
+    const auto before = f.runtime.GetResourceSnapshot();
+    assert(before.promoted_calls == 2 && before.queued_calls == 5);
+    const auto requests = f.runtime.AdapterRequestCount();
+    assert(f.runtime.Dial(f.agent, {"sip:overflow@example.test"}, &operation) == voip::Error::ok);
+    f.Step(f.now);
+    assert(f.Completions(operation, voip::Error::queue_full) == 1);
+    assert(f.runtime.AdapterRequestCount() == requests);
+    const auto after = f.runtime.GetResourceSnapshot();
+    assert(after.active_calls == 7 && after.promoted_calls == 2 && after.queued_calls == 5);
+    assert(after.available_operations == before.available_operations);
+}
+
 void test_task5_queue_timeout_and_media_terminal_failure() {
     for (bool incoming : {false, true}) {
         ControlFixture f(100, 1000);
@@ -2102,6 +2123,7 @@ void test_task6_cancel_before_promotion_releases_only_on_finish() {
 } // namespace
 
 int main(int argc, char **argv) {
+    test_full_fifo_reports_queue_full_before_terminal_reservation();
     if (argc == 2) {
         if (std::strcmp(argv[1], "--task6") == 0) { test_task6_cancel_retains_native_until_finish(); test_task6_media_results_complete_once(); test_task6_queued_finish_only_failure_preserves_status_and_fifo(); test_task6_finish_only_failure_completes_pending_operation_once(); test_task6_cancel_before_promotion_releases_only_on_finish(); }
         else if (std::strcmp(argv[1], "--task5-matrix") == 0) test_task5_command_state_matrix();

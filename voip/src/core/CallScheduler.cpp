@@ -73,7 +73,7 @@ Error CallScheduler::Admit(AgentHandle agent, CallDirection direction,
     if (can_promote_now && direction == CallDirection::outgoing &&
         agents_.Resolve(agent)->registration != RegistrationState::registered)
         return Error::agent_unavailable;
-    if (!can_promote_now && fifo_count_ >= fifo_capacity)
+    if (!can_promote_now && IsFifoFull())
         return Error::queue_full;
 
     CallHandle candidate{};

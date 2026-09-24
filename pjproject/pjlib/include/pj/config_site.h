@@ -12,6 +12,8 @@
 #define PJ_IOQUEUE_IMP                      PJ_IOQUEUE_IMP_SELECT
 #define PJ_FILE_IO                          PJ_FILE_IO_ANSI
 #define PJ_QOS_IMPLEMENTATION               PJ_QOS_BSD
+/* Use the actual interface address; Zephyr's hostname resolution allocates. */
+#define PJ_GETHOSTIP_DISABLE_LOCAL_RESOLUTION 1
 
 #if defined(CONFIG_PJMEDIA)
 

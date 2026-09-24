@@ -5,6 +5,12 @@
 namespace voip {
 
 namespace {
+bool IsMediaLive(pjsua_call_media_status status) noexcept {
+    // Held streams can still encode/decode RTP. Hold is not media teardown.
+    return status == PJSUA_CALL_MEDIA_ACTIVE ||
+           status == PJSUA_CALL_MEDIA_LOCAL_HOLD ||
+           status == PJSUA_CALL_MEDIA_REMOTE_HOLD;
+}
 bool IsTransportEof503(const pjsua_call_info &info) noexcept {
     if (info.last_status != 503 || info.last_status_text.ptr == nullptr ||
         info.last_status_text.slen <= 0)
@@ -277,7 +283,7 @@ RuntimeNotification PjsuaCallManager::CopyCall(const PjsuaCallContext &context,
     notification.error = error;
     notification.status.error = error;
     notification.status.sip_status = notification.sip_status;
-    notification.media_active = info.media_status == PJSUA_CALL_MEDIA_ACTIVE;
+    notification.media_active = IsMediaLive(info.media_status);
     notification.media_send_enabled = notification.media_active &&
         (info.media_dir & PJMEDIA_DIR_ENCODING) != 0;
     notification.media_receive_enabled = notification.media_active &&
@@ -409,7 +415,7 @@ void PjsuaCallManager::OnCallState(pjsua_call_id native_id) noexcept {
         FinishCallback(*context);
         return;
     }
-    context->media_quiescent = info.media_status != PJSUA_CALL_MEDIA_ACTIVE;
+    context->media_quiescent = !IsMediaLive(info.media_status);
     if (info.state == PJSIP_INV_STATE_CALLING &&
         (context->phase == PjsuaCallPhase::calling ||
          context->phase == PjsuaCallPhase::promoting)) {
@@ -449,7 +455,7 @@ void PjsuaCallManager::OnCallMediaState(pjsua_call_id native_id) noexcept {
     ++context->callback_depth;
     pjsua_call_info info{};
     if (api_.call_get_info(native_id, &info) == PJ_SUCCESS) {
-        context->media_quiescent = info.media_status != PJSUA_CALL_MEDIA_ACTIVE;
+        context->media_quiescent = !IsMediaLive(info.media_status);
         if (context->phase == PjsuaCallPhase::confirmed ||
             context->phase == PjsuaCallPhase::local_hold) {
             if (info.media_status == PJSUA_CALL_MEDIA_ERROR &&
@@ -461,7 +467,7 @@ void PjsuaCallManager::OnCallMediaState(pjsua_call_id native_id) noexcept {
                 (void)EnqueueCall(*context, type, info, Error::media_failed);
             }
             const bool active = info.media_status == PJSUA_CALL_MEDIA_ACTIVE;
-            const bool held = active && info.media_dir == PJMEDIA_DIR_ENCODING;
+            const bool held = info.media_status == PJSUA_CALL_MEDIA_LOCAL_HOLD;
             if (held && context->media_control == PjsuaCallContext::MediaControl::hold) {
                 context->media_control = PjsuaCallContext::MediaControl::result;
                 context->phase = PjsuaCallPhase::local_hold;

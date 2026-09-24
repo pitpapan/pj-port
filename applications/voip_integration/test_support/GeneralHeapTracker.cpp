@@ -5,6 +5,8 @@
 
 namespace {
 
+// Count allocation attempts, including nested libc/kernel entry points. Zero
+// therefore proves that no general heap entry point ran in the tracked window.
 atomic_t allocation_count;
 atomic_t tracking_enabled;
 

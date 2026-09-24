@@ -5,7 +5,7 @@
 
 namespace voip_integration {
 
-enum class SipPeerScript : std::uint8_t { answer, malformed_sdp, reject_486, close_transport, cancel_incoming, bye_after_ack };
+enum class SipPeerScript : std::uint8_t { answer, malformed_sdp, reject_486, close_transport, cancel_incoming, bye_after_ack, no_final, shared_stream };
 
 struct SipPeerStats {
     unsigned invites;
@@ -39,8 +39,11 @@ public:
     static bool FramingChecks() noexcept;
     static bool ZeroWorkerConfiguration() noexcept;
     void SetNextOutgoing(SipPeerScript script) noexcept;
-    bool StartIncoming(SipPeerScript script) noexcept;
+    bool StartIncoming(SipPeerScript script, unsigned agent = 0) noexcept;
     SipPeerStats Stats() const noexcept;
+    unsigned IncomingResponseOrder(unsigned sequence, unsigned code) const noexcept;
+    unsigned OutgoingInviteOrder(unsigned sequence) const noexcept;
+    unsigned IncomingPort(unsigned sequence) const noexcept;
 
 private:
     ScriptedSipPeer() noexcept = default;

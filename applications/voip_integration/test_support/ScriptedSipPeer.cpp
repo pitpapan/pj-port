@@ -15,8 +15,9 @@ using voip_integration::ScriptedSipPeer;
 using voip_integration::SipPeerScript;
 
 constexpr int invalid_fd = -1;
-constexpr unsigned max_connections = 3;
+constexpr unsigned max_connections = 12;
 constexpr unsigned message_bytes = 1536;
+constexpr unsigned max_observed_calls = 64;
 K_THREAD_STACK_DEFINE(peer_stack, 8192);
 
 struct Connection {
@@ -35,6 +36,7 @@ struct Connection {
     bool reinvite_sent{};
     bool bye_sent{};
     bool cancel_sent{};
+    unsigned sequence{};
 };
 struct PeerState {
     // Only PeerEntry/PumpPeer touches sockets or connection/script state.
@@ -51,6 +53,11 @@ struct PeerState {
     k_thread thread{};
     atomic_t invites{}, incoming_invites{}, acks{}, byes{}, cancels{}, trying{}, ringing{}, reinvites{}, reinvite_responses{}, parse_failures{};
     atomic_t reinvite_acks{}, registrations{}, incoming_trying{}, incoming_ringing{}, cancel_responses{}, cancelled_invites{};
+    atomic_t wire_order{};
+    atomic_t incoming_180_order[max_observed_calls]{}, incoming_200_order[max_observed_calls]{};
+    atomic_t incoming_480_order[max_observed_calls]{}, incoming_486_order[max_observed_calls]{};
+    atomic_t outgoing_invite_order[max_observed_calls]{};
+    atomic_t incoming_port[max_observed_calls]{};
 };
 PeerState state;
 
@@ -132,7 +139,14 @@ void Handle(Connection &connection) {
         return;
     }
     if (std::strncmp(connection.buffer, "INVITE ", 7) == 0) {
-        atomic_inc(&state.invites);
+        // The FIFO fixture sends the next outgoing dialog over the stream on
+        // which its incoming 200/ACK handshake has just been observed. Later
+        // requests carry their own dialog headers (ParseInvite below).
+        if (connection.script == SipPeerScript::shared_stream)
+            connection.incoming = false;
+        const unsigned invite = static_cast<unsigned>(atomic_inc(&state.invites)) + 1U;
+        if (invite < max_observed_calls)
+            atomic_set(&state.outgoing_invite_order[invite], atomic_inc(&state.wire_order) + 1);
         if (!ParseInvite(connection)) { atomic_inc(&state.parse_failures); Close(connection); return; }
         connection.script = static_cast<SipPeerScript>(atomic_get(&state.next_outgoing));
         connection.bye_sent = false;
@@ -157,6 +171,20 @@ void Handle(Connection &connection) {
         if (connection.incoming) { connection.response_stage = 4; connection.response_at = k_uptime_get() + 100; }
         return;
     }
+    if (std::strncmp(connection.buffer, "CANCEL ", 7) == 0 && !connection.incoming) {
+        if (!ParseInvite(connection)) { atomic_inc(&state.parse_failures); Close(connection); return; }
+        Reply(connection, 200, "OK", nullptr);
+        // CANCEL carries the cancelled INVITE's sequence number. Do not use
+        // whichever dialog last happened to use this shared TCP connection.
+        char *method = std::strchr(connection.cseq, ' ');
+        if (method == nullptr) { atomic_inc(&state.parse_failures); return; }
+        std::snprintf(method, sizeof(connection.cseq) - static_cast<std::size_t>(method - connection.cseq), " INVITE");
+        Reply(connection, 487, "Request Terminated", nullptr);
+        // Outgoing calls share this TCP connection with registration. Ending
+        // the INVITE transaction must leave the transport available.
+        connection.response_stage = 0;
+        return;
+    }
     if (!connection.incoming) return;
     char cseq[64]{};
     char call_id[128]{};
@@ -166,29 +194,38 @@ void Handle(Connection &connection) {
     if (std::strncmp(connection.buffer, "SIP/2.0 100 ", 12) == 0) atomic_inc(&state.incoming_trying);
     if (std::strncmp(connection.buffer, "SIP/2.0 180 ", 12) == 0) {
         atomic_inc(&state.incoming_ringing);
+        if (connection.sequence < max_observed_calls)
+            atomic_set(&state.incoming_180_order[connection.sequence], atomic_inc(&state.wire_order) + 1);
         if (connection.script == SipPeerScript::cancel_incoming && !connection.cancel_sent) {
             connection.cancel_sent = true; SendCancel(connection);
         }
     }
     const bool success = std::strncmp(connection.buffer, "SIP/2.0 200 ", 12) == 0;
     const bool cancelled = std::strncmp(connection.buffer, "SIP/2.0 487 ", 12) == 0;
+    const bool timed_out = std::strncmp(connection.buffer, "SIP/2.0 480 ", 12) == 0;
+    const bool busy = std::strncmp(connection.buffer, "SIP/2.0 486 ", 12) == 0;
+    if (std::strcmp(cseq, "1 INVITE") == 0 && connection.sequence < max_observed_calls) {
+        atomic_t *order = success ? state.incoming_200_order : timed_out ? state.incoming_480_order :
+            busy ? state.incoming_486_order : nullptr;
+        if (order != nullptr) atomic_set(&order[connection.sequence], atomic_inc(&state.wire_order) + 1);
+    }
     if (success && std::strcmp(cseq, "1 CANCEL") == 0) atomic_inc(&state.cancel_responses);
-    if ((success || cancelled) && std::strstr(cseq, " INVITE") != nullptr) {
+    if ((success || cancelled || timed_out || busy) && std::strstr(cseq, " INVITE") != nullptr) {
         if (!CopyHeader(connection.to, sizeof(connection.to), connection.buffer, "To: ")) {
             atomic_inc(&state.parse_failures);
             return;
         }
         char ack[message_bytes]{};
         const unsigned sequence = std::strcmp(cseq, "2 INVITE") == 0 ? 2U : 1U;
-        const char *via = cancelled ? connection.via : "SIP/2.0/TCP 127.0.0.1;branch=z9hG4bK-peer-ack";
+        const char *via = (cancelled || timed_out || busy) ? connection.via : "SIP/2.0/TCP 127.0.0.1;branch=z9hG4bK-peer-ack";
         std::snprintf(ack, sizeof(ack), "ACK sip:agent0@127.0.0.1 SIP/2.0\r\nVia: %s\r\nFrom: %s\r\nTo: %s\r\nCall-ID: %s\r\nCSeq: %u ACK\r\nContent-Length: 0\r\n\r\n", via, connection.from, connection.to, connection.call_id, sequence);
         Send(connection, ack); atomic_inc(&state.acks);
-        if (cancelled) {
+        if (cancelled || timed_out || busy) {
             atomic_inc(&state.cancelled_invites);
             connection.response_stage = 4; connection.response_at = k_uptime_get() + 100;
         }
         else if (sequence == 2) { atomic_inc(&state.reinvite_responses); atomic_inc(&state.reinvite_acks); }
-        else if (!connection.reinvite_sent) {
+        else if (!connection.reinvite_sent && connection.script != SipPeerScript::shared_stream) {
             connection.reinvite_sent = true;
             connection.response_stage = 3;
             connection.response_at = k_uptime_get() + 100;
@@ -243,7 +280,7 @@ void Consume(Connection &connection) {
         connection.used = remaining;
     }
 }
-void MakeIncoming(SipPeerScript script) {
+void MakeIncoming(SipPeerScript script, unsigned agent) {
     for (Connection &connection : state.connections) {
         if (connection.fd != invalid_fd) continue;
         connection.fd = zsock_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -252,21 +289,25 @@ void MakeIncoming(SipPeerScript script) {
         if (zsock_connect(connection.fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0) { Close(connection); return; }
         connection.incoming = true; connection.script = script;
         const unsigned sequence = static_cast<unsigned>(atomic_inc(&state.incoming_sequence)) + 1U;
+        connection.sequence = sequence;
+        sockaddr_in local{}; socklen_t local_size = sizeof(local);
+        if (zsock_getsockname(connection.fd, reinterpret_cast<sockaddr *>(&local), &local_size) == 0 && sequence < max_observed_calls)
+            atomic_set(&state.incoming_port[sequence], ntohs(local.sin_port));
         std::snprintf(connection.via, sizeof(connection.via), "SIP/2.0/TCP 127.0.0.1;branch=z9hG4bK-peer-in-%u", sequence);
-        std::snprintf(connection.from, sizeof(connection.from), "<sip:remote-b@peer.test>;tag=peer-in");
-        std::snprintf(connection.to, sizeof(connection.to), "<sip:agent0@127.0.0.1>");
+        std::snprintf(connection.from, sizeof(connection.from), "<sip:remote-in-%u@peer.test>;tag=peer-in-%u", sequence, sequence);
+        std::snprintf(connection.to, sizeof(connection.to), "<sip:agent%u@127.0.0.1>", agent);
         std::snprintf(connection.call_id, sizeof(connection.call_id), "peer-incoming-%u", sequence);
         std::snprintf(connection.cseq, sizeof(connection.cseq), "1 INVITE");
         char invite[message_bytes]{};
         const char *sdp = Sdp(true);
-        std::snprintf(invite, sizeof(invite), "INVITE sip:agent0@127.0.0.1 SIP/2.0\r\nVia: %s\r\nFrom: %s\r\nTo: %s\r\nCall-ID: %s\r\nCSeq: %s\r\nContact: <sip:remote-b@127.0.0.1:5098;transport=tcp>\r\nContent-Type: application/sdp\r\nContent-Length: %u\r\n\r\n%s", connection.via, connection.from, connection.to, connection.call_id, connection.cseq, static_cast<unsigned>(std::strlen(sdp)), sdp);
+        std::snprintf(invite, sizeof(invite), "INVITE sip:agent%u@127.0.0.1 SIP/2.0\r\nVia: %s\r\nFrom: %s\r\nTo: %s\r\nCall-ID: %s\r\nCSeq: %s\r\nContact: <sip:remote-in-%u@127.0.0.1:5098;transport=tcp>\r\nContent-Type: application/sdp\r\nContent-Length: %u\r\n\r\n%s", agent, connection.via, connection.from, connection.to, connection.call_id, connection.cseq, sequence, static_cast<unsigned>(std::strlen(sdp)), sdp);
         Send(connection, invite); atomic_inc(&state.incoming_invites); return;
     }
 }
 void PumpPeer() {
     if (atomic_get(&state.running) != 0) {
         const auto requested = atomic_set(&state.incoming_requested, 0);
-        if (requested != 0) MakeIncoming(static_cast<SipPeerScript>(requested - 1));
+        if (requested != 0) MakeIncoming(static_cast<SipPeerScript>((requested & 0xff) - 1), static_cast<unsigned>(requested >> 8));
         zsock_pollfd listener_poll{};
         listener_poll.fd = state.listener;
         listener_poll.events = ZSOCK_POLLIN;
@@ -288,6 +329,10 @@ void PumpPeer() {
                     Reply(connection, 180, "Ringing", nullptr); atomic_inc(&state.ringing);
                     connection.response_stage = 2; connection.response_at = k_uptime_get() + 50;
                 } else if (connection.response_stage == 2) {
+                    if (connection.script == SipPeerScript::no_final) {
+                        connection.response_stage = 0;
+                        continue;
+                    }
                     Reply(connection, 200, "OK", Sdp(connection.script != SipPeerScript::malformed_sdp));
                     connection.response_stage = 0;
                 } else {
@@ -336,8 +381,35 @@ bool ScriptedSipPeer::Start() noexcept {
     return atomic_get(&state.ready) == 1;
 }
 void ScriptedSipPeer::SetNextOutgoing(SipPeerScript script) noexcept { atomic_set(&state.next_outgoing, static_cast<atomic_val_t>(script)); }
-bool ScriptedSipPeer::StartIncoming(SipPeerScript script) noexcept { return atomic_cas(&state.incoming_requested, 0, static_cast<atomic_val_t>(script) + 1); }
-SipPeerStats ScriptedSipPeer::Stats() const noexcept { return {static_cast<unsigned>(atomic_get(&state.invites)), static_cast<unsigned>(atomic_get(&state.incoming_invites)), static_cast<unsigned>(atomic_get(&state.acks)), static_cast<unsigned>(atomic_get(&state.byes)), static_cast<unsigned>(atomic_get(&state.cancels)), static_cast<unsigned>(atomic_get(&state.trying)), static_cast<unsigned>(atomic_get(&state.ringing)), static_cast<unsigned>(atomic_get(&state.reinvites)), static_cast<unsigned>(atomic_get(&state.reinvite_responses)), static_cast<unsigned>(atomic_get(&state.reinvite_acks)), static_cast<unsigned>(atomic_get(&state.registrations)), static_cast<unsigned>(atomic_get(&state.incoming_trying)), static_cast<unsigned>(atomic_get(&state.incoming_ringing)), static_cast<unsigned>(atomic_get(&state.cancel_responses)), static_cast<unsigned>(atomic_get(&state.cancelled_invites)), static_cast<unsigned>(atomic_get(&state.minimum_stack_unused)), static_cast<unsigned>(atomic_get(&state.parse_failures))}; }
+bool ScriptedSipPeer::StartIncoming(SipPeerScript script, unsigned agent) noexcept {
+    return agent < 5 && atomic_cas(&state.incoming_requested, 0,
+        static_cast<atomic_val_t>((agent << 8) | (static_cast<unsigned>(script) + 1)));
+}
+SipPeerStats ScriptedSipPeer::Stats() const noexcept {
+    return {static_cast<unsigned>(atomic_get(&state.invites)), static_cast<unsigned>(atomic_get(&state.incoming_invites)),
+        static_cast<unsigned>(atomic_get(&state.acks)), static_cast<unsigned>(atomic_get(&state.byes)),
+        static_cast<unsigned>(atomic_get(&state.cancels)), static_cast<unsigned>(atomic_get(&state.trying)),
+        static_cast<unsigned>(atomic_get(&state.ringing)), static_cast<unsigned>(atomic_get(&state.reinvites)),
+        static_cast<unsigned>(atomic_get(&state.reinvite_responses)), static_cast<unsigned>(atomic_get(&state.reinvite_acks)),
+        static_cast<unsigned>(atomic_get(&state.registrations)), static_cast<unsigned>(atomic_get(&state.incoming_trying)),
+        static_cast<unsigned>(atomic_get(&state.incoming_ringing)), static_cast<unsigned>(atomic_get(&state.cancel_responses)),
+        static_cast<unsigned>(atomic_get(&state.cancelled_invites)), static_cast<unsigned>(atomic_get(&state.minimum_stack_unused)),
+        static_cast<unsigned>(atomic_get(&state.parse_failures))};
+}
+unsigned ScriptedSipPeer::IncomingResponseOrder(unsigned sequence, unsigned code) const noexcept {
+    if (sequence >= max_observed_calls) return 0;
+    atomic_t *orders = code == 180 ? state.incoming_180_order :
+        code == 200 ? state.incoming_200_order :
+        code == 480 ? state.incoming_480_order :
+        code == 486 ? state.incoming_486_order : nullptr;
+    return orders == nullptr ? 0 : static_cast<unsigned>(atomic_get(&orders[sequence]));
+}
+unsigned ScriptedSipPeer::OutgoingInviteOrder(unsigned sequence) const noexcept {
+    return sequence < max_observed_calls ? static_cast<unsigned>(atomic_get(&state.outgoing_invite_order[sequence])) : 0;
+}
+unsigned ScriptedSipPeer::IncomingPort(unsigned sequence) const noexcept {
+    return sequence < max_observed_calls ? static_cast<unsigned>(atomic_get(&state.incoming_port[sequence])) : 0;
+}
 bool ScriptedSipPeer::ZeroWorkerConfiguration() noexcept { return atomic_get(&state.zero_workers) == 1; }
 bool ScriptedSipPeer::FramingChecks() noexcept {
     struct Case { const char *value; bool valid; unsigned length; };

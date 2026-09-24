@@ -72,7 +72,8 @@ struct Fixture {
         calls.OnCallState(id);
     }
     void Media(unsigned id,pjmedia_dir direction) {
-        snapshot[id].media_status=direction==PJMEDIA_DIR_NONE ? PJSUA_CALL_MEDIA_NONE : PJSUA_CALL_MEDIA_ACTIVE;
+        snapshot[id].media_status=direction==PJMEDIA_DIR_NONE ? PJSUA_CALL_MEDIA_NONE :
+            direction==PJMEDIA_DIR_ENCODING ? PJSUA_CALL_MEDIA_LOCAL_HOLD : PJSUA_CALL_MEDIA_ACTIVE;
         snapshot[id].media_dir=direction; calls.OnCallMediaState(id);
     }
     RuntimeNotification Pop(RuntimeNotification::Type type,std::uint32_t token) {
@@ -205,6 +206,26 @@ void ReentrantDisconnectRetainsLease() {
     f.Media(0,PJMEDIA_DIR_NONE); f.Pop(RuntimeNotification::Type::call_finished,token);
     assert(f.calls.Count()==0 && f.fake.CallUserData(0)==nullptr); f.Empty();
 }
+void HeldDisconnectRetainsLeaseUntilMediaStops() {
+    for (auto status : {PJSUA_CALL_MEDIA_LOCAL_HOLD, PJSUA_CALL_MEDIA_REMOTE_HOLD}) {
+        Fixture f; const auto token = f.Outgoing(0);
+        f.State(0, PJSIP_INV_STATE_CONFIRMED);
+        f.Pop(RuntimeNotification::Type::call_accepted, token);
+        snapshot[0].state = PJSIP_INV_STATE_DISCONNECTED;
+        snapshot[0].media_status = status;
+        snapshot[0].media_dir = PJMEDIA_DIR_ENCODING;
+        f.calls.OnCallState(0);
+        assert(f.calls.Count() == 1 && f.fake.CallUserData(0) != nullptr);
+        f.Empty();
+        f.calls.OnCallMediaState(0);
+        assert(f.calls.Count() == 1 && f.fake.CallUserData(0) != nullptr);
+        f.Empty();
+        f.Media(0, PJMEDIA_DIR_NONE);
+        f.Pop(RuntimeNotification::Type::call_finished, token);
+        assert(f.calls.Count() == 0 && f.fake.CallUserData(0) == nullptr);
+        f.Empty();
+    }
+}
 void IncomingCancelAndConfirmation() {
     Fixture f;
     pjsua_call_setting setting{}; f.api.call_setting_default(&setting);
@@ -292,6 +313,7 @@ void LiveShutdownRetainsStorageAndOrdersCleanup() {
 }
 }
 void RunPjsuaCallStateTests() {
+    HeldDisconnectRetainsLeaseUntilMediaStops();
     UnsolicitedMediaCannotOverflow(); LifecycleAndControlMatrix();
     RejectionsAndCopiedPressure(); TransportEof503IsNotRemote503(); OnePendingControlBoundsStorage();
     ReentrantDisconnectRetainsLease();

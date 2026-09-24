@@ -44,6 +44,7 @@ public:
     static constexpr std::size_t logical_call_capacity = 7;
     static constexpr std::size_t promoted_capacity = 2;
     static constexpr std::size_t fifo_capacity = 5;
+    bool IsFifoFull() const noexcept { return fifo_count_ >= fifo_capacity; }
 
     explicit CallScheduler(AgentRegistry &agents) noexcept : agents_(agents) {}
     CallScheduler() = delete;

@@ -134,13 +134,24 @@ if(CONFIG_VOIP_PJSUA_REGISTRATION_TEST AND NOT CONFIG_VOIP_PJSUA_TWO_CALL_TEST)
   )
 endif()
 if(CONFIG_VOIP_PJSUA_TWO_CALL_TEST)
-  target_link_options(app INTERFACE -Wl,--wrap=pjsua_init)
+  target_link_options(app INTERFACE -Wl,--wrap=pjsua_init
+    -Wl,--wrap=_ZN4voip13AgentRegistry5ResetEv -Wl,--wrap=pj_zephyr_pool_arena_reset)
+  target_compile_definitions(app PRIVATE VOIP_GENERAL_HEAP_WRAP_ENABLED=1)
+  target_link_options(app INTERFACE
+    -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc
+    -Wl,--wrap=aligned_alloc -Wl,--wrap=k_malloc -Wl,--wrap=k_calloc
+    -Wl,--wrap=k_realloc -Wl,--wrap=k_aligned_alloc
+    -Wl,--wrap=sys_heap_alloc -Wl,--wrap=sys_heap_noalign_alloc
+    -Wl,--wrap=sys_heap_realloc -Wl,--wrap=sys_heap_aligned_alloc
+    -Wl,--wrap=sys_heap_aligned_realloc
+  )
   # Reuse the deliberately test-only listener-port hook so incoming TCP SIP
   # reaches a deterministic PJSUA transport without exposing it publicly.
   target_compile_definitions(app PRIVATE CONFIG_VOIP_PJSUA_REGISTRATION_TEST=1)
   target_sources(app PRIVATE
     src/multi_call_scheduler.cpp
     test_support/ScriptedSipPeer.cpp
+    test_support/GeneralHeapTracker.cpp
     ../../voip/src/pjsua/PjsuaCallManager.cpp
   )
 endif()

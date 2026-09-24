@@ -655,6 +655,12 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
         return;
     }
     if (command.type == CommandType::dial) {
+        // Report logical admission exhaustion before terminal-event capacity:
+        // all seven live calls legitimately own their terminal reservations.
+        if (scheduler_.IsFifoFull()) {
+            (void)operations_.Complete(command.operation, Error::queue_full);
+            return;
+        }
         std::size_t terminal_index = 0;
         VoipEventQueue::Reservation *terminal_reservation = nullptr;
         for (std::size_t i = 0; i < call_terminals_.size(); ++i) {

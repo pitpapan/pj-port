@@ -63,12 +63,13 @@ void RunPjsuaCallControlTests() {
     assert(calls.TryGetNotification(&media_result) &&
            media_result.type == RuntimeNotification::Type::call_accepted);
     assert(calls.SetHeld(token, true) == Error::ok);
-    control_info[0].media_status = PJSUA_CALL_MEDIA_ACTIVE;
+    control_info[0].media_status = PJSUA_CALL_MEDIA_LOCAL_HOLD;
     control_info[0].media_dir = PJMEDIA_DIR_ENCODING;
     calls.OnCallMediaState(0);
     assert(calls.TryGetNotification(&media_result) &&
            media_result.type == RuntimeNotification::Type::call_held);
     assert(calls.SetHeld(token, false) == Error::ok);
+    control_info[0].media_status = PJSUA_CALL_MEDIA_ACTIVE;
     control_info[0].media_dir = PJMEDIA_DIR_ENCODING_DECODING;
     calls.OnCallMediaState(0);
     assert(calls.TryGetNotification(&media_result) &&
