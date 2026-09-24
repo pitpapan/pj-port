@@ -49,6 +49,7 @@ if(CONFIG_VOIP_SERVICE)
     ../src/pjsua/PjsuaTransportManager.cpp
     ../src/pjsua/PjsuaCallbackRouter.cpp
     ../src/pjsua/PjsuaAccountManager.cpp
+    ../src/pjsua/PjsuaCallManager.cpp
     ../src/pjsua/PjsuaRuntimeAdapter.cpp
   )
 endif()

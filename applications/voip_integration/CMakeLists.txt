@@ -152,7 +152,6 @@ if(CONFIG_VOIP_PJSUA_TWO_CALL_TEST)
     src/multi_call_scheduler.cpp
     test_support/ScriptedSipPeer.cpp
     test_support/GeneralHeapTracker.cpp
-    ../../voip/src/pjsua/PjsuaCallManager.cpp
   )
 endif()
 target_sources_ifdef(CONFIG_VOIP_CORE_SERVICE_TEST app PRIVATE
