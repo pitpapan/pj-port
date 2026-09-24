@@ -40,20 +40,37 @@ struct CallEvidence {
 };
 struct Seen {
     CallEvidence calls[16]{}; unsigned count{}, incoming{}, accepted{}, finished{};
-    struct OperationEvidence { voip::OperationId id{}; voip::Error error{}; } operations[64]{};
-    unsigned operation_count{};
+    struct OperationEvidence {
+        voip::OperationId id{}; voip::Error expected{}; voip::Error actual{}; unsigned completions{};
+    } operations[64]{};
+    unsigned operation_count{}, observed_operations{}, full_capacity_proofs{};
     bool registered[5]{}; voip::CallHandle last_incoming{};
 };
+void Submitted(Seen &seen, voip::Error submission, voip::OperationId id,
+               voip::Error expected) {
+    CHECK(submission == voip::Error::ok);
+    if (submission != voip::Error::ok) return;
+    CHECK(id != 0 && seen.operation_count < 64);
+    for (unsigned i = 0; i < seen.operation_count; ++i) CHECK(seen.operations[i].id != id);
+    if (id != 0 && seen.operation_count < 64)
+        seen.operations[seen.operation_count++] = {id, expected, {}, 0};
+}
 void Record(const voip::Event &event, Seen &seen) {
     if (event.type == voip::EventType::agent_snapshot && event.agent.slot < 5)
         seen.registered[event.agent.slot] = event.agent_snapshot.registration == voip::RegistrationState::registered;
     if (event.type == voip::EventType::incoming_call) { ++seen.incoming; seen.last_incoming = event.call; }
     if (event.type == voip::EventType::operation_terminal) {
-        for (unsigned i = 0; i < seen.operation_count; ++i)
-            CHECK(seen.operations[i].id != event.operation);
-        CHECK(seen.operation_count < 64);
-        if (seen.operation_count < 64)
-            seen.operations[seen.operation_count++] = {event.operation, event.status.error};
+        for (unsigned i = 0; i < seen.operation_count; ++i) {
+            auto &operation = seen.operations[i];
+            if (operation.id != event.operation) continue;
+            CHECK(operation.completions == 0);
+            CHECK(event.status.error == operation.expected);
+            operation.actual = event.status.error;
+            ++operation.completions;
+            ++seen.observed_operations;
+            return;
+        }
+        CHECK(false); // an operation terminal event had no submitted public command
         return;
     }
     if (event.type != voip::EventType::call_state) return;
@@ -87,7 +104,8 @@ void Record(const voip::Event &event, Seen &seen) {
 }
 bool OperationDone(const Seen &seen, voip::OperationId id, voip::Error error) {
     for (unsigned i = 0; i < seen.operation_count; ++i)
-        if (seen.operations[i].id == id) return seen.operations[i].error == error;
+        if (seen.operations[i].id == id)
+            return seen.operations[i].completions == 1 && seen.operations[i].actual == error;
     return false;
 }
 void Poll(voip::VoipService &service, Seen &seen);
@@ -148,12 +166,15 @@ bool WaitResources(voip::VoipService &service, Seen &seen, unsigned promoted,
 }
 voip::CallHandle Dial(voip::VoipService &service, Seen &seen, voip::AgentHandle agent,
                       const char *uri) {
+    const unsigned first_new_call = seen.count;
     voip::OperationId operation{};
-    CHECK(service.Dial(agent, {uri}, &operation) == voip::Error::ok);
+    const auto result = service.Dial(agent, {uri}, &operation);
+    Submitted(seen, result, operation, voip::Error::ok);
     const int64_t deadline = k_uptime_get() + 3000;
     while (k_uptime_get() < deadline) {
-        CallEvidence *call = Find(seen, uri);
-        if (call != nullptr) return call->handle;
+        for (unsigned i = first_new_call; i < seen.count; ++i)
+            if (std::strcmp(seen.calls[i].remote, uri) == 0)
+                return seen.calls[i].handle;
         Poll(service, seen);
     }
     CHECK(false);
@@ -170,8 +191,10 @@ voip::CallHandle Incoming(voip::VoipService &service, Seen &seen,
 void EndCall(voip::VoipService &service, Seen &seen, voip::CallHandle call) {
     const unsigned want = seen.finished + 1;
     voip::OperationId operation{};
-    CHECK(service.Hangup(call, &operation) == voip::Error::ok);
+    const auto result = service.Hangup(call, &operation);
+    Submitted(seen, result, operation, voip::Error::ok);
     CHECK(Wait(service, seen, seen.finished, want));
+    CHECK(WaitOperation(service, seen, operation, voip::Error::ok));
 }
 void CheckPool(voip::VoipService &service, unsigned promoted, unsigned queued) {
     const auto pool = service.GetResourceSnapshot();
@@ -191,16 +214,121 @@ void ExpectTrace(const CallEvidence &call,
     i = 0;
     for (auto state : states) CHECK(call.states[i++] == state);
 }
+void RunFullCapacityCycle(voip::VoipService &service, Seen &seen,
+                          voip_integration::ScriptedSipPeer &peer,
+                          const voip::AgentHandle *agents, unsigned lifecycle) {
+    using T = voip::CallTransition; using S = voip::CallState;
+    using voip_integration::SipPeerScript;
+    const int failures_before = failures;
+    const unsigned first_call = seen.count;
+    const unsigned accepted_before = seen.accepted;
+    const unsigned finished_before = seen.finished;
+    const auto flows_before = peer.Stats();
+    const char *a_uri = "sip:promoted-a@127.0.0.1:5098;transport=tcp";
+    peer.SetNextOutgoing(SipPeerScript::answer);
+    const auto a = Dial(service, seen, agents[0], a_uri);
+    CHECK(Wait(service, seen, seen.accepted, accepted_before + 1));
+    const unsigned b_sequence = peer.Stats().incoming_invites + 1;
+    const auto b = Incoming(service, seen, peer, SipPeerScript::answer, 1);
+    voip::OperationId operation{};
+    auto submission = service.Answer(b, &operation);
+    Submitted(seen, submission, operation, voip::Error::ok);
+    CHECK(Wait(service, seen, seen.accepted, accepted_before + 2));
+    CheckPool(service, 2, 0);
+    CHECK(!Same(a, b));
+    CHECK(seen.calls[first_call].agent.slot != seen.calls[first_call + 1].agent.slot);
+    char b_remote[64]{};
+    std::snprintf(b_remote, sizeof(b_remote), "<sip:remote-in-%u@peer.test>", b_sequence);
+    CHECK(Same(seen.calls[first_call].handle, a) &&
+          std::strcmp(seen.calls[first_call].remote, a_uri) == 0);
+    CHECK(Same(seen.calls[first_call + 1].handle, b) &&
+          std::strcmp(seen.calls[first_call + 1].remote, b_remote) == 0);
+    const int64_t handshake_deadline = k_uptime_get() + 1000;
+    while (peer.Stats().reinvite_acks < flows_before.reinvite_acks + 1 && k_uptime_get() < handshake_deadline)
+        Poll(service, seen);
+    const auto flows = peer.Stats();
+    CHECK(flows.invites == flows_before.invites + 1);
+    CHECK(flows.trying == flows_before.trying + 1 && flows.ringing == flows_before.ringing + 1);
+    CHECK(flows.incoming_trying >= flows_before.incoming_trying + 1);
+    CHECK(flows.incoming_ringing >= flows_before.incoming_ringing + 1);
+    // Task 7A's generated re-INVITE/200/ACK remains proved in this first
+    // lifecycle and in the separate lifecycle-2/3 smoke setup. A prior held
+    // dialog can legitimately answer its overlapping re-INVITE with 491.
+    if (lifecycle == 1) {
+        CHECK(flows.reinvites == flows_before.reinvites + 1);
+        CHECK(flows.reinvite_responses == flows_before.reinvite_responses + 1);
+        CHECK(flows.reinvite_acks == flows_before.reinvite_acks + 1 && flows.acks >= flows_before.acks + 3);
+    }
+
+    const unsigned queued_a_sequence = peer.Stats().incoming_invites + 1;
+    const auto queued_a = Incoming(service, seen, peer, SipPeerScript::shared_stream, 0);
+    submission = service.Answer(queued_a, &operation);
+    Submitted(seen, submission, operation, voip::Error::ok);
+    const unsigned invites_before = peer.Stats().invites;
+    char c_uri[96]{};
+    CHECK(peer.IncomingPort(queued_a_sequence) != 0);
+    // C uses A's peer endpoint, yielding an actual order on one TCP stream.
+    std::snprintf(c_uri, sizeof(c_uri), "sip:queued-c@127.0.0.1:%u;transport=tcp", peer.IncomingPort(queued_a_sequence));
+    const auto c = Dial(service, seen, agents[2], c_uri);
+    const auto d = Incoming(service, seen, peer, SipPeerScript::answer, 3);
+    const auto e = Dial(service, seen, agents[4], "sip:queued-e@127.0.0.1:5098;transport=tcp");
+    const auto queued_b = Incoming(service, seen, peer, SipPeerScript::answer, 1);
+    CHECK(WaitResources(service, seen, 2, 5)); CheckPool(service, 2, 5);
+    CHECK(pjsua_call_get_count() == 5); // C/E are native-free while queued
+    CHECK(peer.Stats().invites == invites_before);
+    for (unsigned i = 0; i < 3; ++i) {
+        const int64_t ringing_deadline = k_uptime_get() + 1000;
+        while (peer.IncomingResponseOrder(queued_a_sequence + i, 180) == 0 &&
+               k_uptime_get() < ringing_deadline) Poll(service, seen);
+        CHECK(peer.IncomingResponseOrder(queued_a_sequence + i, 180) != 0);
+    }
+    EndCall(service, seen, b);
+    CHECK(WaitResources(service, seen, 1, 5));
+    CHECK(peer.Stats().invites == invites_before);
+    EndCall(service, seen, a);
+    CHECK(WaitState(service, seen, queued_a, voip::CallState::established));
+    CHECK(WaitState(service, seen, c, voip::CallState::established));
+    CHECK(WaitResources(service, seen, 2, 3));
+    const unsigned answer_order = peer.IncomingResponseOrder(queued_a_sequence, 200);
+    const unsigned invite_order = peer.OutgoingInviteOrder(invites_before + 1);
+    CHECK(answer_order != 0 && invite_order != 0 && answer_order < invite_order);
+    printk("[multi-call] lifecycle=%u FIFO head action=%u C INVITE=%u\n", lifecycle, answer_order, invite_order);
+
+    submission = service.Reject(d, 486, &operation);
+    Submitted(seen, submission, operation, voip::Error::ok);
+    submission = service.Cancel(e, &operation);
+    Submitted(seen, submission, operation, voip::Error::ok);
+    submission = service.Reject(queued_b, 486, &operation);
+    Submitted(seen, submission, operation, voip::Error::ok);
+    CHECK(WaitResources(service, seen, 2, 0));
+    EndCall(service, seen, queued_a);
+    EndCall(service, seen, c);
+    CHECK(WaitResources(service, seen, 0, 0));
+    CHECK(Wait(service, seen, seen.finished, finished_before + 7));
+    const int64_t native_deadline = k_uptime_get() + 3000;
+    while (pjsua_call_get_count() != 0 && k_uptime_get() < native_deadline)
+        Poll(service, seen);
+    CHECK(pjsua_call_get_count() == 0);
+    CHECK(seen.count == first_call + 7);
+    for (unsigned i = 0; i < 2; ++i)
+        ExpectTrace(seen.calls[first_call + i], {T::initiation, T::acceptance, T::finish},
+                    {S::initiated, S::established, S::terminated});
+    for (unsigned i = 2; i < 4; ++i)
+        ExpectTrace(seen.calls[first_call + i], {T::wait, T::acceptance, T::finish},
+                    {S::hold, S::established, S::terminated});
+    for (unsigned i = 4; i < 7; ++i)
+        ExpectTrace(seen.calls[first_call + i], {T::wait, T::rejection},
+                    {S::hold, S::terminated});
+    if (failures == failures_before) ++seen.full_capacity_proofs;
+}
 void CheckTraces(const Seen &seen, unsigned lifecycle) {
     using T = voip::CallTransition; using S = voip::CallState;
-    const unsigned counts[] = {7, 7, 6, 2, 6};
-    CHECK(seen.count == counts[lifecycle - 1]);
-    for (unsigned i = 0; i < seen.count; ++i) {
+    const unsigned base_counts[] = {0, 7, 6, 2, 6};
+    CHECK(seen.count == base_counts[lifecycle - 1] + 7);
+    for (unsigned i = 0; i < base_counts[lifecycle - 1]; ++i) {
         const auto &call = seen.calls[i];
         if (lifecycle <= 3 && i < 2)
             ExpectTrace(call, {T::initiation, T::acceptance, T::finish}, {S::initiated, S::established, S::terminated});
-        else if (lifecycle == 1 && (i == 2 || i == 3))
-            ExpectTrace(call, {T::wait, T::acceptance, T::finish}, {S::hold, S::established, S::terminated});
         else if (lifecycle == 2)
             ExpectTrace(call, {T::wait, T::timeout}, {S::hold, S::terminated});
         else if (lifecycle == 3 && i == 2)
@@ -245,6 +373,11 @@ void AuditShutdown(voip::VoipService &service, Seen &seen, const voip::AgentHand
     voip::Event event{};
     unsigned drained_events = 0;
     while (service.TryGetEvent(&event) == voip::Error::ok) { Record(event, seen); ++drained_events; }
+    CHECK(seen.observed_operations == seen.operation_count);
+    for (unsigned i = 0; i < seen.operation_count; ++i)
+        CHECK(seen.operations[i].completions == 1 &&
+              seen.operations[i].actual == seen.operations[i].expected);
+    CHECK(seen.full_capacity_proofs == 1);
     const auto resources = service.GetResourceSnapshot();
     CHECK(resources.active_agents == 0 && resources.active_calls == 0);
     CHECK(resources.promoted_calls == 0 && resources.queued_calls == 0);
@@ -321,8 +454,8 @@ int main() {
     voip::CallHandle previous_calls[16]{}; unsigned previous_count = 0;
     voip::AgentHandle previous_agents[5]{};
     for (unsigned lifecycle = 1; lifecycle <= 5; ++lifecycle) {
-        const unsigned queue_timeout = lifecycle == 2 ? 3000 : lifecycle == 4 ? 700 : 5000;
-        const unsigned answer_timeout = lifecycle == 4 ? 700 : 3000;
+        const unsigned queue_timeout = lifecycle == 2 ? 3000 : 5000;
+        const unsigned answer_timeout = 3000;
         CHECK(service.Initialize({config, 5, queue_timeout, answer_timeout, format,
               {voip::SignalingSecurity::none, voip::MediaSecurity::none}}) == voip::Error::ok);
         voip_general_heap_tracking_begin();
@@ -342,7 +475,7 @@ int main() {
         CHECK(Registered(seen)); CHECK(peer.ZeroWorkerConfiguration());
         CHECK(peer.Stats().registrations >= lifecycle * 5);
 
-        if (lifecycle == 1 || lifecycle == 2 || lifecycle == 3) {
+        if (lifecycle == 2 || lifecycle == 3) {
             const auto flows_before = peer.Stats();
             const char *a_uri = "sip:promoted-a@127.0.0.1:5098;transport=tcp";
             peer.SetNextOutgoing(SipPeerScript::answer);
@@ -351,7 +484,8 @@ int main() {
             const unsigned incoming_b_sequence = peer.Stats().incoming_invites + 1;
             const voip::CallHandle b = Incoming(service, seen, peer, SipPeerScript::answer, 1);
             voip::OperationId operation{};
-            CHECK(service.Answer(b, &operation) == voip::Error::ok);
+            voip::Error submission = service.Answer(b, &operation);
+            Submitted(seen, submission, operation, voip::Error::ok);
             CHECK(Wait(service, seen, seen.accepted, 2));
             CheckPool(service, 2, 0);
             CHECK(!Same(a, b));
@@ -371,43 +505,7 @@ int main() {
             CHECK(flows.reinvite_responses == flows_before.reinvite_responses + 1);
             CHECK(flows.reinvite_acks == flows_before.reinvite_acks + 1 && flows.acks >= flows_before.acks + 3);
             printk("[multi-call] lifecycle=%u INVITE/100/180/200/ACK and re-INVITE/200/ACK checked\n", lifecycle);
-            if (lifecycle == 1) {
-                const unsigned incoming_a_sequence = peer.Stats().incoming_invites + 1;
-                const voip::CallHandle queued_a = Incoming(service, seen, peer, SipPeerScript::shared_stream, 0);
-                CHECK(service.Answer(queued_a, &operation) == voip::Error::ok);
-                const unsigned invites_before = peer.Stats().invites;
-                char c_uri[96]{};
-                // Separate TCP streams have no total receive order. Address C
-                // to A's real peer endpoint so PJSIP reuses that stream, and
-                // compare the order of fully parsed messages on the wire.
-                CHECK(peer.IncomingPort(incoming_a_sequence) != 0);
-                std::snprintf(c_uri, sizeof(c_uri), "sip:queued-c@127.0.0.1:%u;transport=tcp", peer.IncomingPort(incoming_a_sequence));
-                const voip::CallHandle c = Dial(service, seen, agents[2], c_uri);
-                const voip::CallHandle d = Incoming(service, seen, peer, SipPeerScript::answer, 3);
-                const voip::CallHandle e = Dial(service, seen, agents[4], "sip:queued-e@127.0.0.1:5098;transport=tcp");
-                const voip::CallHandle queued_b = Incoming(service, seen, peer, SipPeerScript::answer, 1);
-                (void)d; (void)e; (void)queued_b;
-                CHECK(WaitResources(service, seen, 2, 5)); CheckPool(service, 2, 5);
-                CHECK(pjsua_call_get_count() == 5); // queued outgoing C/E have no native calls
-                CHECK(peer.Stats().invites == invites_before);
-                CHECK(peer.IncomingResponseOrder(incoming_a_sequence, 180) != 0);
-                CHECK(peer.IncomingResponseOrder(incoming_a_sequence + 1, 180) != 0);
-                const int64_t ringing_deadline = k_uptime_get() + 1000;
-                while (peer.IncomingResponseOrder(incoming_a_sequence + 2, 180) == 0 && k_uptime_get() < ringing_deadline)
-                    Poll(service, seen);
-                CHECK(peer.IncomingResponseOrder(incoming_a_sequence + 2, 180) != 0);
-                EndCall(service, seen, b);
-                CHECK(WaitResources(service, seen, 1, 5));
-                CHECK(peer.Stats().invites == invites_before);
-                EndCall(service, seen, a);
-                CHECK(WaitState(service, seen, queued_a, voip::CallState::established));
-                CHECK(WaitState(service, seen, c, voip::CallState::established));
-                CHECK(WaitResources(service, seen, 2, 3));
-                const unsigned answer_order = peer.IncomingResponseOrder(incoming_a_sequence, 200);
-                const unsigned invite_order = peer.OutgoingInviteOrder(invites_before + 1);
-                CHECK(answer_order != 0 && invite_order != 0 && answer_order < invite_order);
-                printk("[multi-call] FIFO head action=%u C INVITE=%u\n", answer_order, invite_order);
-            } else if (lifecycle == 2) {
+            if (lifecycle == 2) {
                 voip::CallHandle queued[5]{};
                 const unsigned first_queued_sequence = peer.Stats().incoming_invites + 1;
                 for (unsigned i = 0; i < 5; ++i)
@@ -429,7 +527,8 @@ int main() {
                 CheckPool(service, 2, 5);
                 CHECK(pjsua_call_get_count() == 7);
                 const unsigned invites_before = peer.Stats().invites;
-                CHECK(service.Dial(agents[3], {"sip:overflow@127.0.0.1:5098;transport=tcp"}, &operation) == voip::Error::ok);
+                submission = service.Dial(agents[3], {"sip:overflow@127.0.0.1:5098;transport=tcp"}, &operation);
+                Submitted(seen, submission, operation, voip::Error::queue_full);
                 CHECK(WaitOperation(service, seen, operation, voip::Error::queue_full));
                 CHECK(peer.Stats().invites == invites_before);
                 CHECK(pjsua_call_get_count() == 7);
@@ -437,17 +536,23 @@ int main() {
                 CHECK(peer.IncomingResponseOrder(first_queued_sequence, 480) != 0);
                 voip::CallSnapshot stale{};
                 CHECK(service.GetCallSnapshot(queued[0], &stale) == voip::Error::invalid_handle);
+                EndCall(service, seen, b);
+                EndCall(service, seen, a);
+                CHECK(WaitResources(service, seen, 0, 0));
             } else {
                 const voip::CallHandle queued_a = Incoming(service, seen, peer, SipPeerScript::answer, 0);
-                CHECK(service.Answer(queued_a, &operation) == voip::Error::ok);
+                submission = service.Answer(queued_a, &operation);
+                Submitted(seen, submission, operation, voip::Error::ok);
                 CHECK(WaitOperation(service, seen, operation, voip::Error::ok));
                 const voip::CallHandle queued_c = Dial(service, seen, agents[2], "sip:cancel-c@127.0.0.1:5098;transport=tcp");
                 const unsigned reject_sequence = peer.Stats().incoming_invites + 1;
                 const voip::CallHandle queued_d = Incoming(service, seen, peer, SipPeerScript::answer, 3);
                 const unsigned remote_cancel_before = peer.Stats().cancels;
                 const voip::CallHandle remote_cancel = Incoming(service, seen, peer, SipPeerScript::cancel_incoming, 4);
-                CHECK(service.Reject(queued_d, 486, &operation) == voip::Error::ok);
-                CHECK(service.Cancel(queued_c, &operation) == voip::Error::ok);
+                submission = service.Reject(queued_d, 486, &operation);
+                Submitted(seen, submission, operation, voip::Error::ok);
+                submission = service.Cancel(queued_c, &operation);
+                Submitted(seen, submission, operation, voip::Error::ok);
                 CHECK(Wait(service, seen, seen.finished, 2));
                 CHECK(peer.IncomingResponseOrder(reject_sequence, 486) != 0);
                 CHECK(Wait(service, seen, seen.finished, 3));
@@ -462,10 +567,12 @@ int main() {
                 while (peer.Stats().reinvite_acks < peer.Stats().reinvites && k_uptime_get() < reinvite_deadline)
                     Poll(service, seen);
                 CHECK(peer.Stats().reinvite_acks == peer.Stats().reinvites);
-                CHECK(service.SetHeld(queued_a, true, &operation) == voip::Error::ok);
+                submission = service.SetHeld(queued_a, true, &operation);
+                Submitted(seen, submission, operation, voip::Error::ok);
                 CHECK(WaitState(service, seen, queued_a, voip::CallState::hold));
                 CHECK(WaitOperation(service, seen, operation, voip::Error::ok));
-                CHECK(service.SetHeld(queued_a, false, &operation) == voip::Error::ok);
+                submission = service.SetHeld(queued_a, false, &operation);
+                Submitted(seen, submission, operation, voip::Error::ok);
                 CHECK(WaitState(service, seen, queued_a, voip::CallState::established));
                 CHECK(WaitOperation(service, seen, operation, voip::Error::ok));
                 EndCall(service, seen, queued_a);
@@ -494,7 +601,7 @@ int main() {
             CHECK(WaitResources(service, seen, 0, 0));
             CHECK(pjsua_call_get_count() == 0);
             CHECK(peer.IncomingResponseOrder(incoming_sequence, 180) != 0);
-        } else {
+        } else if (lifecycle == 5) {
             struct Fault { SipPeerScript script; const char *uri; voip::Error error; unsigned sip; };
             const Fault faults[] = {
                 {SipPeerScript::malformed_sdp, "sip:malformed@127.0.0.1:5098;transport=tcp", voip::Error::negotiation_failed, 415},
@@ -517,11 +624,16 @@ int main() {
             const auto reused_a = Dial(service, seen, agents[0], "sip:reuse-a@127.0.0.1:5098;transport=tcp");
             const auto reused_b = Incoming(service, seen, peer, SipPeerScript::answer, 1);
             voip::OperationId answer{};
-            CHECK(service.Answer(reused_b, &answer) == voip::Error::ok);
+            const auto submission = service.Answer(reused_b, &answer);
+            Submitted(seen, submission, answer, voip::Error::ok);
             CHECK(Wait(service, seen, seen.accepted, accepted + 2));
             CHECK(!Same(reused_a, reused_b));
             CheckPool(service, 2, 0);
+            EndCall(service, seen, reused_b);
+            EndCall(service, seen, reused_a);
+            CHECK(WaitResources(service, seen, 0, 0));
         }
+        RunFullCapacityCycle(service, seen, peer, agents, lifecycle);
         voip::CallHandle old_calls[16]{};
         const unsigned old_count = seen.count;
         for (unsigned i = 0; i < old_count; ++i) old_calls[i] = seen.calls[i].handle;
