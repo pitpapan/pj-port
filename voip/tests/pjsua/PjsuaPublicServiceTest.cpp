@@ -55,12 +55,12 @@ bool WaitForRegistered(VoipService &service, AgentHandle agent) noexcept {
     return false;
 }
 
-bool WaitForUnsupportedDial(VoipService &service, OperationId operation,
-                            unsigned *matching_terminals,
-                            unsigned *matching_call_terminals,
-                            CallHandle *terminal_call,
-                            std::uint64_t *terminal_call_sequence,
-                            std::uint64_t *terminal_operation_sequence) noexcept {
+bool WaitForFailedPromotionDial(VoipService &service, OperationId operation,
+                                unsigned *matching_terminals,
+                                unsigned *matching_call_terminals,
+                                CallHandle *terminal_call,
+                                std::uint64_t *terminal_call_sequence,
+                                std::uint64_t *terminal_operation_sequence) noexcept {
     for (unsigned attempt = 0; attempt != 200; ++attempt) {
         Event event{};
         while (service.TryGetEvent(&event) == Error::ok) {
@@ -73,7 +73,7 @@ bool WaitForUnsupportedDial(VoipService &service, OperationId operation,
                 }
             }
             if (event.type == EventType::operation_terminal && event.operation == operation) {
-                assert(event.status.error == Error::unsupported_configuration);
+                assert(event.status.error == Error::signaling_failed);
                 ++*matching_terminals;
                 *terminal_operation_sequence = event.sequence;
             }
@@ -148,19 +148,22 @@ void RunPjsuaPublicServiceTests() {
     assert(incoming_events == 0 && incoming_call_states == 0);
     assert(first->GetResourceSnapshot().active_calls == 0);
 
+    // A native make-call rejection leaves no native lease, while the public
+    // operation and copied terminal transition still complete exactly once.
+    fake.FailCall(FakePjsuaApi::CallEntry::make_call, PJ_EUNKNOWN);
     OperationId dial_operation = 0;
-    assert(first->Dial(agent, {"sip:unsupported@example.test"}, &dial_operation) == Error::ok);
+    assert(first->Dial(agent, {"sip:failed-promotion@example.test"}, &dial_operation) == Error::ok);
     assert(dial_operation != 0);
     unsigned matching_terminals = 0;
     unsigned matching_call_terminals = 0;
     CallHandle terminal_call{};
     std::uint64_t terminal_call_sequence = 0;
     std::uint64_t terminal_operation_sequence = 0;
-    assert(WaitForUnsupportedDial(*first, dial_operation, &matching_terminals,
-                                  &matching_call_terminals,
-                                  &terminal_call,
-                                  &terminal_call_sequence,
-                                  &terminal_operation_sequence));
+    assert(WaitForFailedPromotionDial(*first, dial_operation, &matching_terminals,
+                                      &matching_call_terminals,
+                                      &terminal_call,
+                                      &terminal_call_sequence,
+                                      &terminal_operation_sequence));
     assert(matching_terminals == 1);
     assert(matching_call_terminals == 1);
     assert(terminal_call.IsValid());
@@ -170,14 +173,25 @@ void RunPjsuaPublicServiceTests() {
     assert(first->GetCallSnapshot(terminal_call, &terminal_snapshot) == Error::invalid_handle);
     for (unsigned attempt = 0; attempt != 10; ++attempt) {
         Event event{};
-        while (first->TryGetEvent(&event) == Error::ok)
+        while (first->TryGetEvent(&event) == Error::ok) {
+            if (event.type == EventType::call_state &&
+                event.call.slot == terminal_call.slot &&
+                event.call.generation == terminal_call.generation) {
+                assert(event.transition == CallTransition::timeout);
+                ++matching_call_terminals;
+            }
             if (event.type == EventType::operation_terminal && event.operation == dial_operation)
                 ++matching_terminals;
+        }
         k_sleep(K_MSEC(1));
     }
     assert(matching_terminals == 1);
+    assert(matching_call_terminals == 1);
     assert(first->GetResourceSnapshot().active_calls == 0);
+    assert(first->GetResourceSnapshot().promoted_calls == 0);
+    assert(first->GetResourceSnapshot().queued_calls == 0);
     assert(first->GetResourceSnapshot().available_logical_calls == 7);
+    assert(fake.ActiveCallCount() == 0);
     assert(first->Shutdown() == Error::ok); Drain(*first);
     assert(second->Initialize(fixture.config) == Error::ok);
     assert(second->Shutdown() == Error::ok); Drain(*second);

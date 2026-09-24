@@ -31,8 +31,9 @@ struct Fixture {
 void RunPjsuaRuntimeAdapterTests() {
     constexpr unsigned adapter_limit = 7;
     Fixture fixture; AgentRegistry registry; assert(registry.Initialize(fixture.config) == Error::ok);
-    static FakePjsuaApi fake; fake.Activate(); PjsuaRuntimeAdapter adapter(fake.Api());
+    static FakePjsuaApi fake; fake.Activate();
     auto initial_lifecycle = [&]() __attribute__((noinline)) {
+    PjsuaRuntimeAdapter adapter(fake.Api());
     assert(adapter.Initialize(registry, fixture.config.security, fixture.config.conference_format) == Error::ok);
     assert(fake.AccountAddCount() == 5 && fake.RegistrationCount() == 4);
     assert(adapter.Pump(100, 0) == Error::ok);

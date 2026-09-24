@@ -14,4 +14,4 @@ set -e
 
 test "$run_status" -eq 124
 rg -qF 'PJSUA PLAN 3 COMPONENT RESULT: PASSED' "$log_file"
-! rg -q 'USAGE FAULT|Illegal load of EXC_RETURN into PC|abort\(\)' "$log_file"
+! rg -iq '(MPU|USAGE|BUS|HARD|MEMMANAGE)[[:space:]]+FAULT|(Instruction|Data)[[:space:]]+Access[[:space:]]+Violation|Illegal load of EXC_RETURN into PC|ZEPHYR FATAL ERROR|ASSERTION FAIL|Kernel[[:space:]]+(panic|oops)|Halting system|abort\(\)' "$log_file"
