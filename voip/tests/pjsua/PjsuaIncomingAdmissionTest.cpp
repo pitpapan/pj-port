@@ -51,15 +51,17 @@ void RunPjsuaIncomingAdmissionTests() {
     Fixture fixture;
     FakePjsuaApi fake;
     fake.Reset();
+    pjsua_call_id id = PJSUA_INVALID_ID;
+    RuntimeNotification notification{};
+    CallHandle logical{3, 1};
+
+    auto successful_admission = [&]() __attribute__((noinline)) {
     PjsuaAccountManager accounts(fake.Api());
     assert(accounts.Initialize(fixture.registry, 4) == Error::ok);
     PjsuaCallManager calls(accounts, fake.Api());
-    pjsua_call_id id = PJSUA_INVALID_ID;
     OpenCall(fake.Api(), &id);
     calls.OnIncomingCall(2, id);
-    RuntimeNotification notification{};
     assert(calls.TryGetNotification(&notification));
-    CallHandle logical{3, 1};
 
     // Removing the native 180 handshake or binding the wrong provisional
     // token leaves either the context unbound or a non-180 native sequence.
@@ -69,8 +71,11 @@ void RunPjsuaIncomingAdmissionTests() {
         "add,call-defaults,make-call,get-call-data,set-call-data,get-call-info,"
         "get-call-data,"
         "call-defaults,answer-180"));
+    };
+    successful_admission();
 
     fake.Reset();
+    auto failed_admission_and_cancellation = [&]() __attribute__((noinline)) {
     PjsuaAccountManager failed_accounts(fake.Api());
     assert(failed_accounts.Initialize(fixture.registry, 4) == Error::ok);
     PjsuaCallManager failed(failed_accounts, fake.Api());
@@ -102,6 +107,8 @@ void RunPjsuaIncomingAdmissionTests() {
     assert(cancelled.TryGetNotification(&notification));
     assert(notification.type == RuntimeNotification::Type::call_finished);
     assert(cancelled.Count() == 0);
+    };
+    failed_admission_and_cancellation();
     printk("PjsuaIncomingAdmissionTest PASSED\n");
 }
 } // namespace voip::test
