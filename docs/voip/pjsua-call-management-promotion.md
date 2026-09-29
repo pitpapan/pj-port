@@ -1,6 +1,6 @@
 # Plan 4 PJSUA call-management promotion acceptance
 
-Accepted source revision: `6238fe3749e79f1678320d51c9668cdd57215d82`. This record is for host tests and MPS2/AN385 QEMU behavior plus an RT1064 compile and memory report. It is not RT1064 hardware, external-network, audio-device, or production memory-map acceptance. Controller-managed independent final whole-branch review is pending at this acceptance-document commit.
+Accepted source revision: the Plan 4 branch head after the final whole-branch review repair wave (`6238fe3749e79f1678320d51c9668cdd57215d82` plus the review fixes recorded below). This record is for host tests and MPS2/AN385 QEMU behavior plus an RT1064 compile and memory report. It is not RT1064 hardware, external-network, audio-device, or production memory-map acceptance. The independent final whole-branch review has been completed and its confirmed findings repaired; see "Final whole-branch review" below.
 
 The implementation retains one `VoipService`, actor, PJSUA runtime, callback router, core `CallStateMachine`, and global `CallScheduler`. Native PJSUA context/lease management supports incoming admission, outgoing promotion, controls, and copied terminal notifications. The scheduler owns the two-promoted-call limit and five-entry FIFO; queued outgoing calls do not create native INVITEs, and queued incoming calls retain native state while admission/rejection remains visible. The host, fake, and SIP tests exercise head blocking, ordered promotion, timeout origins, exactly-once operations, immediate handle invalidation with pollable copied terminal state, and five complete lifecycles.
 
@@ -56,4 +56,136 @@ All exited 0. Build 463/463 linked with FLASH 113,028 / 4,194,304 bytes, RAM 1,4
 
 The branch diff from Plan 3 base `28e8e43f39978c7e63b909da8ce41476793be489` spans 43 own-project paths, with no deletion or top-level `zephyr/` source change; `git diff --check` passes. The added Plan 4 path contains no media bridge/device audio, codec-priority policy, PJSUA2, TLS/SRTP enablement, runtime agent mutation, scheduler bypass, or second public business-state table. PJSUA context records are bounded native ownership; public call state remains in the core state machine/scheduler. The legacy uppercase VoIP stack remains intact. Profiles explicitly disable SIP TLS/SRTP; the separate legacy SRTP path is not promoted by this work.
 
-Three independently scoped repairs preceded the final-head restart: `da5ec4c9d` fixed Plan 3 fake test stack lifetime, deterministic failure assertions, and whole-log fault verdict; `a4e567cf4` linked the call manager exactly once in the production VoIP library; `6238fe374` bounded the incoming-admission test frame and measured 3,144-byte main-stack headroom. Their REDs, scoped GREENs, disassembly, and traces are retained in `.superpowers/sdd/2026-08-27-pjsua-call-management-promotion/task-7C-report.md`. A deferred Minor remains: `multi_call_scheduler.conf` enables PJSIP UDP although its scripted SIP scenario uses TCP. It was not silently changed. Independent final whole-branch review is controller-managed and pending at this document commit; findings may require another focused repair and affected-gate restart.
+Three independently scoped repairs preceded the final-head restart: `da5ec4c9d` fixed Plan 3 fake test stack lifetime, deterministic failure assertions, and whole-log fault verdict; `a4e567cf4` linked the call manager exactly once in the production VoIP library; `6238fe374` bounded the incoming-admission test frame and measured 3,144-byte main-stack headroom. Their REDs, scoped GREENs, disassembly, and traces are retained in `.superpowers/sdd/2026-08-27-pjsua-call-management-promotion/task-7C-report.md`. A deferred Minor remains: `multi_call_scheduler.conf` enables PJSIP UDP although its scripted SIP scenario uses TCP. It was not silently changed. The independent final whole-branch review is complete; its outcome and the repair wave are recorded in the next section.
+
+## Independent re-verification at `365929898`
+
+The whole acceptance matrix was re-run from a clean tree at the acceptance-document
+commit `365929898`, in a separate session and separate build directories
+(`/tmp/voip-plan4-final-*`), to confirm the table above reproduces rather than
+merely being recorded. Both host runs exited 0 with all eleven Plan 1–4 markers and
+hash to the same SHA-256 `44cf37f85e91e04653068fc19c36fb1ece43ecac139ba2b90547bb273b62e355`
+already recorded for the final-head runs. Every QEMU profile rebuilt with the same
+target counts and identical FLASH/RAM figures and re-emitted its required markers:
+`PJSUA PLAN 3 COMPONENT RESULT: PASSED` (fake), the one-account smoke plus lifecycles
+1–5, `VOIP PJSUA GENERAL HEAP: PASSED (0 allocations after initialization)` and
+`VOIP PJSUA REGISTRATION RESULT: PASSED (5 independent accounts, 5 lifecycles)`
+(real registration), `PJSUA CAPACITY RESULT: PASSED (5 accounts, 7 calls, eighth 486)`
+with arena `destroyed used=0 live=0 peak=274528`, the five individual Plan 4
+component markers plus `PJSUA PLAN 4 COMPONENT RESULT: PASSED`, and
+`VOIP MULTI CALL RESULT: PASSED (2 promoted, 5 FIFO, 5 lifecycles)`. The four direct
+QEMU runs again exited 124 only from their harness timeouts after the final marker
+and clean idle, and the whole-log fault scan (MPU/Usage/Bus/Hard/MemManage, access
+violation, invalid `EXC_RETURN`, Zephyr fatal/assert/panic/oops/halt, `abort()`)
+matched nothing in any log, including after each final marker. The re-run multi-call
+lifetime arena peaks were 467,544, 600,800, 518,848, 502,096, and 495,664 bytes
+against 2,097,152 (maximum 28.65%), each lifecycle reported
+`general_heap_allocations=0` and `No SIP worker threads created`, and peer minimum
+unused stack was 3,968 bytes. RT1064 rebuilt and linked with the same FLASH 113,028 /
+RAM 1,430,780 / DTCM 13,936 byte regions, and the `ram_report` / `rom_report` roots
+again read 1,444,671 and 113,016 bytes.
+
+## Marker substitution for Task 7A
+
+Plan 4 Task 7A specifies the marker
+`VOIP PJSUA TWO CALL SMOKE: PASSED (2 promoted, 2 agents)`. Task 7B superseded that
+standalone smoke scenario by folding a complete two-promoted establishment into every
+one of the five `2 promoted + 5 FIFO` lifecycles of the same application, so the
+string is not emitted anywhere and `VOIP MULTI CALL RESULT` is the single final
+verdict. The two-call property it named is still proven, and more strongly:
+`multi_call_scheduler.cpp` asserts `promoted_calls == 2`,
+`available_promoted_calls == 0`, and distinct promoted agent slots
+(`seen.calls[...].agent.slot != seen.calls[...].agent.slot`) inside each lifecycle,
+over real scripted-TCP-SIP `INVITE/100/180/200/ACK` and re-INVITE exchanges. This is
+a deliberate, recorded substitution, not an unmet gate.
+
+
+## Final whole-branch review
+
+An independent full-diff review of `28e8e43f3..HEAD` (44 files, about 4,500 added
+lines) returned six findings. Three were confirmed against the source and
+repaired, one latent hazard was closed, and two were adjudicated as non-defects
+without a production change. Each repair has a causal RED/GREEN witness and the
+complete acceptance matrix was restarted afterwards.
+
+**Confirmed and repaired.** `PjsuaCallManager::TryRelease` detached native user
+data but kept `native_id` while the context stayed reserved for its copied
+finish record. PJSUA recycles a `pjsua_call_id` as soon as a call is freed, so
+the dead context went on claiming that id: a valid new INVITE on it was declined
+with 486 although six contexts were free, and since `PromoteOutgoing` assigns
+`native_id` without a collision check two live contexts could share one id whose
+callbacks `Find` then resolved to the dead context and dropped in silence,
+stranding the call and its promoted lease until the answer timer. `TryRelease`
+now clears `native_id` at detach and `Find` ignores `PJSUA_INVALID_ID`. Removing
+either line makes `PjsuaCallContextTest` abort on the real QEMU target; with them
+all five Plan 4 component markers pass.
+
+Second, a hold or resume whose re-INVITE is rejected without terminating the
+dialog never resolved. PJPROJECT's own `pjsua_call_on_media_update` deliberately
+does not disconnect a failed negotiation while `PJSIP_INV_STATE_CONFIRMED`, and
+jumps past the `on_call_media_state` callback, so `pending_operation` stayed
+`set_held` indefinitely while `PjsuaCallManager::SetHeld` returned `busy` and
+`ApplyTimers` never fired — the call is `established` or `hold(media)`, not
+`initiated` or `hold(waiting)`. The call and one of the two global promoted
+leases were unrecoverable except by remote BYE or shutdown. Because
+`state_machine.uml` gives `established` only the `hold` and `finish` edges and no
+`timeout` edge, a media-control timeout would have had to bypass the binding
+state machine, so `finish` is the only legal exit: `hangup` alone may now
+supersede an unresolved pending `set_held`, while every other second command
+keeps the plan's `busy` rule. `BindCallOperation` already completes the
+superseded media operation exactly once as `cancelled`, and the `call_finished`
+path already classified `media_pending` that way, so the exactly-once guarantee
+the `busy` rule protects is unchanged. `test_task5_command_state_matrix` was
+narrowed to a second non-terminal command, and
+`test_final_hangup_escapes_unresolved_media_control` proves the escape for hold
+and for resume.
+
+Third, `VoipRuntime::CopyCallMetadata` guarded the `remote_uri` copy but
+overwrote `remote_address` unconditionally, so the first follow-up notification
+without a contact erased the address captured at admission from both the public
+snapshot and the terminal event. The address is now guarded identically, with
+`test_final_copied_remote_address_survives_later_notifications` as witness.
+
+**Latent hazard closed.** In the unreachable incoming `cancel`/`hangup`
+native-dispatch branches — the deferred Minor already recorded under Task 5 —
+`local_transition` was computed true although no scheduler transition had been
+produced, so any policy change reaching that path would publish a
+default-constructed `call_state` event carrying an invalid handle.
+`local_transition` now also requires `!deferred_native`.
+
+**Adjudicated as non-defects.** The FIFO-full dial preflight cannot mask a
+malformed URI as a retryable `queue_full`: `VoipRuntime::Dial` validates the URI
+synchronously and returns `invalid_argument` before a command or operation is
+reserved, which the review missed by reading only `CallScheduler::AdmitOutgoing`.
+A speculative change was reverted and
+`test_final_full_fifo_still_reports_invalid_dial_arguments` pins the ordering
+instead. The removed `now_ms < admitted_at_ms` short-circuit is likewise not a
+regression: Task 5 binds elapsed checks to unsigned subtraction precisely so a
+wrapped monotonic counter still reports true elapsed time, the review could
+construct no reachable case, and `test_task5_independent_timer_epochs_and_wrap`
+already covers `UINT64_MAX`-adjacent behavior.
+
+**Post-repair gate restart.** Two host runs exited 0 with all eleven markers and
+the same SHA-256 `44cf37f85e91e04653068fc19c36fb1ece43ecac139ba2b90547bb273b62e355`.
+Every QEMU profile rebuilt and re-emitted its markers with no fault signature
+anywhere in any whole log: Plan 3 fake component; one-account smoke plus
+lifecycles 1–5 with `VOIP PJSUA GENERAL HEAP: PASSED (0 allocations after
+initialization)` and `VOIP PJSUA REGISTRATION RESULT: PASSED (5 independent
+accounts, 5 lifecycles)`; `PJSUA CAPACITY RESULT: PASSED (5 accounts, 7 calls,
+eighth 486)`; the five Plan 4 component markers plus `PJSUA PLAN 4 COMPONENT
+RESULT: PASSED`; and `VOIP MULTI CALL RESULT: PASSED (2 promoted, 5 FIFO, 5
+lifecycles)` with multi-call lifetime arena peaks of 467,544, 600,800, 518,848,
+502,168 and 477,960 bytes against 2,097,152 (maximum 28.65%),
+`general_heap_allocations=0` and `No SIP worker threads created` in every
+lifecycle, and 3,968 bytes peer minimum unused stack. RT1064 relinked with FLASH
+113,148 / RAM 1,430,780 / DTCM 13,936 bytes and report roots RAM 1,444,671 /
+ROM 113,132.
+
+One repair detail is worth recording for future test authors. The first version
+of the recycled-call-id regression added its own `PjsuaCallManager` in a nested
+helper, which reproduced exactly the post-PASS Usage Fault that Task 7C had
+repaired: the extra fixture overran the 65,536-byte main stack into adjacent
+idle-stack storage, and the whole-log fault verdict caught it even though every
+marker had printed. The regression was restructured to reuse the existing
+pressure-scenario manager, adding no new fixture, after which the component log
+is clean through idle.

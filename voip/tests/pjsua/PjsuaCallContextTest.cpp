@@ -46,11 +46,15 @@ void OpenNativeCalls(const PjsuaApi &api) {
     }
 }
 
+// Defaults to DISCONNECTED so the pressure scenario is unchanged; the flag
+// lets the same manager then observe a fresh INVITE on a recycled call id.
+bool recycled_call_disconnected = true;
 pj_status_t DisconnectedInfo(pjsua_call_id id, pjsua_call_info *info) {
     if (info == nullptr) return PJ_EINVAL;
     std::memset(info, 0, sizeof(*info));
     info->id = id;
-    info->state = PJSIP_INV_STATE_DISCONNECTED;
+    info->state = recycled_call_disconnected ? PJSIP_INV_STATE_DISCONNECTED
+                                             : PJSIP_INV_STATE_INCOMING;
     return PJ_SUCCESS;
 }
 
@@ -159,6 +163,39 @@ void RunPjsuaCallContextTests() {
         assert(notification.type == RuntimeNotification::Type::call_finished &&
                notification.token == retained_tokens[index]);
     }
+    AssertCallResourceBaseline(pressure, fake);
+
+    // PJSUA recycles a pjsua_call_id as soon as the call is freed, while a
+    // disconnected context stays reserved until the actor drains its copied
+    // finish record. The retained context must not keep claiming that id, or
+    // the next INVITE carrying it is declined with 486 although six contexts
+    // are free. Reuses the pressure manager so no extra call-manager frame
+    // overlaps this one's main-stack budget.
+    const unsigned answer_before = fake.AnswerStatus();
+    const unsigned hangup_before = fake.HangupStatus();
+    recycled_call_disconnected = true;
+    pressure.OnIncomingCall(2, 3);
+    assert(pressure.Count() == 1 && fake.CallUserData(3) != nullptr);
+    pressure.OnCallState(3);
+    // Native ownership is unreachable, but the context is still reserved.
+    assert(pressure.Count() == 1 && fake.CallUserData(3) == nullptr);
+    recycled_call_disconnected = false;
+    pressure.OnIncomingCall(2, 3);
+    assert(pressure.Count() == 2 && fake.CallUserData(3) != nullptr);
+    assert(pressure.TryGetNotification(&notification) &&
+           notification.type == RuntimeNotification::Type::incoming_call);
+    const std::uint32_t recycled_first = notification.token;
+    assert(pressure.TryGetNotification(&notification) &&
+           notification.type == RuntimeNotification::Type::call_finished &&
+           notification.token == recycled_first);
+    assert(pressure.TryGetNotification(&notification) &&
+           notification.type == RuntimeNotification::Type::incoming_call &&
+           notification.token != recycled_first);
+    assert(!pressure.TryGetNotification(&notification));
+    assert(pressure.Count() == 1);
+    // The recycled-id INVITE was admitted, so no new decline was issued.
+    assert(fake.AnswerStatus() == answer_before && fake.HangupStatus() == hangup_before);
+    pressure.Reset();
     AssertCallResourceBaseline(pressure, fake);
     printk("PjsuaCallContextTest PASSED\n");
 }

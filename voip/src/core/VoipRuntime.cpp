@@ -332,8 +332,12 @@ void VoipRuntime::CopyCallMetadata(
     if (notification.remote_uri[0] != '\0')
         std::memcpy(context.remote_uri, notification.remote_uri,
                     sizeof(context.remote_uri));
-    std::memcpy(context.remote_address, notification.remote_address,
-                sizeof(context.remote_address));
+    // Guard the address exactly like the URI. Native callbacks only carry a
+    // contact when PJSUA has one, and synthesized notifications carry none,
+    // so an unguarded copy erases the identity captured at admission.
+    if (notification.remote_address[0] != '\0')
+        std::memcpy(context.remote_address, notification.remote_address,
+                    sizeof(context.remote_address));
     context.sip_status = notification.sip_status;
 }
 
@@ -723,7 +727,16 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
         (void)operations_.Complete(command.operation, Error::invalid_handle);
         return;
     }
-    if (context->pending_operation != CallContext::PendingOperation::none) {
+    // A second command while native negotiation is pending reports busy rather
+    // than cancelling the first operation. Hangup is the one exception: PJSUA
+    // emits no media callback when a peer rejects a hold/resume re-INVITE
+    // without terminating the dialog, so without this escape the call and one
+    // of the two global promoted leases stay wedged until remote BYE or
+    // shutdown. BindCallOperation still completes the superseded media
+    // operation exactly once, as cancelled.
+    if (context->pending_operation != CallContext::PendingOperation::none &&
+        !(command.type == CommandType::hangup &&
+          context->pending_operation == CallContext::PendingOperation::set_held)) {
         (void)operations_.Complete(command.operation, Error::busy);
         return;
     }
@@ -801,7 +814,8 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
         else if (!scheduler_.IsPromoted(handle))
             error = scheduler_.CancelDeferred(handle, &transition, effects);
         else error = scheduler_.Cancel(handle, &transition, effects);
-        local_transition = !scheduler_.IsPromoted(handle) && error == Error::ok;
+        local_transition = !deferred_native && !scheduler_.IsPromoted(handle) &&
+                           error == Error::ok;
         break;
     case CommandType::hangup:
         context->pending_operation = CallContext::PendingOperation::hangup;
@@ -814,7 +828,8 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
         else if (!scheduler_.IsPromoted(handle))
             error = scheduler_.HangupDeferred(handle, &transition, effects);
         else error = scheduler_.Hangup(handle, &transition, effects);
-        local_transition = !scheduler_.IsPromoted(handle) && error == Error::ok;
+        local_transition = !deferred_native && !scheduler_.IsPromoted(handle) &&
+                           error == Error::ok;
         break;
     case CommandType::set_held:
         context->pending_operation = CallContext::PendingOperation::set_held;

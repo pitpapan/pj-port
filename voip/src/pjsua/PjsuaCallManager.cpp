@@ -44,6 +44,7 @@ std::uint32_t PjsuaCallManager::NextToken() noexcept {
 }
 
 PjsuaCallContext *PjsuaCallManager::Find(pjsua_call_id native_id) noexcept {
+    if (native_id == PJSUA_INVALID_ID) return nullptr;
     for (PjsuaCallContext &context : contexts_)
         if (context.phase != PjsuaCallPhase::free && context.native_id == native_id)
             return &context;
@@ -336,6 +337,13 @@ void PjsuaCallManager::TryRelease(PjsuaCallContext &context) noexcept {
             api_.call_set_user_data(context.native_id, nullptr) != PJ_SUCCESS) return;
     }
     context.user_data_bound = false;
+    // Native ownership ends here, but the context stays reserved until the
+    // actor consumes the copied finish record. PJSUA recycles a pjsua_call_id
+    // as soon as the call is freed, so a retained id would alias the next
+    // call: Reserve()/OnIncomingCall would decline a valid INVITE with 486,
+    // and an outgoing promotion could bind a duplicate id whose callbacks
+    // Find() then resolves to this dead context and silently drops.
+    context.native_id = PJSUA_INVALID_ID;
     if (!context.logical_bound && context.admission.sequence == 0) {
         Release(context);
         return;

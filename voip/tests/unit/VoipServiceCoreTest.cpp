@@ -1813,8 +1813,16 @@ void test_task5_command_state_matrix() {
             (state == queued_incoming && command == 0))
             assert(f.runtime.AdapterRequestCount() == before);
         if (media_pending) {
+            // A second non-terminal command reports busy rather than
+            // cancelling the in-flight media negotiation. Hangup is excluded
+            // here because `established` and `hold(media)` have no legal
+            // `timeout` edge in state_machine.uml, so `finish` is the only
+            // exit if PJSUA never reports the negotiation result; that escape
+            // is proven by
+            // test_final_hangup_escapes_unresolved_media_control.
             voip::OperationId second{};
-            assert(f.runtime.Hangup(call, &second) == E::ok); f.Step(f.now);
+            assert(f.runtime.SetHeld(call, command == 4, &second) == E::ok);
+            f.Step(f.now);
             assert(f.Completions(second, E::busy) == 1);
             assert(f.Completions(operation, E::ok) == 0);
         }
@@ -2120,11 +2128,133 @@ void test_task6_cancel_before_promotion_releases_only_on_finish() {
     assert(f.Completions(answer,voip::Error::ok)==1);
 }
 
+
+// Final-review regression: a later native notification that carries no remote
+// address must not erase the address copied at admission. `remote_uri` was
+// already guarded; `remote_address` was overwritten unconditionally, so the
+// first follow-up callback blanked a field the public snapshot promises.
+void test_final_copied_remote_address_survives_later_notifications() {
+    ControlFixture f;
+    voip::RuntimeNotification incoming{};
+    incoming.type = voip::RuntimeNotification::Type::incoming_call;
+    incoming.token = 980;
+    incoming.agent = f.agent;
+    std::strcpy(incoming.remote_uri, "sip:caller@example.test");
+    std::strcpy(incoming.remote_address, "198.51.100.7");
+    const auto before = f.count;
+    assert(f.runtime.InjectNotification(incoming) == voip::Error::ok);
+    f.Step(f.now);
+    voip::CallHandle call{};
+    for (auto i = before; i < f.count; ++i)
+        if (f.events[i].type == voip::EventType::incoming_call) call = f.events[i].call;
+    assert(call.IsValid());
+    voip::CallSnapshot admitted{};
+    assert(f.runtime.GetCallSnapshot(call, &admitted) == voip::Error::ok);
+    assert(std::strcmp(admitted.remote_uri, "sip:caller@example.test") == 0);
+    assert(std::strcmp(admitted.remote_address, "198.51.100.7") == 0);
+    voip::RuntimeNotification accepted{};
+    accepted.type = voip::RuntimeNotification::Type::call_accepted;
+    accepted.token = 980;
+    accepted.agent = f.agent;
+    assert(f.runtime.InjectNotification(accepted) == voip::Error::ok);
+    f.Step(f.now);
+    voip::CallSnapshot established{};
+    assert(f.runtime.GetCallSnapshot(call, &established) == voip::Error::ok);
+    assert(std::strcmp(established.remote_uri, "sip:caller@example.test") == 0);
+    assert(std::strcmp(established.remote_address, "198.51.100.7") == 0);
+}
+
+// Final-review regression: PJSUA gives no media callback at all when a remote
+// peer rejects a hold/resume re-INVITE without terminating the dialog
+// (`pjsua_call_on_media_update` skips `on_call_media_state` for a failed
+// negotiation while CONFIRMED). The pending media operation therefore never
+// resolves, so a terminal control must still be accepted or the call and one
+// of the two global promoted leases are wedged until remote BYE or shutdown.
+void test_final_hangup_escapes_unresolved_media_control() {
+    for (bool held : {true, false}) {
+        ControlFixture f;
+        const auto call = f.Incoming(981);
+        f.Notify(voip::RuntimeNotification::Type::call_accepted, 981);
+        if (!held) {
+            voip::OperationId settle{};
+            assert(f.runtime.SetHeld(call, true, &settle) == voip::Error::ok);
+            f.Step(f.now);
+            f.Notify(voip::RuntimeNotification::Type::call_held, 981);
+            assert(f.Completions(settle, voip::Error::ok) == 1);
+        }
+        voip::OperationId media{};
+        assert(f.runtime.SetHeld(call, held, &media) == voip::Error::ok);
+        f.Step(f.now);
+        assert(f.Completions(media, voip::Error::cancelled) == 0);
+        // A non-terminal second command still reports busy; only termination
+        // may supersede an unresolved native media negotiation.
+        voip::OperationId second{};
+        assert(f.runtime.SetHeld(call, !held, &second) == voip::Error::ok);
+        f.Step(f.now);
+        assert(f.Completions(second, voip::Error::busy) == 1);
+        voip::OperationId hangup{};
+        assert(f.runtime.Hangup(call, &hangup) == voip::Error::ok);
+        f.Step(f.now);
+        assert(f.Completions(media, voip::Error::cancelled) == 1);
+        assert(f.Requests(voip::RuntimeRequest::Type::hangup, 981) == 1);
+        f.Notify(voip::RuntimeNotification::Type::call_finished, 981);
+        assert(!f.Live(call));
+        assert(f.Terminals(call) == 1);
+        assert(f.Completions(media, voip::Error::cancelled) == 1);
+        assert(f.Completions(hangup, voip::Error::ok) == 1);
+        const auto after = f.runtime.GetResourceSnapshot();
+        assert(after.active_calls == 0 && after.available_promoted_calls == 2);
+    }
+}
+
+// Final review asked whether the FIFO-full dial preflight, which runs before
+// scheduler admission, can mask a malformed URI as a retryable `queue_full`.
+// It cannot: `VoipRuntime::Dial` validates the URI synchronously and refuses
+// it before a command or operation is ever reserved. This pins that ordering
+// so the preflight is never moved ahead of validation.
+void test_final_full_fifo_still_reports_invalid_dial_arguments() {
+    ControlFixture f;
+    (void)f.Incoming(990);
+    voip::AgentHandle second{};
+    assert(f.runtime.GetAgentHandle(1, &second) == voip::Error::ok);
+    voip::OperationId operation{};
+    assert(f.runtime.Dial(second, {"sip:second@example.test"}, &operation) == voip::Error::ok);
+    f.Step(f.now);
+    for (unsigned i = 0; i < 5; ++i) (void)f.Incoming(991 + i);
+    const auto before = f.runtime.GetResourceSnapshot();
+    assert(before.promoted_calls == 2 && before.queued_calls == 5);
+    const auto requests = f.runtime.AdapterRequestCount();
+    voip::OperationId malformed = 7;
+    assert(f.runtime.Dial(f.agent, {""}, &malformed) == voip::Error::invalid_argument);
+    assert(malformed == 0);
+    char overlong[voip::max_uri_length + 2];
+    std::memset(overlong, 'a', sizeof(overlong) - 1);
+    overlong[sizeof(overlong) - 1] = '\0';
+    assert(f.runtime.Dial(f.agent, {overlong}, &malformed) == voip::Error::invalid_argument);
+    f.Step(f.now);
+    assert(f.runtime.GetResourceSnapshot().available_operations ==
+           before.available_operations);
+    voip::OperationId overflow{};
+    assert(f.runtime.Dial(f.agent, {"sip:overflow@example.test"}, &overflow) == voip::Error::ok);
+    f.Step(f.now);
+    assert(f.Completions(overflow, voip::Error::queue_full) == 1);
+    assert(f.runtime.AdapterRequestCount() == requests);
+    const auto after = f.runtime.GetResourceSnapshot();
+    assert(after.active_calls == 7 && after.promoted_calls == 2 && after.queued_calls == 5);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
     test_full_fifo_reports_queue_full_before_terminal_reservation();
     if (argc == 2) {
+        if (std::strcmp(argv[1], "--final") == 0) {
+            test_final_copied_remote_address_survives_later_notifications();
+            test_final_hangup_escapes_unresolved_media_control();
+            test_final_full_fifo_still_reports_invalid_dial_arguments();
+            std::puts("VoipServiceCoreTest focused PASSED");
+            return 0;
+        }
         if (std::strcmp(argv[1], "--task6") == 0) { test_task6_cancel_retains_native_until_finish(); test_task6_media_results_complete_once(); test_task6_queued_finish_only_failure_preserves_status_and_fifo(); test_task6_finish_only_failure_completes_pending_operation_once(); test_task6_cancel_before_promotion_releases_only_on_finish(); }
         else if (std::strcmp(argv[1], "--task5-matrix") == 0) test_task5_command_state_matrix();
         else if (std::strcmp(argv[1], "--task5-preanswer") == 0) test_task5_preanswer_and_terminal_acceptance();
@@ -2139,6 +2269,9 @@ int main(int argc, char **argv) {
     test_task6_queued_finish_only_failure_preserves_status_and_fifo();
     test_task6_finish_only_failure_completes_pending_operation_once();
     test_task6_cancel_before_promotion_releases_only_on_finish();
+    test_final_copied_remote_address_survives_later_notifications();
+    test_final_hangup_escapes_unresolved_media_control();
+    test_final_full_fifo_still_reports_invalid_dial_arguments();
     test_task5_command_state_matrix();
     test_task5_preanswer_and_terminal_acceptance();
     test_task5_independent_timer_epochs_and_wrap();
