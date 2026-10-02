@@ -2042,6 +2042,23 @@ void test_clock_failure_stops_admission_and_retains_native_ownership() {
     f.runtime.DrainAdapterCallbacks();
     f.Step(f.now);
     assert(!f.Live(call) && f.Terminals(call)==1);
+    voip::AgentHandle stopped_agent{};
+    assert(f.runtime.GetAgentHandle(0,&stopped_agent)!=voip::Error::ok);
+    // Registry lifetime (including credential storage) ends before the final
+    // service_stopped event is visible, not only when Shutdown returns.
+    unsigned stopped=0;
+    for (std::size_t i=0;i<f.count;++i) if (f.events[i].type==voip::EventType::service_stopped) ++stopped;
+    assert(stopped==1);
+}
+
+void test_media_bridge_snapshot_is_not_a_signalling_lease_proxy() {
+    ControlFixture f;
+    (void)f.Incoming(988);
+    const auto resources=f.runtime.GetResourceSnapshot();
+    assert(resources.promoted_calls==1 && resources.available_promoted_calls==1);
+    // This fake adapter owns no custom PCM ports. Native composition tests
+    // separately exercise actual attachment and quiescing availability.
+    assert(resources.available_media_bridges==2);
 }
 
 void test_task6_queued_finish_only_failure_preserves_status_and_fifo() {
@@ -2292,6 +2309,7 @@ int main(int argc, char **argv) {
     test_task6_cancel_retains_native_until_finish();
     test_task6_media_results_complete_once();
     test_clock_failure_stops_admission_and_retains_native_ownership();
+    test_media_bridge_snapshot_is_not_a_signalling_lease_proxy();
     test_task6_queued_finish_only_failure_preserves_status_and_fifo();
     test_task6_finish_only_failure_completes_pending_operation_once();
     test_task6_cancel_before_promotion_releases_only_on_finish();

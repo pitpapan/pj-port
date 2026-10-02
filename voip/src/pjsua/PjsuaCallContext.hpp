@@ -24,6 +24,9 @@ struct PjsuaCallContext {
     PjsuaCallPhase phase = PjsuaCallPhase::free;
     bool incoming = false, logical_bound = false, user_data_bound = false;
     bool promoted = false;
+    CopiedMediaState media{};
+    Error media_failure=Error::ok;
+    bool media_hangup_sent=false;
     bool media_quiescent = true, terminal_reported = false;
     bool confirmed_once = false, terminal_seen = false;
     bool future_security_clear = true;

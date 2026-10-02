@@ -1,4 +1,5 @@
 #include "PjsuaCallManager.hpp"
+#include "PjsuaMediaManager.hpp"
 
 #include <cstring>
 
@@ -340,7 +341,8 @@ bool PjsuaCallManager::EnqueueCall(PjsuaCallContext &context,
 void PjsuaCallManager::TryRelease(PjsuaCallContext &context) noexcept {
     if (!context.terminal_seen || context.terminal_reported ||
         !context.media_quiescent || context.callback_depth != 0 ||
-        !context.future_security_clear) return;
+        !context.future_security_clear ||
+        (media_owner_ && !media_owner_->IsQuiescent(context.token))) return;
     if (OwnsNativeUserData(context)) {
         if (api_.call_set_user_data == nullptr ||
             api_.call_set_user_data(context.native_id, nullptr) != PJ_SUCCESS) return;
@@ -433,6 +435,7 @@ void PjsuaCallManager::OnCallState(pjsua_call_id native_id) noexcept {
         return;
     }
     context->media_quiescent = !IsMediaLive(info.media_status);
+    context->media={native_id,info.media_dir,info.media_status,info.conf_slot};
     if (info.state == PJSIP_INV_STATE_CALLING &&
         (context->phase == PjsuaCallPhase::calling ||
          context->phase == PjsuaCallPhase::promoting)) {
@@ -458,7 +461,7 @@ void PjsuaCallManager::OnCallState(pjsua_call_id native_id) noexcept {
             if (rejected && context->logical_bound)
                 (void)EnqueueCall(*context, RuntimeNotification::Type::call_rejected,
                                   info, TerminalError(info));
-            const Error terminal_error = TerminalError(info);
+            const Error terminal_error = context->media_failure!=Error::ok ? context->media_failure : TerminalError(info);
             context->finish.notification = CopyCall(*context,
                 RuntimeNotification::Type::call_finished, info, terminal_error);
         }
@@ -473,6 +476,7 @@ void PjsuaCallManager::OnCallMediaState(pjsua_call_id native_id) noexcept {
     pjsua_call_info info{};
     if (api_.call_get_info(native_id, &info) == PJ_SUCCESS) {
         context->media_quiescent = !IsMediaLive(info.media_status);
+        context->media={native_id,info.media_dir,info.media_status,info.conf_slot};
         if (context->phase == PjsuaCallPhase::confirmed ||
             context->phase == PjsuaCallPhase::local_hold) {
             if (info.media_status == PJSUA_CALL_MEDIA_ERROR &&
@@ -589,8 +593,13 @@ Error PjsuaCallManager::BeginShutdown() noexcept {
         if (context.phase == PjsuaCallPhase::free) continue;
         if (context.phase != PjsuaCallPhase::disconnected &&
             context.phase != PjsuaCallPhase::disconnecting && api_.call_hangup != nullptr) {
+            const auto previous=context.phase;
             context.phase = PjsuaCallPhase::disconnecting;
-            (void)api_.call_hangup(context.native_id, 0, nullptr, nullptr);
+            const auto status=api_.call_hangup(context.native_id, 0, nullptr, nullptr);
+            // Failed dispatch has no terminal callback to wait for. Keep it
+            // retryable without overwriting a synchronous state callback.
+            if (status!=PJ_SUCCESS && context.phase==PjsuaCallPhase::disconnecting)
+                context.phase=previous;
         }
         TryRelease(context);
         if (context.phase != PjsuaCallPhase::free) pending = true;
@@ -603,6 +612,40 @@ void PjsuaCallManager::Reset() noexcept {
         if (context.phase != PjsuaCallPhase::free) Release(context);
     next_sequence_ = 0;
     stopping_ = false;
+}
+
+bool PjsuaCallManager::GetMediaObservation(std::size_t index,PjsuaOwnedMediaObservation *out) const noexcept {
+    if (index>=contexts_.size() || !out || contexts_[index].phase==PjsuaCallPhase::free) return false;
+    const auto &context=contexts_[index];
+    *out={context.logical,context.agent,context.token,context.promoted,
+          context.terminal_seen,context.media_quiescent,context.media};
+    return true;
+}
+Error PjsuaCallManager::FailMedia(std::uint32_t token,Error error) noexcept {
+    auto *context=FindToken(token);
+    if (!context) return Error::invalid_handle;
+    if (context->media_failure==Error::ok) context->media_failure=error;
+    if (context->terminal_seen) {
+        if (!context->terminal_reported) {
+            context->finish.notification.error=error;
+            context->finish.notification.status.error=error;
+        }
+        return Error::ok;
+    }
+    if (context->phase==PjsuaCallPhase::disconnecting) return Error::ok;
+    if (context->media_hangup_sent) return Error::ok;
+    const auto result=Hangup(token);
+    if (result==Error::ok) context->media_hangup_sent=true;
+    return result;
+}
+void PjsuaCallManager::RetryMediaFailures() noexcept {
+    for (auto &context : contexts_)
+        if (context.phase!=PjsuaCallPhase::free && !context.terminal_seen &&
+            context.media_failure!=Error::ok && !context.media_hangup_sent)
+            (void)FailMedia(context.token,context.media_failure);
+}
+void PjsuaCallManager::RefreshMediaQuiescence() noexcept {
+    for (auto &context : contexts_) if (context.phase!=PjsuaCallPhase::free) TryRelease(context);
 }
 
 } // namespace voip

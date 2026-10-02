@@ -61,7 +61,7 @@ public:
         }
         return PJ_EINVAL;
     }
-    static int Slot(pjsua_call_id) { return call_slot; }
+    static int Slot(pjsua_call_id id) { return id==0 ? call_slot : id>=0 && id<7 ? id+1 : PJSUA_INVALID_ID; }
     static pj_status_t Connect(int src,int sink) {
         assert(src>0 && sink>0 && src!=sink); ++connects;
         if (fail_connect==connects) return PJ_EUNKNOWN;

@@ -1179,6 +1179,9 @@ void VoipRuntime::RetryPendingTeardowns() noexcept {
 void VoipRuntime::CompleteShutdownIfDrained() noexcept {
     if (lifecycle_ != Lifecycle::shutting_down || shutdown_complete_ || call_count_ != 0) return;
     if (adapter_.Shutdown() != Error::ok) return;
+    // Native calls, custom ports, runtime pools and account obligations are
+    // gone. Erase borrowed bindings/copied credentials before the final event.
+    agents_.Reset();
     VoipEventQueue::Reservation stopped;
     if (!events_.ReserveServiceStopped(&stopped) ||
         !events_.CommitServiceStopped(&stopped)) {
@@ -1206,6 +1209,7 @@ void VoipRuntime::Step(std::uint64_t now_ms) noexcept {
             if (agent != nullptr) PublishAgent(*agent);
         }
         (void)adapter_.Pump(now_ms, 0);
+        available_media_bridges_=adapter_.AvailableMediaBridges();
         RuntimeNotification initial_notification{};
         for (std::size_t i = 0; i < RuntimeAdapter::notification_capacity; ++i) {
             if (!adapter_.TryGetNotification(&initial_notification)) break;
@@ -1249,6 +1253,7 @@ void VoipRuntime::Step(std::uint64_t now_ms) noexcept {
     }
     RuntimeNotification notification{};
     (void)adapter_.Pump(now_ms, 0);
+    available_media_bridges_=adapter_.AvailableMediaBridges();
     for (std::size_t i = 0; i < RuntimeAdapter::notification_capacity; ++i) {
         if (!adapter_.TryGetNotification(&notification)) break;
         ProcessNotification(notification);
@@ -1352,7 +1357,9 @@ void VoipRuntime::RefreshResources() noexcept {
     snapshot.available_fifo_entries = static_cast<std::uint16_t>(scheduler_.AvailableFifoEntries());
     snapshot.available_logical_calls = static_cast<std::uint16_t>(scheduler_.AvailableLogicalCalls());
     snapshot.available_promoted_calls = static_cast<std::uint16_t>(scheduler_.AvailablePromotedCalls());
-    snapshot.available_media_bridges = static_cast<std::uint16_t>(scheduler_.AvailablePromotedCalls());
+    // Only Step reads the actor-owned adapter. Public snapshot readers and
+    // command admission reuse its copied count without entering PJSUA.
+    snapshot.available_media_bridges = available_media_bridges_;
     snapshot.available_call_slots = snapshot.available_logical_calls;
     resources_.Update(snapshot);
 }

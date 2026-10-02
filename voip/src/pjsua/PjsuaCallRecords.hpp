@@ -6,6 +6,20 @@
 
 namespace voip {
 
+struct CopiedMediaState {
+    pjsua_call_id native_id=PJSUA_INVALID_ID;
+    pjmedia_dir direction=PJMEDIA_DIR_NONE;
+    pjsua_call_media_status status=PJSUA_CALL_MEDIA_NONE;
+    pjsua_conf_port_id slot=PJSUA_INVALID_ID;
+};
+struct PjsuaOwnedMediaObservation {
+    CallHandle call{};
+    AgentHandle agent{};
+    std::uint32_t token=0;
+    bool promoted=false, terminal=false, native_inactive=true;
+    CopiedMediaState media{};
+};
+
 struct PjsuaCallTransactionRecord {
     pjsua_call_id native_id = PJSUA_INVALID_ID;
     pjsip_method_e method = PJSIP_OTHER_METHOD;

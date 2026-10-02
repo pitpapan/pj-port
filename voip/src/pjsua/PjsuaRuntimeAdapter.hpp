@@ -7,6 +7,7 @@
 #include "PjsuaCallManager.hpp"
 #include "PjsuaRuntime.hpp"
 #include "PjsuaTransportManager.hpp"
+#include "PjsuaMediaManager.hpp"
 
 #include <array>
 #include <cstddef>
@@ -33,6 +34,7 @@ public:
     bool TryGetNotification(RuntimeNotification *) noexcept override;
     Error BeginCallTeardown(std::uint32_t) noexcept override;
     Error Shutdown() noexcept override;
+    std::uint16_t AvailableMediaBridges() const noexcept override { return media_.Available(); }
 #if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
     // Narrow component-only seam used to prove that a full adapter staging
     // ring never consumes a manager record before capacity is available.
@@ -43,10 +45,12 @@ private:
     Error Rollback() noexcept;
     void DrainAccountNotifications() noexcept;
     void DrainCallNotifications() noexcept;
+    void ObserveMedia() noexcept;
     bool Enqueue(const RuntimeNotification &) noexcept;
     const PjsuaApi &api_;
     PjsuaAccountManager accounts_;
     PjsuaCallManager calls_;
+    PjsuaMediaManager media_;
     PjsuaCallbackRouter router_;
     PjsuaRuntime runtime_;
     PjsuaTransportManager transport_;

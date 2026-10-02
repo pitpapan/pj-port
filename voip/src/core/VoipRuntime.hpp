@@ -127,6 +127,7 @@ private:
     std::array<CallHandle, CallScheduler::logical_call_capacity>
         call_terminal_handles_{};
     std::size_t call_count_ = 0;
+    std::uint16_t available_media_bridges_=2;
     Lifecycle lifecycle_ = Lifecycle::idle;
     bool actor_stopped_ = true;
     std::uint64_t now_ms_ = 0;

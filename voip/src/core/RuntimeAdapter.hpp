@@ -83,6 +83,7 @@ public:
     virtual bool TryGetNotification(RuntimeNotification *) noexcept = 0;
     virtual Error BeginCallTeardown(std::uint32_t) noexcept = 0;
     virtual Error Shutdown() noexcept = 0;
+    virtual std::uint16_t AvailableMediaBridges() const noexcept = 0;
 };
 
 // Build fallback used by production configurations until a PJPROJECT adapter
@@ -105,6 +106,7 @@ public:
     bool TryGetNotification(RuntimeNotification *) noexcept override { return false; }
     Error BeginCallTeardown(std::uint32_t) noexcept override { return Error::unsupported_configuration; }
     Error Shutdown() noexcept override { return Error::ok; }
+    std::uint16_t AvailableMediaBridges() const noexcept override { return 2; }
 };
 
 } // namespace voip

@@ -48,6 +48,7 @@ if(CONFIG_VOIP_SERVICE)
     ../src/pjsua/PjsuaAudioPort.cpp
     ../src/pjsua/PjsuaMediaClock.cpp
     ../src/pjsua/PjsuaMediaBridge.cpp
+    ../src/pjsua/PjsuaMediaManager.cpp
     ../src/pjsua/PjsuaRuntime.cpp
     ../src/pjsua/PjsuaTransportManager.cpp
     ../src/pjsua/PjsuaCallbackRouter.cpp

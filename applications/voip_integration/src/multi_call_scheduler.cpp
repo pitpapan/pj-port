@@ -6,6 +6,7 @@
 #include <pjsua-lib/pjsua.h>
 #include "../../../voip/src/pjsua/PjsuaCallbackRouter.hpp"
 #include "../../../voip/src/core/AgentRegistry.hpp"
+#include "../../../voip/src/core/CoreActor.hpp"
 #include <zephyr/sys/atomic.h>
 #include <cstdio>
 #include <cstdlib>
@@ -679,6 +680,9 @@ int main() {
     }
     CHECK(peer.Stats().minimum_stack_unused >= 512);
     printk("[multi-call] peer minimum unused stack=%u bytes\n", peer.Stats().minimum_stack_unused);
+    CHECK(voip::CoreActor::RegistrationTestMinimumUnusedStackBytes()>=512);
+    printk("[multi-call] actor minimum unused stack=%u bytes\n",
+           static_cast<unsigned>(voip::CoreActor::RegistrationTestMinimumUnusedStackBytes()));
     const auto clock=peer.Stats();
     CHECK(clock.clock_ticks!=0);
     printk("[multi-call] conference clock ticks=%u skipped=%u max-lateness=%u ms\n",

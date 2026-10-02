@@ -31,6 +31,8 @@ public:
     bool TryGetNotification(RuntimeNotification *) noexcept override;
     Error BeginCallTeardown(std::uint32_t) noexcept override;
     Error Shutdown() noexcept override;
+    // The signalling-only fake attaches no native PCM ports.
+    std::uint16_t AvailableMediaBridges() const noexcept override { return 2; }
 
     // Host and fake-only integration seam for deterministic native callback
     // delivery. The production adapter supplies the same copied records from

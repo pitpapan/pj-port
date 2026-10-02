@@ -13,7 +13,9 @@ extern "C" pj_status_t voip_pjsua_registration_test_install(
 
 namespace voip {
 PjsuaRuntimeAdapter::PjsuaRuntimeAdapter(const PjsuaApi &api) noexcept
-    : api_(api), accounts_(api), calls_(accounts_, api), router_(accounts_, calls_, api), runtime_(api), transport_(api) {}
+    : api_(api), accounts_(api), calls_(accounts_, api), media_(api), router_(accounts_, calls_, api,&media_), runtime_(api), transport_(api) {
+    calls_.SetMediaOwner(&media_);
+}
 
 bool PjsuaRuntimeAdapter::Enqueue(const RuntimeNotification &notification) noexcept {
     if (notification_size_ == notifications_.size()) return false;
@@ -51,6 +53,7 @@ Error PjsuaRuntimeAdapter::Rollback() noexcept {
             return registered;
         }
     }
+    if (media_.Shutdown()!=Error::ok) return Error::busy;
     calls_.Reset();
     (void)accounts_.Shutdown();
     (void)transport_.Shutdown();
@@ -77,6 +80,7 @@ Error PjsuaRuntimeAdapter::Initialize(const AgentRegistry &registry,
     pjsua_callback callbacks{};
     if (router_.Attach(&callbacks) != Error::ok) return Error::invalid_state;
     if (runtime_.CreateAndInitialize(callbacks, format) != Error::ok) { Rollback(); return Error::internal_failure; }
+    if (media_.Initialize(registry,security.media,format)!=Error::ok) { Rollback(); return Error::internal_failure; }
     if (runtime_.EnsureActorRegistered() != Error::ok) { Rollback(); return Error::internal_failure; }
     if (transport_.Initialize(SignalingTransportPolicy::tcp_plain) != Error::ok) { Rollback(); return Error::internal_failure; }
 #if defined(CONFIG_VOIP_PJSUA_REGISTRATION_TEST)
@@ -110,7 +114,14 @@ Error PjsuaRuntimeAdapter::Pump(std::uint64_t now_ms, std::uint32_t timeout_ms) 
     // safe even when runtime_.Pump failed before entering native dispatch.
     DrainCallNotifications();
     if (result != Error::ok) return result;
+    calls_.RetryMediaFailures();
+    ObserveMedia(); media_.Pump();
     const Error media = runtime_.PumpMedia(now_ms);
+    media_.Pump();
+    std::uint32_t failed_token=0; Error endpoint_error=Error::ok;
+    while (media_.TakeFailure(&failed_token,&endpoint_error))
+        (void)calls_.FailMedia(failed_token,endpoint_error);
+    ObserveMedia(); media_.Pump(); calls_.RefreshMediaQuiescence();
 #if defined(CONFIG_VOIP_PJSUA_TWO_CALL_TEST)
     voip_pjsua_observe_clock(runtime_.Clock().Ticks(),runtime_.Clock().Skipped(),
                             runtime_.Clock().MaxLatenessMs());
@@ -140,6 +151,20 @@ bool PjsuaRuntimeAdapter::TryGetNotification(RuntimeNotification *notification) 
         return true;
     }
     return calls_.TryGetNotification(notification);
+}
+void PjsuaRuntimeAdapter::ObserveMedia() noexcept {
+    PjsuaOwnedMediaObservation observation{};
+    for (unsigned i=0;i<PjsuaCallManager::max_calls;++i) {
+        if (!calls_.GetMediaObservation(i,&observation) || !observation.promoted) continue;
+        if (observation.terminal) {
+            media_.BeginStop(observation.token);
+            if (observation.native_inactive) media_.MarkNativeInactive(observation.token);
+        } else {
+            const auto acquired=media_.OnPromoted(observation.call,observation.agent,observation.token);
+            if (acquired!=Error::ok) { (void)calls_.FailMedia(observation.token,acquired); continue; }
+            media_.OnMediaState(observation.token,observation.media);
+        }
+    }
 }
 
 Error PjsuaRuntimeAdapter::PromoteOutgoing(CallHandle call, AgentHandle agent,
@@ -180,7 +205,9 @@ Error PjsuaRuntimeAdapter::Shutdown() noexcept {
     if (!shutdown_started_) {
         router_.BeginQuiescence();
         if (runtime_.EnsureActorRegistered() != Error::ok) return Error::internal_failure;
+        media_.BeginShutdown();
         if (calls_.BeginShutdown() != Error::ok) return Error::busy;
+        if (media_.Shutdown()!=Error::ok) return Error::busy;
         (void)accounts_.BeginShutdown();
         DrainAccountNotifications();
         shutdown_started_ = true;

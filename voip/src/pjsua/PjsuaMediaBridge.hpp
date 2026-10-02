@@ -13,6 +13,7 @@ public:
     Error PollStop() noexcept;
     bool IsFree() const noexcept;
     bool IsActive() const noexcept;
+    bool NativeSlotRemoved() const noexcept { return native_slot_removed_; }
     void SetNativeInactive() noexcept;
     void OnConferenceOperation(const pjmedia_conf_op_info &) noexcept;
     Error TakeError() noexcept;

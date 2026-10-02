@@ -10,6 +10,7 @@
 #include <cstdint>
 
 namespace voip {
+class PjsuaMediaManager;
 
 class PjsuaCallManager final : public PjsuaCallCallbackSink {
 public:
@@ -38,6 +39,11 @@ public:
     Error BeginShutdown() noexcept;
     void Reset() noexcept;
     std::size_t Count() const noexcept { return count_; }
+    bool GetMediaObservation(std::size_t,PjsuaOwnedMediaObservation *) const noexcept;
+    Error FailMedia(std::uint32_t,Error) noexcept;
+    void SetMediaOwner(const PjsuaMediaManager *owner) noexcept { media_owner_=owner; }
+    void RefreshMediaQuiescence() noexcept;
+    void RetryMediaFailures() noexcept;
 
 private:
     PjsuaCallContext *Find(pjsua_call_id) noexcept;
@@ -65,6 +71,7 @@ private:
     bool stopping_ = false;
     std::size_t count_{};
     std::uint32_t next_token_{};
+    const PjsuaMediaManager *media_owner_=nullptr;
 };
 
 static_assert(PjsuaCallManager::max_calls == 7,

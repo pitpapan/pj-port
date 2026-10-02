@@ -33,6 +33,15 @@ if(CONFIG_VOIP_PJSUA_PLAN5_COMPONENT_TEST)
     ../../voip/tests/pjsua/PjsuaConferenceClockTest.cpp
     ../../voip/tests/pjsua/PjsuaMediaBridgeTest.cpp
     ../../voip/tests/pjsua/PjsuaNativeBridgeTest.cpp
+    ../../voip/tests/pjsua/PjsuaMediaManagerTest.cpp
+    ../../voip/tests/pjsua/PjsuaMediaOwnershipTest.cpp
+    ../../voip/src/pjsua/PjsuaMediaManager.cpp
+    ../../voip/src/core/AgentRegistry.cpp
+    ../../voip/src/pjsua/PjsuaAccountManager.cpp
+    ../../voip/src/pjsua/PjsuaCallManager.cpp
+    ../../voip/src/pjsua/PjsuaCallbackRouter.cpp
+    ../../voip/src/pjsua/PjsuaRuntimeAdapter.cpp
+    ../../voip/src/pjsua/PjsuaTransportManager.cpp
     ../../voip/src/pjsua/PjsuaMediaBridge.cpp
     ../../voip/src/pjsua/PjsuaAudioPort.cpp
     ../../voip/src/pjsua/PjsuaMediaClock.cpp
@@ -86,6 +95,9 @@ target_sources_ifdef(CONFIG_VOIP_PJSUA_CAPACITY_TEST app PRIVATE
   test_support/PjsuaCapacityDeclineDrain.c
 )
 target_sources_ifdef(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST app PRIVATE
+  ../../voip/src/pjsua/PjsuaAudioPort.cpp
+  ../../voip/src/pjsua/PjsuaMediaBridge.cpp
+  ../../voip/src/pjsua/PjsuaMediaManager.cpp
   ../../voip/tests/pjsua/PjsuaPlan3TestMain.cpp
   ../../voip/tests/pjsua/PjsuaRuntimeTest.cpp
   ../../voip/tests/pjsua/PjsuaCallbackRouterTest.cpp
@@ -113,6 +125,9 @@ target_sources_ifdef(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST app PRIVATE
   ../../voip/src/core/VoipResourceGuard.cpp
 )
 target_sources_ifdef(CONFIG_VOIP_PJSUA_PLAN4_COMPONENT_TEST app PRIVATE
+  ../../voip/src/pjsua/PjsuaAudioPort.cpp
+  ../../voip/src/pjsua/PjsuaMediaBridge.cpp
+  ../../voip/src/pjsua/PjsuaMediaManager.cpp
   ../../voip/tests/pjsua/PjsuaPlan4TestMain.cpp
   ../../voip/tests/pjsua/PjsuaCallApiTest.cpp
   ../../voip/tests/pjsua/PjsuaCallContextTest.cpp

@@ -9,6 +9,7 @@
 #include <thread>
 
 namespace voip {
+class PjsuaMediaManager;
 struct PjsuaRegistrationRecord {
     pjsua_acc_id account{PJSUA_INVALID_ID};
     pj_status_t native_status{PJ_SUCCESS};
@@ -40,8 +41,9 @@ public:
         : sink_(sink), api_(api) {}
     explicit PjsuaCallbackRouter(PjsuaCallbackSink &sink,
                                  PjsuaCallCallbackSink &calls,
-                                 const PjsuaApi &api = NativePjsuaApi()) noexcept
-        : sink_(sink), calls_(&calls), api_(api) {}
+                                 const PjsuaApi &api = NativePjsuaApi(),
+                                 PjsuaMediaManager *media=nullptr) noexcept
+        : sink_(sink), calls_(&calls), api_(api), media_(media) {}
     Error Attach(pjsua_callback *) noexcept;
     void BeginQuiescence() noexcept;
     void MarkNativeDestroyed() noexcept;
@@ -59,6 +61,7 @@ private:
     static void OnCallMediaState(pjsua_call_id) noexcept;
     static void OnCallTransaction(pjsua_call_id, pjsip_transaction *, pjsip_event *) noexcept;
     static void OnCallMediaUpdateResult(pjsua_call_id, pj_status_t) noexcept;
+    static void OnConferenceOperation(const pjmedia_conf_op_info *) noexcept;
     void ForwardStarted(pjsua_acc_id, const pjsua_reg_info *) noexcept;
     void ForwardState(pjsua_acc_id, const pjsua_reg_info *) noexcept;
     void ForwardIncoming(pjsua_acc_id, pjsua_call_id) noexcept;
@@ -66,6 +69,7 @@ private:
     void ForwardCallMediaState(pjsua_call_id) noexcept;
     void AssertActor() const noexcept;
     PjsuaCallbackSink &sink_; PjsuaCallCallbackSink *calls_{}; const PjsuaApi &api_;
+    PjsuaMediaManager *media_=nullptr;
     bool quiescent_ = false; bool attached_ = false; bool native_destroyed_ = false;
     std::thread::id actor_thread_{};
     static PjsuaCallbackRouter *active_;

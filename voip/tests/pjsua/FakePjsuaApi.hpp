@@ -119,6 +119,14 @@ public:
         incoming_call_id_.store(id, std::memory_order_relaxed);
         incoming_call_pending_.store(true, std::memory_order_release);
     }
+    // Native PJSUA creates the call record before delivering admission.
+    void DeliverIncomingCall(pjsua_acc_id account, pjsua_call_id id) noexcept {
+        assert(id >= 0 && static_cast<std::size_t>(id) < call_records_.size());
+        assert(!call_records_[static_cast<std::size_t>(id)].in_use);
+        call_records_[static_cast<std::size_t>(id)] = {true, nullptr};
+        assert(ua_.cb.on_incoming_call != nullptr);
+        ua_.cb.on_incoming_call(account, id, nullptr);
+    }
     // Delivers all pending callbacks first, then makes handle_events report
     // this result to exercise adapter post-dispatch cleanup/draining.
     void ReturnFromNextPump(int result) noexcept {

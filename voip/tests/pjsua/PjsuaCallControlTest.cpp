@@ -4,6 +4,10 @@
 #include "../../src/pjsua/PjsuaCallManager.hpp"
 
 #include <cassert>
+#include <zephyr/sys/printk.h>
+#include <cstdlib>
+#undef assert
+#define assert(condition) do { if (!(condition)) { printk("Call control assertion at line %u: %s\n", __LINE__, #condition); std::abort(); } } while (false)
 
 namespace voip::test {
 namespace {
@@ -102,6 +106,19 @@ void RunPjsuaCallControlTests() {
     assert(calls.Cancel(incoming.token) == Error::ok && fake.HangupStatus() == 487);
     // Accepted controls must retain the callback route and bounded context.
     assert(calls.Count() == 2 && fake.CallUserData(0) != nullptr);
+    const auto shutdown_attempts=fake.HangupCount();
+    printk("Shutdown retry fixture: calls=%u attempts=%u\n",calls.Count(),shutdown_attempts);
+    fake.FailCall(FakePjsuaApi::CallEntry::hangup,PJ_EUNKNOWN);
+    assert(calls.BeginShutdown()==Error::busy);
+    printk("Shutdown failed dispatch attempts=%u\n",fake.HangupCount());
+    assert(fake.HangupCount()==shutdown_attempts+2);
+    fake.ClearCallFailures();
+    assert(calls.BeginShutdown()==Error::busy);
+    printk("Shutdown recovered dispatch attempts=%u\n",fake.HangupCount());
+    assert(fake.HangupCount()==shutdown_attempts+4);
+    assert(calls.BeginShutdown()==Error::busy);
+    printk("Shutdown duplicate dispatch attempts=%u\n",fake.HangupCount());
+    assert(fake.HangupCount()==shutdown_attempts+4);
     int foreign = 0;
     assert(api.call_set_user_data(0, &foreign) == PJ_SUCCESS);
     const auto answers = fake.AnswerCount();
@@ -112,6 +129,7 @@ void RunPjsuaCallControlTests() {
     assert(calls.Hangup(token) == Error::invalid_handle);
     assert(calls.SetHeld(token, true) == Error::invalid_handle);
     assert(calls.SetHeld(token, false) == Error::invalid_handle);
+    printk("Foreign route remains intact, hold=%u resume=%u answer=%u\n",hold_calls,resume_calls,answer_calls);
     assert(fake.AnswerCount() == answers && fake.HangupCount() == hangups);
     assert(hold_calls == 1 && resume_calls == 1 && answer_calls == 1);
     assert(fake.CallUserData(0) == &foreign && calls.Count() == 2);

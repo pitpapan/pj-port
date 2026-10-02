@@ -11,6 +11,9 @@
 #include <cstdio>
 #define printk std::printf
 #endif
+#include <cstdlib>
+#undef assert
+#define assert(condition) do { if (!(condition)) { printk("Call state assertion at line %u: %s\n", __LINE__, #condition); std::abort(); } } while (false)
 
 namespace voip::test {
 namespace {
@@ -357,6 +360,10 @@ void LiveShutdownRetainsStorageAndOrdersCleanup() {
     assert(adapter.Shutdown()==Error::busy && f.fake.CallUserData(0)!=nullptr);
     snapshot[0].media_status=PJSUA_CALL_MEDIA_NONE;
     f.fake.UaConfig().cb.on_call_media_state(0);
+    assert(!adapter.TryGetNotification(&n));
+    // Native callbacks copy state; the actor must retire its media-owner
+    // record even when no custom port was attached before finish publishes.
+    assert(adapter.Pump(100000000,0)==Error::ok);
     assert(adapter.TryGetNotification(&n) && n.type==RuntimeNotification::Type::call_finished && n.token==token);
     assert(f.fake.CallUserData(0)==nullptr);
     f.fake.SetUnregistrationCallbacksDeferred(true);

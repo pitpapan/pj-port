@@ -1,4 +1,5 @@
 #include "PjsuaCallbackRouter.hpp"
+#include "PjsuaMediaManager.hpp"
 #include <cassert>
 #include <cstring>
 namespace voip {
@@ -37,11 +38,18 @@ Error PjsuaCallbackRouter::Attach(pjsua_callback *callbacks) noexcept {
     callbacks->on_call_media_state = &OnCallMediaState;
     callbacks->on_call_tsx_state = &OnCallTransaction;
     callbacks->on_call_media_update_result = &OnCallMediaUpdateResult;
+    if (media_) callbacks->on_conf_op_completed=&OnConferenceOperation;
     return Error::ok;
 }
 void PjsuaCallbackRouter::BeginQuiescence() noexcept {
     AssertActor();
     quiescent_ = true;
+}
+void PjsuaCallbackRouter::OnConferenceOperation(const pjmedia_conf_op_info *info) noexcept {
+    if (!active_ || !active_->media_ || !info) return;
+    active_->AssertActor();
+    const pjmedia_conf_op_info copied=*info;
+    active_->media_->OnConferenceOperation(copied);
 }
 void PjsuaCallbackRouter::MarkNativeDestroyed() noexcept {
     AssertActor();
