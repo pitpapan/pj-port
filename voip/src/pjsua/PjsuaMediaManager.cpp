@@ -52,6 +52,17 @@ bool PjsuaMediaManager::IsQuiescent(std::uint32_t token) const noexcept {
         if (owners_[i].token==token) return bridges_[i].IsFree() && owners_[i].native_inactive;
     return true;
 }
+bool PjsuaMediaManager::DirectionReady(std::uint32_t token,const CopiedMediaState &media) const noexcept {
+    for (unsigned i=0;i<owners_.size();++i) if (owners_[i].token==token) {
+        if (owners_[i].stopping || owners_[i].retiring ||
+            owners_[i].media.native_id!=media.native_id) return false;
+        // PJSUA creates no conference stream for fully inactive SDP. An
+        // already-retired graph is reconciled; do not invent a custom port.
+        if (media.direction==PJMEDIA_DIR_NONE && media.slot<=0) return bridges_[i].IsFree();
+        return bridges_[i].CallSlot()==media.slot && bridges_[i].DirectionReady(media.direction);
+    }
+    return false;
+}
 void PjsuaMediaManager::OnConferenceOperation(const pjmedia_conf_op_info &op) noexcept {
     for (auto &bridge : bridges_) bridge.OnConferenceOperation(op);
 }
@@ -87,6 +98,8 @@ void PjsuaMediaManager::Pump() noexcept {
         const bool live=media.status==PJSUA_CALL_MEDIA_ACTIVE || media.status==PJSUA_CALL_MEDIA_LOCAL_HOLD ||
                         media.status==PJSUA_CALL_MEDIA_REMOTE_HOLD;
         if (!live || media.native_id<0 || media.slot<=0) continue;
+        const auto directed=bridge.ApplyDirection(media.direction);
+        if (directed!=Error::ok && directed!=Error::busy) { Fail(owner,directed); continue; }
         const auto *agent=registry_->Resolve(owner.agent);
         if (!agent) { Fail(owner,Error::invalid_handle); continue; }
         const auto attached=bridge.Attach(owner.call,owner.agent,owner.token,media.native_id,agent->audio,format_);

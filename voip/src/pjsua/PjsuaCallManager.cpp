@@ -165,6 +165,7 @@ Error PjsuaCallManager::SetHeld(std::uint32_t token, bool held) noexcept {
     context->media_control = held ? PjsuaCallContext::MediaControl::hold
                                   : PjsuaCallContext::MediaControl::resume;
     context->control_cseq = 0;
+    context->media_control_negotiated=false;
     Error result = Error::unsupported_configuration;
     if (held) {
         if (api_.call_set_hold2 != nullptr) result = Native(context->native_id,
@@ -482,22 +483,30 @@ void PjsuaCallManager::OnCallMediaState(pjsua_call_id native_id) noexcept {
             if (info.media_status == PJSUA_CALL_MEDIA_ERROR &&
                 (context->media_control == PjsuaCallContext::MediaControl::hold ||
                  context->media_control == PjsuaCallContext::MediaControl::resume)) {
-                const auto type = context->media_control == PjsuaCallContext::MediaControl::hold
-                    ? RuntimeNotification::Type::call_held : RuntimeNotification::Type::call_resumed;
-                context->media_control = PjsuaCallContext::MediaControl::result;
-                (void)EnqueueCall(*context, type, info, Error::media_failed);
+                FailMediaControl(*context,Error::media_failed,info);
             }
-            const bool active = info.media_status == PJSUA_CALL_MEDIA_ACTIVE;
+            const bool active = info.media_status == PJSUA_CALL_MEDIA_ACTIVE ||
+                                info.media_status == PJSUA_CALL_MEDIA_REMOTE_HOLD;
             const bool held = info.media_status == PJSUA_CALL_MEDIA_LOCAL_HOLD;
             if (held && context->media_control == PjsuaCallContext::MediaControl::hold) {
-                context->media_control = PjsuaCallContext::MediaControl::result;
-                context->phase = PjsuaCallPhase::local_hold;
-                (void)EnqueueCall(*context, RuntimeNotification::Type::call_held, info);
-            } else if (active && info.media_dir == PJMEDIA_DIR_ENCODING_DECODING &&
+                if (media_owner_) {
+                    context->media_control_negotiated=true;
+                    context->media_result.notification=CopyCall(*context,RuntimeNotification::Type::call_held,info,Error::ok);
+                } else {
+                    context->media_control = PjsuaCallContext::MediaControl::result;
+                    context->phase = PjsuaCallPhase::local_hold;
+                    (void)EnqueueCall(*context, RuntimeNotification::Type::call_held, info);
+                }
+            } else if (active &&
                        context->media_control == PjsuaCallContext::MediaControl::resume) {
-                context->media_control = PjsuaCallContext::MediaControl::result;
-                context->phase = PjsuaCallPhase::confirmed;
-                (void)EnqueueCall(*context, RuntimeNotification::Type::call_resumed, info);
+                if (media_owner_) {
+                    context->media_control_negotiated=true;
+                    context->media_result.notification=CopyCall(*context,RuntimeNotification::Type::call_resumed,info,Error::ok);
+                } else {
+                    context->media_control = PjsuaCallContext::MediaControl::result;
+                    context->phase = PjsuaCallPhase::confirmed;
+                    (void)EnqueueCall(*context, RuntimeNotification::Type::call_resumed, info);
+                }
             }
         }
     }
@@ -511,6 +520,7 @@ void PjsuaCallManager::FailMediaControl(PjsuaCallContext &context, Error error,
     const auto type = context.media_control == PjsuaCallContext::MediaControl::hold
         ? RuntimeNotification::Type::call_held : RuntimeNotification::Type::call_resumed;
     context.media_control = PjsuaCallContext::MediaControl::result;
+    context.media_control_negotiated=false;
     // Keep the business phase and previous negotiated direction unchanged.
     (void)EnqueueCall(context, type, info, error);
 }
@@ -645,7 +655,26 @@ void PjsuaCallManager::RetryMediaFailures() noexcept {
             (void)FailMedia(context.token,context.media_failure);
 }
 void PjsuaCallManager::RefreshMediaQuiescence() noexcept {
-    for (auto &context : contexts_) if (context.phase!=PjsuaCallPhase::free) TryRelease(context);
+    for (auto &context : contexts_) if (context.phase!=PjsuaCallPhase::free) {
+        if (context.media_control_negotiated && media_owner_) {
+            const auto error=context.media_failure!=Error::ok ? context.media_failure :
+                context.terminal_seen ? Error::cancelled : Error::ok;
+            if (error!=Error::ok || media_owner_->DirectionReady(context.token,context.media)) {
+                auto &result=context.media_result.notification;
+                result.error=result.status.error=error;
+                result.media_active=IsMediaLive(context.media.status);
+                result.media_send_enabled=result.media_active && (context.media.direction & PJMEDIA_DIR_ENCODING);
+                result.media_receive_enabled=result.media_active && (context.media.direction & PJMEDIA_DIR_DECODING);
+                if (error==Error::ok) context.phase=context.media_control==PjsuaCallContext::MediaControl::hold ?
+                    PjsuaCallPhase::local_hold : PjsuaCallPhase::confirmed;
+                context.media_control=PjsuaCallContext::MediaControl::result;
+                context.media_control_negotiated=false;
+                if (++next_sequence_==0) ++next_sequence_;
+                context.media_result.sequence=next_sequence_;
+            }
+        }
+        TryRelease(context);
+    }
 }
 
 } // namespace voip

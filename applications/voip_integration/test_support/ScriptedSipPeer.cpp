@@ -52,6 +52,7 @@ struct PeerState {
     atomic_t zero_workers{};
     atomic_t media_transport_creations{};
     atomic_t clock_ticks{}, clock_skipped{}, clock_max_lateness{};
+    atomic_t media_direction[5]{}, media_ready[5]{};
     atomic_t minimum_stack_unused{8192};
     k_thread thread{};
     atomic_t invites{}, incoming_invites{}, acks{}, byes{}, cancels{}, trying{}, ringing{}, reinvites{}, reinvite_responses{}, parse_failures{};
@@ -117,6 +118,17 @@ void Reply(Connection &connection, unsigned code, const char *reason, const char
 const char *Sdp(bool valid) {
     return valid ? "v=0\r\no=peer 1 1 IN IP4 127.0.0.1\r\ns=peer\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 6002 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\na=sendrecv\r\n"
                  : "v=0\r\no=broken\r\nm=audio not-a-port\r\n";
+}
+const char *DirectionSdp(SipPeerScript script,bool valid) {
+    switch (script) {
+    case SipPeerScript::sendonly:
+        return "v=0\r\no=peer 1 1 IN IP4 127.0.0.1\r\ns=peer\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 6002 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\na=sendonly\r\n";
+    case SipPeerScript::recvonly:
+        return "v=0\r\no=peer 1 1 IN IP4 127.0.0.1\r\ns=peer\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 6002 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\na=recvonly\r\n";
+    case SipPeerScript::inactive:
+        return "v=0\r\no=peer 1 1 IN IP4 127.0.0.1\r\ns=peer\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 6002 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\na=inactive\r\n";
+    default: return Sdp(valid);
+    }
 }
 void SendBye(Connection &connection) {
     char message[message_bytes]{};
@@ -351,7 +363,7 @@ void PumpPeer() {
                     }
                     const char *sdp = connection.script == SipPeerScript::unusable_sdp ?
                         "v=0\r\no=peer 1 1 IN IP4 127.0.0.1\r\ns=peer\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 4002 RTP/AVP 126\r\na=rtpmap:126 L16/44100\r\na=sendrecv\r\n" :
-                        Sdp(connection.script != SipPeerScript::malformed_sdp);
+                        DirectionSdp(connection.script,connection.script != SipPeerScript::malformed_sdp);
                     Reply(connection, 200, "OK", sdp);
                     connection.response_stage = 0;
                 } else {
@@ -444,6 +456,12 @@ unsigned ScriptedSipPeer::OutgoingInviteOrder(unsigned sequence) const noexcept 
 unsigned ScriptedSipPeer::IncomingPort(unsigned sequence) const noexcept {
     return sequence < max_observed_calls ? static_cast<unsigned>(atomic_get(&state.incoming_port[sequence])) : 0;
 }
+int ScriptedSipPeer::MediaDirection(unsigned agent) const noexcept {
+    return agent<5 ? atomic_get(&state.media_direction[agent]) : -1;
+}
+bool ScriptedSipPeer::MediaReady(unsigned agent) const noexcept {
+    return agent<5 && atomic_get(&state.media_ready[agent])!=0;
+}
 bool ScriptedSipPeer::ZeroWorkerConfiguration() noexcept { return atomic_get(&state.zero_workers) == 1; }
 bool ScriptedSipPeer::FramingChecks() noexcept {
     struct Case { const char *value; bool valid; unsigned length; };
@@ -497,6 +515,12 @@ extern "C" void voip_pjsua_observe_clock(std::uint64_t ticks, std::uint64_t skip
     const auto value=static_cast<atomic_val_t>(max_lateness);
     while (previous<value && !atomic_cas(&state.clock_max_lateness,previous,value))
         previous=atomic_get(&state.clock_max_lateness);
+}
+extern "C" void voip_pjsua_observe_media(unsigned agent,int direction,bool ready) noexcept {
+    if (agent<5) {
+        atomic_set(&state.media_direction[agent],direction);
+        atomic_set(&state.media_ready[agent],ready ? 1 : 0);
+    }
 }
 extern "C" unsigned voip_pjsua_registration_test_listener_port() noexcept { return ScriptedSipPeer::pjsua_listener_port; }
 extern "C" pj_status_t voip_pjsua_registration_test_install(pjsip_endpoint *) noexcept { return PJ_SUCCESS; }

@@ -2,6 +2,7 @@
 
 #if defined(CONFIG_VOIP_PJSUA_TWO_CALL_TEST)
 extern "C" void voip_pjsua_observe_clock(std::uint64_t, std::uint64_t, std::uint64_t) noexcept;
+extern "C" void voip_pjsua_observe_media(unsigned,int,bool) noexcept;
 #endif
 
 #if defined(CONFIG_VOIP_PJSUA_REGISTRATION_TEST)
@@ -125,6 +126,11 @@ Error PjsuaRuntimeAdapter::Pump(std::uint64_t now_ms, std::uint32_t timeout_ms) 
 #if defined(CONFIG_VOIP_PJSUA_TWO_CALL_TEST)
     voip_pjsua_observe_clock(runtime_.Clock().Ticks(),runtime_.Clock().Skipped(),
                             runtime_.Clock().MaxLatenessMs());
+    PjsuaOwnedMediaObservation observed{};
+    for (unsigned i=0;i<PjsuaCallManager::max_calls;++i)
+        if (calls_.GetMediaObservation(i,&observed) && observed.promoted)
+            voip_pjsua_observe_media(observed.agent.slot,observed.media.direction,
+                                    media_.DirectionReady(observed.token,observed.media));
 #endif
     if (media!=Error::ok && !clock_failure_reported_) {
         clock_failure_pending_=true;

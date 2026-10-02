@@ -17,6 +17,8 @@ public:
     void SetNativeInactive() noexcept;
     void OnConferenceOperation(const pjmedia_conf_op_info &) noexcept;
     Error TakeError() noexcept;
+    Error ApplyDirection(pjmedia_dir) noexcept;
+    bool DirectionReady(pjmedia_dir) const noexcept;
     std::uint32_t Token() const noexcept;
     pjsua_conf_port_id CustomSlot() const noexcept;
     pjsua_conf_port_id CallSlot() const noexcept;
@@ -25,6 +27,7 @@ private:
     enum class State { free, binding, active, stopping, quiescing };
     struct Edge { bool pending=false, connected=false, disconnect_pending=false; };
     Error Connect() noexcept;
+    Error Reconcile() noexcept;
     Error Disconnect(Edge &, bool transmit) noexcept;
     void Latch(Error) noexcept;
     const PjsuaApi &api_;
@@ -41,6 +44,8 @@ private:
     bool group_=false, owner_released_=false, add_pending_=false;
     bool remove_pending_=false, remove_done_=false, native_inactive_=true;
     bool native_slot_removed_=false;
+    pjmedia_dir direction_=PJMEDIA_DIR_ENCODING_DECODING;
+    bool flush_receive_=false;
     Error error_=Error::ok;
 };
 }

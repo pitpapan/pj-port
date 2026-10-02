@@ -32,6 +32,7 @@ struct PjsuaCallContext {
     bool future_security_clear = true;
     enum class MediaControl : std::uint8_t { none, hold, resume, result };
     MediaControl media_control = MediaControl::none;
+    bool media_control_negotiated=false;
     pj_int32_t last_local_invite_cseq = 0;
     pj_int32_t control_cseq = 0;
     // A context owns four independent obligations, not a best-effort ring:

@@ -15,6 +15,7 @@ public:
     void BeginStop(std::uint32_t) noexcept;
     void MarkNativeInactive(std::uint32_t) noexcept;
     bool IsQuiescent(std::uint32_t) const noexcept;
+    bool DirectionReady(std::uint32_t,const CopiedMediaState &) const noexcept;
     void OnConferenceOperation(const pjmedia_conf_op_info &) noexcept;
     void Pump() noexcept;
     bool TakeFailure(std::uint32_t *,Error *) noexcept;

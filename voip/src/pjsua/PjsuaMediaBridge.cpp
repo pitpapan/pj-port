@@ -46,14 +46,45 @@ Error PjsuaMediaBridge::Connect() noexcept {
     }
     if (current==custom_) return Error::media_failed;
     slot_=current; native_inactive_=false;
+    const auto result=Reconcile();
+    // Attach reports enqueue acceptance; callers check completion separately.
+    return result==Error::busy ? Error::ok : result;
+}
+Error PjsuaMediaBridge::Reconcile() noexcept {
+    bool pending=add_pending_;
     for (bool transmit : {true,false}) {
         auto &edge=transmit ? tx_ : rx_;
-        if (edge.pending || edge.connected) continue;
-        const auto status=api_.conf_connect(transmit ? custom_ : slot_,transmit ? slot_ : custom_);
-        if (status!=PJ_SUCCESS) { Latch(Error::media_failed); return Error::media_failed; }
-        edge.pending=true;
+        const bool wanted=(direction_ & (transmit ? PJMEDIA_DIR_ENCODING : PJMEDIA_DIR_DECODING))!=0;
+        if (edge.pending || edge.disconnect_pending) { pending=true; continue; }
+        if (!wanted && edge.connected) {
+            const auto result=Disconnect(edge,transmit);
+            if (result!=Error::ok && result!=Error::busy) { Latch(Error::media_failed); return Error::media_failed; }
+            pending=true;
+        } else if (wanted && !edge.connected) {
+            if (!transmit && flush_receive_) { sink_->Flush(); flush_receive_=false; }
+            const auto status=api_.conf_connect(transmit ? custom_ : slot_,transmit ? slot_ : custom_);
+            if (status!=PJ_SUCCESS) { Latch(Error::media_failed); return Error::media_failed; }
+            edge.pending=true; pending=true;
+        }
     }
-    return Error::ok;
+    state_=pending ? State::binding : State::active;
+    return pending ? Error::busy : Error::ok;
+}
+Error PjsuaMediaBridge::ApplyDirection(pjmedia_dir direction) noexcept {
+    if (static_cast<unsigned>(direction)>PJMEDIA_DIR_ENCODING_DECODING) return Error::invalid_argument;
+    if (state_==State::stopping || state_==State::quiescing) return Error::busy;
+    if (state_!=State::free && !(direction_ & PJMEDIA_DIR_DECODING) &&
+        (direction & PJMEDIA_DIR_DECODING)) flush_receive_=true;
+    direction_=direction;
+    if (state_==State::free) return Error::ok;
+    if (slot_<=0 || native_slot_removed_) return Error::busy;
+    return Reconcile();
+}
+bool PjsuaMediaBridge::DirectionReady(pjmedia_dir direction) const noexcept {
+    return IsActive() && direction_==direction && !add_pending_ &&
+        !tx_.pending && !rx_.pending && !tx_.disconnect_pending && !rx_.disconnect_pending &&
+        tx_.connected==((direction & PJMEDIA_DIR_ENCODING)!=0) &&
+        rx_.connected==((direction & PJMEDIA_DIR_DECODING)!=0);
 }
 void PjsuaMediaBridge::BeginStop() noexcept {
     if (state_==State::free) return;
@@ -98,6 +129,7 @@ Error PjsuaMediaBridge::PollStop() noexcept {
     custom_=slot_=PJSUA_INVALID_ID; tx_={}; rx_={};
     group_=owner_released_=add_pending_=remove_pending_=remove_done_=false;
     native_inactive_=true; native_slot_removed_=false; state_=State::free;
+    direction_=PJMEDIA_DIR_ENCODING_DECODING; flush_receive_=false;
     return Error::ok;
 }
 void PjsuaMediaBridge::OnConferenceOperation(const pjmedia_conf_op_info &op) noexcept {
@@ -124,11 +156,14 @@ void PjsuaMediaBridge::OnConferenceOperation(const pjmedia_conf_op_info &op) noe
         if (static_cast<int>(src)==custom_ && static_cast<int>(dst)==slot_) edge=&tx_;
         if (static_cast<int>(src)==slot_ && static_cast<int>(dst)==custom_) edge=&rx_;
         if (!edge || (connect ? !edge->pending : !edge->disconnect_pending)) return;
-        if (connect) { edge->pending=false; edge->connected=op.status==PJ_SUCCESS; }
+        if (connect) { edge->pending=false; edge->connected=op.status==PJ_SUCCESS && !native_slot_removed_; }
         else { edge->disconnect_pending=false; if (op.status==PJ_SUCCESS) edge->connected=false; }
         if (op.status!=PJ_SUCCESS && !native_slot_removed_) Latch(Error::media_failed);
     }
-    if (state_==State::binding && !add_pending_ && tx_.connected && rx_.connected)
+    if (state_==State::binding && !add_pending_ &&
+        !tx_.pending && !rx_.pending && !tx_.disconnect_pending && !rx_.disconnect_pending &&
+        tx_.connected==((direction_ & PJMEDIA_DIR_ENCODING)!=0) &&
+        rx_.connected==((direction_ & PJMEDIA_DIR_DECODING)!=0))
         state_=State::active;
 }
 bool PjsuaMediaBridge::IsFree() const noexcept { return state_==State::free; }

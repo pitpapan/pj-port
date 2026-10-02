@@ -326,7 +326,7 @@ void RunFullCapacityCycle(voip::VoipService &service, Seen &seen,
 }
 void CheckTraces(const Seen &seen, unsigned lifecycle) {
     using T = voip::CallTransition; using S = voip::CallState;
-    const unsigned base_counts[] = {0, 7, 6, 2, 6};
+    const unsigned base_counts[] = {0, 7, 6, 5, 6};
     CHECK(seen.count == base_counts[lifecycle - 1] + 7);
     for (unsigned i = 0; i < base_counts[lifecycle - 1]; ++i) {
         const auto &call = seen.calls[i];
@@ -339,8 +339,10 @@ void CheckTraces(const Seen &seen, unsigned lifecycle) {
                         {S::hold, S::established, S::hold, S::established, S::terminated});
         else if (lifecycle <= 3)
             ExpectTrace(call, {T::wait, T::rejection}, {S::hold, S::terminated});
-        else if (lifecycle == 4)
+        else if (lifecycle == 4 && i<2)
             ExpectTrace(call, {T::initiation, T::timeout}, {S::initiated, S::idle});
+        else if (lifecycle == 4)
+            ExpectTrace(call, {T::initiation, T::acceptance, T::finish}, {S::initiated, S::established, S::terminated});
         else if (i < 3)
             ExpectTrace(call, {T::initiation, T::rejection}, {S::initiated, S::terminated});
         else
@@ -667,6 +669,25 @@ int main() {
             EndCall(service, seen, reused_b);
             EndCall(service, seen, reused_a);
             CHECK(WaitResources(service, seen, 0, 0));
+        }
+        if (lifecycle==4) {
+            struct DirectionCase { SipPeerScript script; int local; };
+            const DirectionCase directions[]={{SipPeerScript::sendonly,PJMEDIA_DIR_DECODING},
+                {SipPeerScript::recvonly,PJMEDIA_DIR_ENCODING},{SipPeerScript::inactive,PJMEDIA_DIR_NONE}};
+            for (unsigned i=0;i<3;++i) {
+                peer.SetNextOutgoing(directions[i].script);
+                char uri[96]{};
+                std::snprintf(uri,sizeof(uri),"sip:direction-%u@127.0.0.1:5098;transport=tcp",i);
+                const auto call=Dial(service,seen,agents[0],uri);
+                CHECK(WaitState(service,seen,call,voip::CallState::established));
+                const auto deadline=k_uptime_get()+3000;
+                while (k_uptime_get()<deadline &&
+                       (!peer.MediaReady(0) || peer.MediaDirection(0)!=directions[i].local)) Poll(service,seen);
+                printk("[multi-call] remote SDP case=%u local direction=%d ready=%u\n",i,peer.MediaDirection(0),peer.MediaReady(0));
+                CHECK(peer.MediaReady(0) && peer.MediaDirection(0)==directions[i].local);
+                EndCall(service,seen,call);
+            }
+            peer.SetNextOutgoing(SipPeerScript::answer);
         }
         RunFullCapacityCycle(service, seen, peer, agents, lifecycle);
         voip::CallHandle old_calls[16]{};

@@ -7,11 +7,15 @@ namespace voip::test { void RunPjsuaMediaBridgeTests(); }
 namespace voip::test { void RunPjsuaNativeBridgeTests(); }
 namespace voip::test { void RunPjsuaMediaManagerTests(); }
 namespace voip::test { void RunPjsuaMediaOwnershipTests(); }
+namespace voip::test { void RunPjsuaMediaDirectionTests(); }
+namespace voip::test { void RunPjsuaMediaControlReconciliationTests(); }
 int main() {
     voip::test::RunPjsuaAudioPortTests();
     voip::test::RunPjsuaMediaClockTests();
     voip::test::RunPjsuaMediaBridgeTests();
+    voip::test::RunPjsuaMediaDirectionTests();
     voip::test::RunPjsuaMediaManagerTests();
+    voip::test::RunPjsuaMediaControlReconciliationTests();
     voip::test::RunPjsuaMediaOwnershipTests();
     voip::test::RunPjsuaConferenceClockTests();
     voip::test::RunPjsuaNativeBridgeTests();

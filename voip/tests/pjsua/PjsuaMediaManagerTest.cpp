@@ -59,11 +59,22 @@ void RunPjsuaMediaManagerTests() {
     assert(manager.OnPromoted({0,1},zero,1)==Error::ok);
     assert(manager.OnPromoted({1,1},four,2)==Error::ok);
     assert(manager.Available()==2); // signalling ownership is not an attached PCM bridge.
+    const CopiedMediaState inactive{0,PJMEDIA_DIR_NONE,PJSUA_CALL_MEDIA_NONE,PJSUA_INVALID_ID};
+    manager.OnMediaState(1,inactive); manager.Pump();
+    assert(manager.DirectionReady(1,inactive) && manager.Available()==2 && F::adds==0);
     assert(manager.OnPromoted({2,1},third,3)==Error::resource_exhausted);
     manager.OnMediaState(1,media); media.native_id=1; media.slot=2; manager.OnMediaState(2,media);
     manager.Pump(); F::Complete(); manager.Pump();
     assert(manager.Available()==0 && F::adds==2 && F::connects==4);
     manager.OnMediaState(2,media); manager.Pump(); assert(F::adds==2 && F::connects==4);
+    // Unsolicited negotiated local receive-only direction must disable only
+    // this owner's transmit edge, without creating a local hold operation.
+    media.direction=PJMEDIA_DIR_DECODING; manager.OnMediaState(2,media); manager.Pump();
+    assert(F::disconnects==1 && F::ops[0].op_param.disconnect_ports.src==9 &&
+           F::ops[0].op_param.disconnect_ports.sink==2);
+    F::Complete(); manager.Pump(); assert(F::connects==4);
+    media.direction=PJMEDIA_DIR_ENCODING_DECODING; manager.OnMediaState(2,media);
+    manager.Pump(); F::Complete(); manager.Pump(); assert(F::connects==5);
     std::int16_t samples[160]; pjmedia_frame frame{};
     frame.buf=samples; frame.size=sizeof(samples); frame.timestamp.u64=1234;
     for (unsigned i=0;i<2;++i) {
