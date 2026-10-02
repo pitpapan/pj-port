@@ -18,6 +18,8 @@ public:
     void Activate() noexcept { active_ = this; }
     void Deactivate() noexcept { if (active_ == this) active_ = nullptr; }
     void Reset() noexcept {
+        for (auto &pool : media_pools_) pool.used=false;
+        master_={}; master_error_=PJ_SUCCESS;
         failed_ = Stage::arena;
         has_failure_ = false;
         std::memset(sequence_, 0, sizeof(sequence_));
@@ -249,6 +251,10 @@ public:
             account_user_data_[static_cast<std::size_t>(id)] = value;
     }
 private:
+    struct MediaPool { pj_pool_t native; alignas(std::int16_t) unsigned char bytes[2048]; bool used; };
+    inline static std::array<MediaPool,3> media_pools_{};
+    inline static pjmedia_port master_{};
+    inline static pj_status_t master_error_=PJ_SUCCESS;
     static FakePjsuaApi *active_; Stage failed_ = Stage::arena; bool has_failure_ = false;
     // Task 5 includes five account add/register/unregister/delete records;
     // retain the complete ordering trace without overwriting fake state.
@@ -355,7 +361,15 @@ private:
     static void MediaDefault(pjsua_media_config *x) { std::memset(x, 0, sizeof(*x)); (void)Active(); }
     static void TransportDefault(pjsua_transport_config *x) { std::memset(x, 0, sizeof(*x)); (void)Active(); }
     static pj_status_t Init(const pjsua_config *ua, const pjsua_logging_config *log, const pjsua_media_config *media) { Active().ua_ = *ua; Active().log_ = *log; Active().media_ = *media; Active().Record("init"); return Active().Failed(Stage::init) ? PJ_EUNKNOWN : PJ_SUCCESS; }
-    static pjmedia_port *NoSound() { Active().Record("nosnd"); return Active().Failed(Stage::no_sound) ? nullptr : reinterpret_cast<pjmedia_port *>(1); }
+    static pjmedia_port *NoSound() {
+        auto &fake=Active(); fake.Record("nosnd");
+        if (fake.Failed(Stage::no_sound)) return nullptr;
+        static char name[]="master"; const pj_str_t port_name{name,6};
+        pjmedia_port_info_init(&master_.info,&port_name,0,fake.media_.clock_rate,
+            fake.media_.channel_count,16,
+            fake.media_.clock_rate*fake.media_.audio_frame_ptime/1000);
+        return &master_;
+    }
     static pj_status_t TransportCreate(pjsip_transport_type_e, const pjsua_transport_config *, pjsua_transport_id *id) { Active().Record("tcp"); if (Active().Failed(Stage::transport)) return PJ_EUNKNOWN; *id = 4; return PJ_SUCCESS; }
     static pj_status_t TransportClose(pjsua_transport_id, pj_bool_t) { Active().Record("close"); Active().RecordTeardown("close"); return PJ_SUCCESS; }
     static pj_status_t Start() { Active().Record("start"); return Active().Failed(Stage::start) ? PJ_EUNKNOWN : PJ_SUCCESS; }
@@ -529,7 +543,21 @@ private:
         FakePjsuaApi &fake = Active(); fake.Record("prepare-media");
         return fake.ValidCallId(id) ? fake.CallFailure(CallEntry::prepare_media) : PJ_EINVAL;
     }
-    PjsuaApi api_{ArenaInstall, ArenaReset, Create, ThreadIsRegistered, ThreadRegister, ConfigDefault, LogDefault, MediaDefault, TransportDefault, Init, NoSound, TransportCreate, TransportClose, Start, Pump, Destroy, AccountConfigDefault, AccountAdd, AccountSetUserData, AccountGetUserData, AccountDelete, AccountSetRegistration, CallSettingDefault, CallMakeCall, CallSetUserData, CallGetUserData, CallGetInfo, CallAnswer2, CallSetHold2, CallReinvite2, CallAnswer, CallHangup, CallPrepareMedia};
+    static pj_pool_t *PoolCreate(const char *,pj_size_t,pj_size_t) {
+        for (auto &pool : media_pools_) if (!pool.used) { pool.used=true; return &pool.native; }
+        return nullptr;
+    }
+    static void *PoolAllocate(pj_pool_t *native,pj_size_t bytes) {
+        for (auto &pool : media_pools_) if (&pool.native==native && pool.used && bytes<=sizeof(pool.bytes)) return pool.bytes;
+        return nullptr;
+    }
+    static void PoolRelease(pj_pool_t *native) {
+        for (auto &pool : media_pools_) if (&pool.native==native) { pool.used=false; return; }
+        assert(false);
+    }
+    static pj_status_t PortGetFrame(pjmedia_port *,pjmedia_frame *) { return master_error_; }
+    static pj_status_t PortPutFrame(pjmedia_port *,pjmedia_frame *) { return master_error_; }
+    PjsuaApi api_{ArenaInstall, ArenaReset, Create, ThreadIsRegistered, ThreadRegister, ConfigDefault, LogDefault, MediaDefault, TransportDefault, Init, NoSound, TransportCreate, TransportClose, Start, Pump, Destroy, AccountConfigDefault, AccountAdd, AccountSetUserData, AccountGetUserData, AccountDelete, AccountSetRegistration, CallSettingDefault, CallMakeCall, CallSetUserData, CallGetUserData, CallGetInfo, CallAnswer2, CallSetHold2, CallReinvite2, CallAnswer, CallHangup, CallPrepareMedia, PoolCreate, PoolAllocate, PoolRelease, PortGetFrame, PortPutFrame};
 };
 inline FakePjsuaApi *FakePjsuaApi::active_ = nullptr;
 } // namespace voip::test

@@ -47,8 +47,8 @@ pj_status_t PjsuaAudioPort::Get(pjmedia_port *native, pjmedia_frame *frame) noex
     if (native==nullptr || native->port_data.pdata==nullptr) return PJ_EINVAL;
     auto &self=*static_cast<PjsuaAudioPort *>(native->port_data.pdata);
     Entry entry(self.entries_);
-    if (frame==nullptr || !Aligned(frame->buf) || frame->size!=self.bytes_ ||
-        (frame->type!=PJMEDIA_FRAME_TYPE_NONE && frame->type!=PJMEDIA_FRAME_TYPE_AUDIO)) return PJ_EINVAL;
+    // PJMEDIA get_frame fills type; callers need only provide buffer/size.
+    if (frame==nullptr || !Aligned(frame->buf) || frame->size!=self.bytes_) return PJ_EINVAL;
     Error result=Error::busy;
     if (!self.stopping_.load(std::memory_order_acquire))
         result=self.binding_.source->Read(static_cast<std::int16_t *>(frame->buf),

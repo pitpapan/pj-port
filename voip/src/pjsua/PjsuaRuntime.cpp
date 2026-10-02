@@ -48,7 +48,10 @@ Error PjsuaRuntime::CreateAndInitialize(const pjsua_callback &callbacks,
     log.msg_logging = PJ_FALSE;
     if (PjsuaStatus(api_.init(&ua, &log, &media)) != Error::ok) { (void)Destroy(); return Error::internal_failure; }
     initialized_ = true;
-    if (api_.set_no_sound() == nullptr) { (void)Destroy(); return Error::internal_failure; }
+    master_port_=api_.set_no_sound();
+    if (master_port_ == nullptr || clock_.Initialize(master_port_,format)!=Error::ok) {
+        (void)Destroy(); return Error::internal_failure;
+    }
     return Error::ok;
 }
 Error PjsuaRuntime::Start() noexcept {
@@ -71,12 +74,14 @@ Error PjsuaRuntime::Destroy() noexcept {
         // Native destruction uses PJLIB TLS. Retain native and arena state
         // after registration failure so a later actor turn can destroy it.
         if (registered != Error::ok) return registered;
+        clock_.Stop();
         // Callback-owned storage and the PJ pool remain live until PJSUA
         // itself confirms destruction.  A failed destroy is recoverable on a
         // later actor turn, but resetting the arena here would not be.
         if (PjsuaStatus(api_.destroy()) != Error::ok) return Error::internal_failure;
     }
     created_ = initialized_ = started_ = false;
+    master_port_=nullptr;
     // Native callbacks are gone, but a refused reset still owns arena state.
     // Let the actor retry cleanup without destroying PJSUA a second time or
     // announcing completed shutdown before zeroization succeeds.
@@ -86,5 +91,11 @@ Error PjsuaRuntime::Destroy() noexcept {
     actor_pj_thread_ = nullptr;
     actor_thread_ = {};
     return Error::ok;
+}
+Error PjsuaRuntime::PumpMedia(std::uint64_t now_ms) noexcept {
+    AssertActor();
+    if (!started_) return Error::invalid_state;
+    if (EnsureActorRegistered()!=Error::ok) return Error::internal_failure;
+    return clock_.Pump(now_ms);
 }
 } // namespace voip

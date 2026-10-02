@@ -19,6 +19,7 @@ pj_status_t AdapterCallInfo(pjsua_call_id id, pjsua_call_info *info) {
     *info = adapter_call_info[id];
     return PJ_SUCCESS;
 }
+pj_status_t FailingMaster(pjmedia_port *,pjmedia_frame *) { return PJ_EUNKNOWN; }
 class Source final : public PcmSource { public: PcmFormat Format() const noexcept override { return {8000, 160, 1, SampleFormat::signed_16}; } Error Read(std::int16_t *, std::size_t, std::uint64_t) noexcept override { return Error::ok; } };
 class Sink final : public PcmSink { public: PcmFormat Format() const noexcept override { return {8000, 160, 1, SampleFormat::signed_16}; } Error Write(const std::int16_t *, std::size_t, std::uint64_t) noexcept override { return Error::ok; } void Flush() noexcept override {} };
 struct Fixture {
@@ -32,6 +33,20 @@ void RunPjsuaRuntimeAdapterTests() {
     constexpr unsigned adapter_limit = 7;
     Fixture fixture; AgentRegistry registry; assert(registry.Initialize(fixture.config) == Error::ok);
     static FakePjsuaApi fake; fake.Activate();
+    auto clock_failure = [&]() __attribute__((noinline)) {
+        fake.Reset(); auto api=fake.Api(); api.port_get_frame=FailingMaster;
+        PjsuaRuntimeAdapter adapter(api);
+        assert(adapter.Initialize(registry,fixture.config.security,fixture.config.conference_format)==Error::ok);
+        assert(adapter.Pump(0,0)==Error::ok);
+        assert(adapter.Pump(20,0)==Error::ok);
+        RuntimeNotification notification{};
+        assert(adapter.TryGetNotification(&notification) &&
+               notification.type==RuntimeNotification::Type::runtime_failed && notification.error==Error::media_failed);
+        assert(adapter.Pump(40,0)==Error::ok && !adapter.TryGetNotification(&notification));
+        assert(adapter.Shutdown()==Error::busy);
+        assert(adapter.Pump(41,0)==Error::ok && adapter.Shutdown()==Error::ok);
+    };
+    clock_failure(); fake.Reset();
     auto initial_lifecycle = [&]() __attribute__((noinline)) {
     PjsuaRuntimeAdapter adapter(fake.Api());
     assert(adapter.Initialize(registry, fixture.config.security, fixture.config.conference_format) == Error::ok);

@@ -96,15 +96,18 @@ void RunPjsuaAudioPortTests() {
         invalid=frame; invalid.size-=2;
         assert(port.Port()->get_frame(port.Port(),&invalid)==PJ_EINVAL);
         invalid=frame; invalid.type=PJMEDIA_FRAME_TYPE_VIDEO;
-        assert(port.Port()->get_frame(port.Port(),&invalid)==PJ_EINVAL);
+        // get_frame's type is output, not a precondition on caller storage.
+        assert(port.Port()->get_frame(port.Port(),&invalid)==PJ_SUCCESS);
+        assert(invalid.type==PJMEDIA_FRAME_TYPE_AUDIO);
+        invalid.type=PJMEDIA_FRAME_TYPE_VIDEO;
         assert(port.Port()->put_frame(port.Port(),&invalid)==PJ_SUCCESS);
         invalid=frame; invalid.buf=nullptr;
         assert(port.Port()->put_frame(port.Port(),&invalid)==PJ_EINVAL);
-        assert(endpoint.reads==reads && endpoint.writes==writes);
+        assert(endpoint.reads==reads+1 && endpoint.writes==writes);
         port.BeginStop(); assert(port.IsQuiescent());
         assert(port.Port()->get_frame(port.Port(),&frame)==PJ_SUCCESS);
         assert(port.Port()->put_frame(port.Port(),&frame)==PJ_SUCCESS);
-        assert(endpoint.reads==reads && endpoint.writes==writes && endpoint.flushes==0);
+        assert(endpoint.reads==reads+1 && endpoint.writes==writes && endpoint.flushes==0);
     }
     assert(port.Initialize({&endpoint,&endpoint},endpoint.format)==Error::ok);
     endpoint.block.store(true);

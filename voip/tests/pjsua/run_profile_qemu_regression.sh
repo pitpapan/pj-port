@@ -1,6 +1,7 @@
 #!/bin/sh
 # Full-log verdict gate for profiles which idle after reporting results.
 set -eu
+export CCACHE_DISABLE=1
 build_dir=${1:?build directory}
 log_file=${2:?complete output log}
 marker=${3:?exact expected verdict}

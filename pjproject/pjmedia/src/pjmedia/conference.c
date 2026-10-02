@@ -2211,7 +2211,8 @@ PJ_DEF(pj_status_t) pjmedia_conf_adjust_conn_level( pjmedia_conf *conf,
  */
 static pj_status_t read_port( pjmedia_conf *conf,
                               struct conf_port *cport, pj_int16_t *frame,
-                              pj_size_t count, pjmedia_frame_type *type )
+                              pj_size_t count, pjmedia_frame_type *type,
+                              const pj_timestamp *timestamp )
 {
 
     pj_assert(count == conf->samples_per_frame);
@@ -2231,6 +2232,8 @@ static pj_status_t read_port( pjmedia_conf *conf,
 
         f.buf = frame;
         f.size = count * BYTES_PER_SAMPLE;
+        f.type = PJMEDIA_FRAME_TYPE_NONE;
+        f.timestamp = *timestamp;
 
         TRACE_((THIS_FILE, "  get_frame %.*s: count=%d", 
                    (int)cport->name.slen, cport->name.ptr,
@@ -2269,6 +2272,13 @@ static pj_status_t read_port( pjmedia_conf *conf,
 
             f.buf = cport->rx_buf + cport->rx_buf_count;
             f.size = cport->samples_per_frame * BYTES_PER_SAMPLE;
+            f.type = PJMEDIA_FRAME_TYPE_NONE;
+            /* Supply capture time in this port's sample clock, just as
+             * write_port supplies playout time. Buffered samples are already
+             * ahead of the current conference frame. */
+            f.timestamp.u64 = timestamp->u64 * cport->clock_rate /
+                              conf->clock_rate +
+                              cport->rx_buf_count / cport->channel_count;
 
             TRACE_((THIS_FILE, "  get_frame, count=%d", 
                        cport->samples_per_frame));
@@ -2704,7 +2714,8 @@ static pj_status_t get_frame(pjmedia_port *this_port,
             pjmedia_frame_type frame_type;
 
             status = read_port(conf, conf_port, (pj_int16_t*)frame->buf, 
-                               conf->samples_per_frame, &frame_type);
+                               conf->samples_per_frame, &frame_type,
+                               &frame->timestamp);
             
             if (status != PJ_SUCCESS) {
                 /* bennylp: why do we need this????

@@ -1,5 +1,9 @@
 #include "PjsuaRuntimeAdapter.hpp"
 
+#if defined(CONFIG_VOIP_PJSUA_TWO_CALL_TEST)
+extern "C" void voip_pjsua_observe_clock(std::uint64_t, std::uint64_t, std::uint64_t) noexcept;
+#endif
+
 #if defined(CONFIG_VOIP_PJSUA_REGISTRATION_TEST)
 // Owned by applications/voip_integration/test_support.  This test-only
 // declaration keeps the native endpoint out of the public service ABI.
@@ -84,6 +88,7 @@ Error PjsuaRuntimeAdapter::Initialize(const AgentRegistry &registry,
     if (runtime_.EnsureActorRegistered() != Error::ok) { Rollback(); return Error::internal_failure; }
     if (accounts_.Initialize(registry, transport_.Id()) != Error::ok) { Rollback(); return Error::internal_failure; }
     initialized_ = true;
+    clock_failure_pending_=clock_failure_reported_=false;
     // Per-account request failures are copied as isolated notifications by
     // the account manager; no successfully created account is rolled back.
     if (runtime_.EnsureActorRegistered() != Error::ok) { Rollback(); return Error::internal_failure; }
@@ -98,12 +103,22 @@ Error PjsuaRuntimeAdapter::Pump(std::uint64_t now_ms, std::uint32_t timeout_ms) 
     // turn's actor time before dispatch, then process timers afterwards.
     now_ms_ = now_ms;
     accounts_.SetNow(now_ms);
-    const Error result = runtime_.Pump(timeout_ms);
+    (void)timeout_ms; // Media timing never waits behind blocking SIP polling.
+    const Error result = runtime_.Pump(0);
     // Native callbacks may have synchronously copied call records before a
     // later handle_events failure is reported. Draining is value-only and is
     // safe even when runtime_.Pump failed before entering native dispatch.
     DrainCallNotifications();
     if (result != Error::ok) return result;
+    const Error media = runtime_.PumpMedia(now_ms);
+#if defined(CONFIG_VOIP_PJSUA_TWO_CALL_TEST)
+    voip_pjsua_observe_clock(runtime_.Clock().Ticks(),runtime_.Clock().Skipped(),
+                            runtime_.Clock().MaxLatenessMs());
+#endif
+    if (media!=Error::ok && !clock_failure_reported_) {
+        clock_failure_pending_=true;
+        clock_failure_reported_=true;
+    }
     if (runtime_.EnsureActorRegistered() != Error::ok) return Error::internal_failure;
     (void)accounts_.Pump(now_ms);
     DrainAccountNotifications();
@@ -112,6 +127,12 @@ Error PjsuaRuntimeAdapter::Pump(std::uint64_t now_ms, std::uint32_t timeout_ms) 
 
 bool PjsuaRuntimeAdapter::TryGetNotification(RuntimeNotification *notification) noexcept {
     if (notification == nullptr) return false;
+    if (clock_failure_pending_) {
+        *notification={}; notification->type=RuntimeNotification::Type::runtime_failed;
+        notification->error=notification->status.error=Error::media_failed;
+        clock_failure_pending_=false;
+        return true;
+    }
     if (notification_size_ != 0) {
         *notification = notifications_[notification_head_];
         notification_head_ = (notification_head_ + 1) % notifications_.size();

@@ -397,6 +397,17 @@ void VoipRuntime::FinalizeTerminal(CallHandle handle,
 }
 
 void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) noexcept {
+    if (notification.type==RuntimeNotification::Type::runtime_failed) {
+        if (lifecycle_==Lifecycle::running || lifecycle_==Lifecycle::shutting_down) {
+            // A shared clock failure affects both audio paths. Stop admission
+            // and drain existing native ownership through normal shutdown;
+            // no elapsed timeout authorizes releasing callback storage.
+            lifecycle_=Lifecycle::shutting_down;
+            scheduler_.SetPromotionEnabled(false);
+            CancelAllCalls();
+        }
+        return;
+    }
     if (notification.type == RuntimeNotification::Type::registration_state) {
         AgentContext *agent = agents_.Resolve(notification.agent);
         if (agent == nullptr) return;
@@ -651,6 +662,7 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
     case RuntimeNotification::Type::incoming_call:
         break;
     case RuntimeNotification::Type::registration_state:
+    case RuntimeNotification::Type::runtime_failed:
         break;
     }
 }

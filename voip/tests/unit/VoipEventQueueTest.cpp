@@ -53,7 +53,10 @@ void test_wait_pop_timeout_and_wakeup() {
                 static_cast<std::uint8_t>(iteration);
             assert(queue.Publish(event));
         });
-        assert(queue.WaitPop(&output, 100));
+        // Thread sleep/start scheduling is not a service latency guarantee.
+        // The supervised/shared host runner can delay this 1 ms producer by
+        // hundreds of ms. Keep timeout behavior tests separate from wakeup.
+        assert(queue.WaitPop(&output, 2000));
         assert(output.resource_snapshot.active_agents == iteration);
         producer.join();
     }

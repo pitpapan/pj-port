@@ -42,6 +42,7 @@ struct PeerState {
     // Only PeerEntry/PumpPeer touches sockets or connection/script state.
     // Public calls exchange scalar requests and observations through atomics.
     int listener{invalid_fd};
+    int media_sockets[2]{invalid_fd,invalid_fd};
     Connection connections[max_connections]{};
     atomic_t next_outgoing{static_cast<atomic_val_t>(SipPeerScript::answer)};
     atomic_t incoming_requested{};
@@ -50,6 +51,7 @@ struct PeerState {
     atomic_t ready{};
     atomic_t zero_workers{};
     atomic_t media_transport_creations{};
+    atomic_t clock_ticks{}, clock_skipped{}, clock_max_lateness{};
     atomic_t minimum_stack_unused{8192};
     k_thread thread{};
     atomic_t invites{}, incoming_invites{}, acks{}, byes{}, cancels{}, trying{}, ringing{}, reinvites{}, reinvite_responses{}, parse_failures{};
@@ -113,7 +115,7 @@ void Reply(Connection &connection, unsigned code, const char *reason, const char
     Send(connection, message);
 }
 const char *Sdp(bool valid) {
-    return valid ? "v=0\r\no=peer 1 1 IN IP4 127.0.0.1\r\ns=peer\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 4002 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\na=sendrecv\r\n"
+    return valid ? "v=0\r\no=peer 1 1 IN IP4 127.0.0.1\r\ns=peer\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 6002 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\na=sendrecv\r\n"
                  : "v=0\r\no=broken\r\nm=audio not-a-port\r\n";
 }
 void SendBye(Connection &connection) {
@@ -313,6 +315,13 @@ void MakeIncoming(SipPeerScript script, unsigned agent) {
 }
 void PumpPeer() {
     if (atomic_get(&state.running) != 0) {
+        // The signalling fixture discards media, but must own/drain its SDP
+        // ports. Advertising the application's own 4002 port loops RTP back
+        // into another call once the no-device conference starts ticking.
+        char packet[512];
+        for (int fd : state.media_sockets)
+            for (unsigned budget=0; budget<16 && fd!=invalid_fd; ++budget)
+                if (zsock_recv(fd,packet,sizeof(packet),ZSOCK_MSG_DONTWAIT)<=0) break;
         const auto requested = atomic_set(&state.incoming_requested, 0);
         if (requested != 0) MakeIncoming(static_cast<SipPeerScript>((requested & 0xff) - 1), static_cast<unsigned>(requested >> 8));
         zsock_pollfd listener_poll{};
@@ -361,10 +370,21 @@ void PumpPeer() {
     }
 }
 void PeerEntry(void *, void *, void *) {
+    for (unsigned i=0;i<2;++i) {
+        state.media_sockets[i]=zsock_socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);
+        sockaddr_in media_address{}; media_address.sin_family=AF_INET;
+        media_address.sin_port=htons(6002+i); media_address.sin_addr.s_addr=htonl(0x7f000001U);
+        if (state.media_sockets[i]<0 || zsock_bind(state.media_sockets[i],
+            reinterpret_cast<sockaddr *>(&media_address),sizeof(media_address))!=0) {
+            for (int fd : state.media_sockets) if (fd>=0) (void)zsock_close(fd);
+            atomic_set(&state.ready,-1); return;
+        }
+    }
     state.listener = zsock_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     sockaddr_in address{}; address.sin_family = AF_INET; address.sin_port = htons(ScriptedSipPeer::listener_port); address.sin_addr.s_addr = htonl(0x7f000001U);
     if (state.listener < 0 || zsock_bind(state.listener, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0 || zsock_listen(state.listener, 3) != 0) {
         if (state.listener >= 0) (void)zsock_close(state.listener);
+        for (int fd : state.media_sockets) if (fd>=0) (void)zsock_close(fd);
         atomic_set(&state.ready, -1); return;
     }
     atomic_set(&state.ready, 1);
@@ -377,6 +397,7 @@ void PeerEntry(void *, void *, void *) {
             atomic_set(&state.minimum_stack_unused, static_cast<atomic_val_t>(unused));
         k_sleep(K_MSEC(1));
     }
+    for (int fd : state.media_sockets) if (fd>=0) (void)zsock_close(fd);
 }
 } // namespace
 
@@ -404,7 +425,10 @@ SipPeerStats ScriptedSipPeer::Stats() const noexcept {
         static_cast<unsigned>(atomic_get(&state.registrations)), static_cast<unsigned>(atomic_get(&state.incoming_trying)),
         static_cast<unsigned>(atomic_get(&state.incoming_ringing)), static_cast<unsigned>(atomic_get(&state.cancel_responses)),
         static_cast<unsigned>(atomic_get(&state.cancelled_invites)), static_cast<unsigned>(atomic_get(&state.minimum_stack_unused)),
-        static_cast<unsigned>(atomic_get(&state.parse_failures))};
+        static_cast<unsigned>(atomic_get(&state.parse_failures)),
+        static_cast<unsigned>(atomic_get(&state.clock_ticks)),
+        static_cast<unsigned>(atomic_get(&state.clock_skipped)),
+        static_cast<unsigned>(atomic_get(&state.clock_max_lateness))};
 }
 unsigned ScriptedSipPeer::IncomingResponseOrder(unsigned sequence, unsigned code) const noexcept {
     if (sequence >= max_observed_calls) return 0;
@@ -465,5 +489,14 @@ extern "C" pj_status_t __wrap_pjsua_init(const pjsua_config *ua, const pjsua_log
     return __real_pjsua_init(&observed, log, media);
 }
 
+extern "C" void voip_pjsua_observe_clock(std::uint64_t ticks, std::uint64_t skipped,
+                                         std::uint64_t max_lateness) noexcept {
+    atomic_set(&state.clock_ticks,static_cast<atomic_val_t>(ticks));
+    atomic_set(&state.clock_skipped,static_cast<atomic_val_t>(skipped));
+    auto previous=atomic_get(&state.clock_max_lateness);
+    const auto value=static_cast<atomic_val_t>(max_lateness);
+    while (previous<value && !atomic_cas(&state.clock_max_lateness,previous,value))
+        previous=atomic_get(&state.clock_max_lateness);
+}
 extern "C" unsigned voip_pjsua_registration_test_listener_port() noexcept { return ScriptedSipPeer::pjsua_listener_port; }
 extern "C" pj_status_t voip_pjsua_registration_test_install(pjsip_endpoint *) noexcept { return PJ_SUCCESS; }

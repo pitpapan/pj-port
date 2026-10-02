@@ -229,3 +229,27 @@ The optional port-local `on_call_media_update_result(call_id, status)` reports
 failed SDP negotiation even when the established dialog and its previous
 stream remain alive. The service correlates local INVITE CSeqs through
 `on_call_tsx_state`; SIP 200 alone is not a successful media operation.
+
+### Actor-driven no-device conference clock
+
+The selected runtime retains the `pjsua_set_no_snd_dev()` master port and
+drives it on the actor with nonblocking SIP polling. A validated reusable
+signed-16 frame comes from the fixed PJ arena. A late turn processes one
+frame, advances its sample timestamp over skipped periods, and records
+lateness rather than running an unbounded catch-up loop. Application audio
+does not connect to master slot zero. Shutdown stops this clock before
+destroying the native conference or arena.
+
+The port-local conference adaptation initializes capture timestamps from
+the master sample clock (the original native capture frame was uninitialized).
+Real conference tests check capture/playout timestamps and asynchronous
+port removal; deterministic tests cover 8 kHz/80 and 160 sample frames,
+rollover, skipped deadlines, rollback and stop/reinitialize. A master frame
+failure reports once and starts ownership-preserving service shutdown.
+
+The QEMU five-lifecycle signalling regression passed with zero general-heap
+allocations after initialization and zero arena usage after each shutdown.
+One measured run reported 180 ms maximum actor lateness and 145 skipped
+periods in the final lifecycle. These emulator measurements are diagnostic,
+not production audio timing or hardware acceptance. The scripted peer owns
+and drains distinct UDP media ports, avoiding loopback into native call ports.

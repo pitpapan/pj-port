@@ -2029,6 +2029,21 @@ void test_task6_media_results_complete_once() {
     }
 }
 
+void test_clock_failure_stops_admission_and_retains_native_ownership() {
+    ControlFixture f;
+    const auto call=f.Incoming(987);
+    f.Notify(voip::RuntimeNotification::Type::call_accepted,987);
+    f.Notify(voip::RuntimeNotification::Type::runtime_failed,0);
+    voip::OperationId operation{};
+    assert(f.runtime.Dial(f.agent,{"sip:after-clock-failure@example.test"},&operation)==voip::Error::shutting_down);
+    assert(f.Live(call));
+    // Shutdown rejects new test injections, but still drains the native
+    // hangup callback queued by CancelAllCalls.
+    f.runtime.DrainAdapterCallbacks();
+    f.Step(f.now);
+    assert(!f.Live(call) && f.Terminals(call)==1);
+}
+
 void test_task6_queued_finish_only_failure_preserves_status_and_fifo() {
     ControlFixture incoming;
     const auto active=incoming.Incoming(830);
@@ -2276,6 +2291,7 @@ int main(int argc, char **argv) {
     }
     test_task6_cancel_retains_native_until_finish();
     test_task6_media_results_complete_once();
+    test_clock_failure_stops_admission_and_retains_native_ownership();
     test_task6_queued_finish_only_failure_preserves_status_and_fifo();
     test_task6_finish_only_failure_completes_pending_operation_once();
     test_task6_cancel_before_promotion_releases_only_on_finish();

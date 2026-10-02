@@ -679,6 +679,10 @@ int main() {
     }
     CHECK(peer.Stats().minimum_stack_unused >= 512);
     printk("[multi-call] peer minimum unused stack=%u bytes\n", peer.Stats().minimum_stack_unused);
+    const auto clock=peer.Stats();
+    CHECK(clock.clock_ticks!=0);
+    printk("[multi-call] conference clock ticks=%u skipped=%u max-lateness=%u ms\n",
+           clock.clock_ticks,clock.clock_skipped,clock.clock_max_lateness_ms);
     if (failures == 0) printk("VOIP MULTI CALL RESULT: PASSED (2 promoted, 5 FIFO, 5 lifecycles)\n");
     else printk("VOIP MULTI CALL RESULT: FAILED (%d checks)\n", failures);
     return failures == 0 ? 0 : 1;

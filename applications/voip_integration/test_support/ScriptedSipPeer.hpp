@@ -25,6 +25,7 @@ struct SipPeerStats {
     unsigned cancelled_invites;
     unsigned minimum_stack_unused;
     unsigned parse_failures;
+    unsigned clock_ticks, clock_skipped, clock_max_lateness_ms;
 };
 
 // A deliberately small raw TCP SIP peer. It owns no PJSUA object and only

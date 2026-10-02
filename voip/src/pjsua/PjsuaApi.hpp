@@ -54,6 +54,11 @@ struct PjsuaApi {
     pj_status_t (*call_hangup)(pjsua_call_id, unsigned,
                                const pj_str_t *, const pjsua_msg_data *) = nullptr;
     pj_status_t (*call_prepare_media)(pjsua_call_id) = nullptr;
+    pj_pool_t *(*pool_create)(const char *, pj_size_t, pj_size_t) = nullptr;
+    void *(*pool_alloc)(pj_pool_t *, pj_size_t) = nullptr;
+    void (*pool_release)(pj_pool_t *) = nullptr;
+    pj_status_t (*port_get_frame)(pjmedia_port *, pjmedia_frame *) = nullptr;
+    pj_status_t (*port_put_frame)(pjmedia_port *, pjmedia_frame *) = nullptr;
 };
 
 const PjsuaApi &NativePjsuaApi() noexcept;

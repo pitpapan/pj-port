@@ -13,6 +13,7 @@ class AgentRegistry;
 struct RuntimeNotification {
     enum class Type : std::uint8_t {
         registration_state,
+        runtime_failed,
         call_accepted,
         call_rejected,
         call_finished,

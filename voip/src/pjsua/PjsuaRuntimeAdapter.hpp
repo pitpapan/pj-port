@@ -60,6 +60,7 @@ private:
     // A failed startup may still own live PJLIB/PJSUA state.  Shutdown must
     // retry Rollback even though initialization never reached "initialized".
     bool startup_rollback_pending_{};
+    bool clock_failure_pending_{}, clock_failure_reported_{};
     std::uint64_t now_ms_{};
 };
 static_assert(sizeof(PjsuaRuntimeAdapter) < 20480,
