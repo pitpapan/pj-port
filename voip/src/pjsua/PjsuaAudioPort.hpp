@@ -20,7 +20,9 @@ public:
         return stopping_.load(std::memory_order_acquire) && entries_.load(std::memory_order_acquire)==0;
     }
     Error TakeError() noexcept { return error_.exchange(Error::ok, std::memory_order_acq_rel); }
+    bool NativeDestroyed() const noexcept { return destroyed_.load(std::memory_order_acquire); }
 private:
+    static pj_status_t Destroy(pjmedia_port *) noexcept;
     static pj_status_t Get(pjmedia_port *, pjmedia_frame *) noexcept;
     static pj_status_t Put(pjmedia_port *, pjmedia_frame *) noexcept;
     void Latch(Error) noexcept;
@@ -31,6 +33,7 @@ private:
     std::atomic<unsigned> entries_{0};
     std::atomic<bool> stopping_{true};
     std::atomic<Error> error_{Error::ok};
+    std::atomic<bool> destroyed_{false};
 };
 } // namespace voip
 #endif

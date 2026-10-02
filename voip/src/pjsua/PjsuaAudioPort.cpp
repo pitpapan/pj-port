@@ -34,6 +34,8 @@ Error PjsuaAudioPort::Initialize(AgentAudioBinding binding, PcmFormat format) no
     bytes_=static_cast<std::size_t>(format.samples_per_frame)*sizeof(std::int16_t);
     port_.port_data.pdata=this;
     port_.get_frame=Get; port_.put_frame=Put;
+    port_.on_destroy=Destroy;
+    destroyed_.store(false,std::memory_order_relaxed);
     error_.store(Error::ok,std::memory_order_relaxed);
     stopping_.store(false,std::memory_order_release);
     return Error::ok;
@@ -68,6 +70,13 @@ pj_status_t PjsuaAudioPort::Put(pjmedia_port *native, pjmedia_frame *frame) noex
     if (!Aligned(frame->buf) || frame->size!=self.bytes_) return PJ_EINVAL;
     self.Latch(self.binding_.sink->Write(static_cast<const std::int16_t *>(frame->buf),
                                         self.format_.samples_per_frame,frame->timestamp.u64));
+    return PJ_SUCCESS;
+}
+pj_status_t PjsuaAudioPort::Destroy(pjmedia_port *native) noexcept {
+    if (native==nullptr || native->port_data.pdata==nullptr) return PJ_EINVAL;
+    auto &self=*static_cast<PjsuaAudioPort *>(native->port_data.pdata);
+    Entry entry(self.entries_);
+    self.destroyed_.store(true,std::memory_order_release);
     return PJ_SUCCESS;
 }
 }

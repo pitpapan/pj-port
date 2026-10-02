@@ -31,6 +31,9 @@ if(CONFIG_VOIP_PJSUA_PLAN5_COMPONENT_TEST)
     ../../voip/tests/pjsua/PjsuaAudioPortTest.cpp
     ../../voip/tests/pjsua/PjsuaMediaClockTest.cpp
     ../../voip/tests/pjsua/PjsuaConferenceClockTest.cpp
+    ../../voip/tests/pjsua/PjsuaMediaBridgeTest.cpp
+    ../../voip/tests/pjsua/PjsuaNativeBridgeTest.cpp
+    ../../voip/src/pjsua/PjsuaMediaBridge.cpp
     ../../voip/src/pjsua/PjsuaAudioPort.cpp
     ../../voip/src/pjsua/PjsuaMediaClock.cpp
     ../../voip/src/pjsua/PjsuaRuntime.cpp

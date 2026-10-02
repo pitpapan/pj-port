@@ -59,6 +59,13 @@ struct PjsuaApi {
     void (*pool_release)(pj_pool_t *) = nullptr;
     pj_status_t (*port_get_frame)(pjmedia_port *, pjmedia_frame *) = nullptr;
     pj_status_t (*port_put_frame)(pjmedia_port *, pjmedia_frame *) = nullptr;
+    pj_status_t (*conf_add_port)(pj_pool_t *, pjmedia_port *, pjsua_conf_port_id *) = nullptr;
+    pjsua_conf_port_id (*call_get_conf_port)(pjsua_call_id) = nullptr;
+    pj_status_t (*conf_connect)(pjsua_conf_port_id, pjsua_conf_port_id) = nullptr;
+    pj_status_t (*conf_disconnect)(pjsua_conf_port_id, pjsua_conf_port_id) = nullptr;
+    pj_status_t (*conf_remove_port)(pjsua_conf_port_id) = nullptr;
+    pj_status_t (*port_init_grp_lock)(pjmedia_port *, pj_pool_t *, pj_grp_lock_t *) = nullptr;
+    pj_status_t (*port_destroy)(pjmedia_port *) = nullptr;
 };
 
 const PjsuaApi &NativePjsuaApi() noexcept;

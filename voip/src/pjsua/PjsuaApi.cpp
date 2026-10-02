@@ -48,7 +48,11 @@ const PjsuaApi &NativePjsuaApi() noexcept {
                               pjsua_call_hangup,
                               pjsua_call_prepare_media,
                               pjsua_pool_create, pj_pool_alloc, pj_pool_release,
-                              pjmedia_port_get_frame, pjmedia_port_put_frame};
+                              pjmedia_port_get_frame, pjmedia_port_put_frame,
+                              pjsua_conf_add_port, pjsua_call_get_conf_port,
+                              pjsua_conf_connect, pjsua_conf_disconnect,
+                              pjsua_conf_remove_port, pjmedia_port_init_grp_lock,
+                              pjmedia_port_destroy};
 #if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
     return component_test_api != nullptr ? *component_test_api : api;
 #else

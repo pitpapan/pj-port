@@ -2,6 +2,7 @@
 #define VOIP_TEST_FAKE_PJSUA_API_HPP
 
 #include "../../src/pjsua/PjsuaApi.hpp"
+#include "FakePjsuaMediaApi.hpp"
 #include <cstring>
 #include <array>
 #include <cassert>
@@ -18,6 +19,8 @@ public:
     void Activate() noexcept { active_ = this; }
     void Deactivate() noexcept { if (active_ == this) active_ = nullptr; }
     void Reset() noexcept {
+        FakePjsuaMediaApi::Reset();
+        FakePjsuaMediaApi::callback=ConferenceOperation;
         for (auto &pool : media_pools_) pool.used=false;
         master_={}; master_error_=PJ_SUCCESS;
         failed_ = Stage::arena;
@@ -543,7 +546,9 @@ private:
         FakePjsuaApi &fake = Active(); fake.Record("prepare-media");
         return fake.ValidCallId(id) ? fake.CallFailure(CallEntry::prepare_media) : PJ_EINVAL;
     }
-    static pj_pool_t *PoolCreate(const char *,pj_size_t,pj_size_t) {
+    static pj_pool_t *PoolCreate(const char *name,pj_size_t initial,pj_size_t increment) {
+        if (name && std::strcmp(name,"agent-bridge")==0)
+            return FakePjsuaMediaApi::Pool(name,initial,increment);
         for (auto &pool : media_pools_) if (!pool.used) { pool.used=true; return &pool.native; }
         return nullptr;
     }
@@ -553,11 +558,17 @@ private:
     }
     static void PoolRelease(pj_pool_t *native) {
         for (auto &pool : media_pools_) if (&pool.native==native) { pool.used=false; return; }
-        assert(false);
+        FakePjsuaMediaApi::Release(native);
     }
-    static pj_status_t PortGetFrame(pjmedia_port *,pjmedia_frame *) { return master_error_; }
+    static void ConferenceOperation(const pjmedia_conf_op_info *info) {
+        if (Active().ua_.cb.on_conf_op_completed) Active().ua_.cb.on_conf_op_completed(info);
+    }
+    static pjsua_conf_port_id CallConfSlot(pjsua_call_id id) { return id>=0 && id<7 ? id+1 : PJSUA_INVALID_ID; }
+    static pj_status_t PortGetFrame(pjmedia_port *,pjmedia_frame *) {
+        FakePjsuaMediaApi::Complete(); return master_error_;
+    }
     static pj_status_t PortPutFrame(pjmedia_port *,pjmedia_frame *) { return master_error_; }
-    PjsuaApi api_{ArenaInstall, ArenaReset, Create, ThreadIsRegistered, ThreadRegister, ConfigDefault, LogDefault, MediaDefault, TransportDefault, Init, NoSound, TransportCreate, TransportClose, Start, Pump, Destroy, AccountConfigDefault, AccountAdd, AccountSetUserData, AccountGetUserData, AccountDelete, AccountSetRegistration, CallSettingDefault, CallMakeCall, CallSetUserData, CallGetUserData, CallGetInfo, CallAnswer2, CallSetHold2, CallReinvite2, CallAnswer, CallHangup, CallPrepareMedia, PoolCreate, PoolAllocate, PoolRelease, PortGetFrame, PortPutFrame};
+    PjsuaApi api_{ArenaInstall, ArenaReset, Create, ThreadIsRegistered, ThreadRegister, ConfigDefault, LogDefault, MediaDefault, TransportDefault, Init, NoSound, TransportCreate, TransportClose, Start, Pump, Destroy, AccountConfigDefault, AccountAdd, AccountSetUserData, AccountGetUserData, AccountDelete, AccountSetRegistration, CallSettingDefault, CallMakeCall, CallSetUserData, CallGetUserData, CallGetInfo, CallAnswer2, CallSetHold2, CallReinvite2, CallAnswer, CallHangup, CallPrepareMedia, PoolCreate, PoolAllocate, PoolRelease, PortGetFrame, PortPutFrame, FakePjsuaMediaApi::Add, CallConfSlot, FakePjsuaMediaApi::Connect, FakePjsuaMediaApi::Disconnect, FakePjsuaMediaApi::Remove, FakePjsuaMediaApi::Group, FakePjsuaMediaApi::Destroy};
 };
 inline FakePjsuaApi *FakePjsuaApi::active_ = nullptr;
 } // namespace voip::test
