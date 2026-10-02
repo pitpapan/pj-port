@@ -45,7 +45,8 @@ const PjsuaApi &NativePjsuaApi() noexcept {
                               pjsua_call_set_hold2,
                               pjsua_call_reinvite2,
                               pjsua_call_answer,
-                              pjsua_call_hangup};
+                              pjsua_call_hangup,
+                              pjsua_call_prepare_media};
 #if defined(CONFIG_VOIP_PJSUA_PLAN3_COMPONENT_TEST)
     return component_test_api != nullptr ? *component_test_api : api;
 #else

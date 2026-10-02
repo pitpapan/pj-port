@@ -70,9 +70,33 @@ void RunPjsuaIncomingAdmissionTests() {
     assert(fake.SequenceEquals(
         "add,call-defaults,make-call,get-call-data,set-call-data,get-call-info,"
         "get-call-data,"
-        "call-defaults,answer-180"));
+        "answer-180"));
+    assert(calls.Answer(notification.token) == Error::invalid_handle);
+    assert(calls.PromoteIncoming(logical, notification.agent, notification.token) == Error::ok);
+    assert(calls.PromoteIncoming(logical, notification.agent, notification.token) == Error::ok);
+    assert(fake.SequenceEquals(
+        "add,call-defaults,make-call,get-call-data,set-call-data,get-call-info,"
+        "get-call-data,answer-180,get-call-data,prepare-media,get-call-data"));
     };
     successful_admission();
+
+    fake.Reset();
+    auto exhausted_promotion = [&]() __attribute__((noinline)) {
+        PjsuaAccountManager accounts(fake.Api());
+        assert(accounts.Initialize(fixture.registry, 4) == Error::ok);
+        PjsuaCallManager calls(accounts, fake.Api());
+        OpenCall(fake.Api(), &id);
+        calls.OnIncomingCall(2, id);
+        assert(calls.TryGetNotification(&notification));
+        assert(calls.AdmitIncoming(logical, notification.agent, notification.token) == Error::ok);
+        fake.FailCall(FakePjsuaApi::CallEntry::prepare_media, PJ_ENOMEM);
+        assert(calls.PromoteIncoming(logical, notification.agent, notification.token) == Error::resource_exhausted);
+        assert(calls.Answer(notification.token) == Error::invalid_handle);
+        assert(fake.CallUserData(id) != nullptr && calls.Count() == 1);
+        fake.ClearCallFailures();
+        assert(calls.PromoteIncoming(logical, notification.agent, notification.token) == Error::ok);
+    };
+    exhausted_promotion();
 
     fake.Reset();
     auto failed_admission_and_cancellation = [&]() __attribute__((noinline)) {

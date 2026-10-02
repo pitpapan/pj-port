@@ -49,6 +49,7 @@ struct PeerState {
     atomic_t running{};
     atomic_t ready{};
     atomic_t zero_workers{};
+    atomic_t media_transport_creations{};
     atomic_t minimum_stack_unused{8192};
     k_thread thread{};
     atomic_t invites{}, incoming_invites{}, acks{}, byes{}, cancels{}, trying{}, ringing{}, reinvites{}, reinvite_responses{}, parse_failures{};
@@ -218,7 +219,11 @@ void Handle(Connection &connection) {
         char ack[message_bytes]{};
         const unsigned sequence = std::strcmp(cseq, "2 INVITE") == 0 ? 2U : 1U;
         const char *via = (cancelled || timed_out || busy) ? connection.via : "SIP/2.0/TCP 127.0.0.1;branch=z9hG4bK-peer-ack";
-        std::snprintf(ack, sizeof(ack), "ACK sip:agent0@127.0.0.1 SIP/2.0\r\nVia: %s\r\nFrom: %s\r\nTo: %s\r\nCall-ID: %s\r\nCSeq: %u ACK\r\nContent-Length: 0\r\n\r\n", via, connection.from, connection.to, connection.call_id, sequence);
+        const char *answer_sdp = success && sequence == 1 &&
+            connection.script == SipPeerScript::offerless ? Sdp(true) : "";
+        std::snprintf(ack, sizeof(ack), "ACK sip:agent0@127.0.0.1 SIP/2.0\r\nVia: %s\r\nFrom: %s\r\nTo: %s\r\nCall-ID: %s\r\nCSeq: %u ACK\r\nContent-Length: %u\r\n%s%s", via, connection.from, connection.to, connection.call_id, sequence,
+            static_cast<unsigned>(std::strlen(answer_sdp)), *answer_sdp ?
+            "Content-Type: application/sdp\r\n\r\n" : "\r\n", answer_sdp);
         Send(connection, ack); atomic_inc(&state.acks);
         if (cancelled || timed_out || busy) {
             atomic_inc(&state.cancelled_invites);
@@ -299,7 +304,7 @@ void MakeIncoming(SipPeerScript script, unsigned agent) {
         std::snprintf(connection.call_id, sizeof(connection.call_id), "peer-incoming-%u", sequence);
         std::snprintf(connection.cseq, sizeof(connection.cseq), "1 INVITE");
         char invite[message_bytes]{};
-        const char *sdp = Sdp(true);
+        const char *sdp = script == SipPeerScript::offerless ? "" : Sdp(true);
         std::snprintf(invite, sizeof(invite), "INVITE sip:agent%u@127.0.0.1 SIP/2.0\r\nVia: %s\r\nFrom: %s\r\nTo: %s\r\nCall-ID: %s\r\nCSeq: %s\r\nContact: <sip:remote-in-%u@127.0.0.1:5098;transport=tcp>\r\nContent-Type: application/sdp\r\nContent-Length: %u\r\n\r\n%s", agent, connection.via, connection.from, connection.to, connection.call_id, connection.cseq, sequence, static_cast<unsigned>(std::strlen(sdp)), sdp);
         Send(connection, invite); atomic_inc(&state.incoming_invites); return;
     }
@@ -433,9 +438,26 @@ bool ScriptedSipPeer::FramingChecks() noexcept {
 } // namespace voip_integration
 
 extern "C" pj_status_t __real_pjsua_init(const pjsua_config *, const pjsua_logging_config *, const pjsua_media_config *);
+namespace {
+pjsua_med_tp_state_cb native_media_transport_callback;
+pj_status_t ObserveMediaTransport(pjsua_call_id call, const pjsua_med_tp_state_info *info) {
+    if (info != nullptr && info->state == PJSUA_MED_TP_CREATING)
+        atomic_inc(&state.media_transport_creations);
+    if (native_media_transport_callback != nullptr)
+        return native_media_transport_callback(call, info);
+    return PJ_SUCCESS;
+}
+}
+unsigned voip_integration::ScriptedSipPeer::MediaTransportCreations() const noexcept {
+    return static_cast<unsigned>(atomic_get(&state.media_transport_creations));
+}
 extern "C" pj_status_t __wrap_pjsua_init(const pjsua_config *ua, const pjsua_logging_config *log, const pjsua_media_config *media) {
     atomic_set(&state.zero_workers, ua && media && ua->thread_cnt == 0 && media->thread_cnt == 0 && !media->has_ioqueue ? 1 : -1);
-    return __real_pjsua_init(ua, log, media);
+    if (ua == nullptr) return __real_pjsua_init(ua, log, media);
+    pjsua_config observed = *ua;
+    native_media_transport_callback = ua->cb.on_call_media_transport_state;
+    observed.cb.on_call_media_transport_state = ObserveMediaTransport;
+    return __real_pjsua_init(&observed, log, media);
 }
 
 extern "C" unsigned voip_pjsua_registration_test_listener_port() noexcept { return ScriptedSipPeer::pjsua_listener_port; }

@@ -482,7 +482,8 @@ int main() {
             const voip::CallHandle a = Dial(service, seen, agents[0], a_uri);
             CHECK(Wait(service, seen, seen.accepted, 1));
             const unsigned incoming_b_sequence = peer.Stats().incoming_invites + 1;
-            const voip::CallHandle b = Incoming(service, seen, peer, SipPeerScript::answer, 1);
+            const voip::CallHandle b = Incoming(service, seen, peer,
+                lifecycle == 3 ? SipPeerScript::offerless : SipPeerScript::answer, 1);
             voip::OperationId operation{};
             voip::Error submission = service.Answer(b, &operation);
             Submitted(seen, submission, operation, voip::Error::ok);
@@ -508,8 +509,14 @@ int main() {
             if (lifecycle == 2) {
                 voip::CallHandle queued[5]{};
                 const unsigned first_queued_sequence = peer.Stats().incoming_invites + 1;
-                for (unsigned i = 0; i < 5; ++i)
-                    queued[i] = Incoming(service, seen, peer, SipPeerScript::answer, i);
+                const unsigned media_before_queue = peer.MediaTransportCreations();
+                for (unsigned i = 0; i < 5; ++i) {
+                    queued[i] = Incoming(service, seen, peer,
+                        i == 4 ? SipPeerScript::offerless : SipPeerScript::answer, i);
+                    // Offered INVITEs and offerless 180 admission must both
+                    // remain signaling-only while the two leases are occupied.
+                    CHECK(peer.MediaTransportCreations() == media_before_queue);
+                }
                 CHECK(WaitResources(service, seen, 2, 5)); CheckPool(service, 2, 5);
                 CHECK(pjsua_call_get_count() == 7);
                 for (unsigned i = 0; i < 5; ++i) {

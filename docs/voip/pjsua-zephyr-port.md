@@ -202,3 +202,25 @@ env PATH=/home/pitpapan/zephyrproject/.venv/bin:/usr/bin:/bin CMAKE_BUILD_PARALL
 
 Acceptance is measured evidence only: Plan 6 owns production actor-stack
 thresholds and target-board qualification.
+
+## Incoming media deferral extension (2026-10-02)
+
+The service opts into the port-local `pjsua_config::defer_incoming_media`
+extension. Its default is false, preserving other PJSUA callers. An offered
+incoming INVITE retains a dialog-pool-owned SDP clone and still validates SDP
+and sends provisional responses, but does not initialize media while queued.
+Offerless admission sends 180 without call settings or a local offer.
+
+After acquiring a promoted lease, the actor invokes the idempotent
+`pjsua_call_prepare_media(pjsua_call_id)` extension before answering. It uses
+the existing native initialization/completion path for offered and offerless
+calls. A deferred call cannot bypass preparation with a 183/2xx answer.
+Dialog destruction releases retained SDP; invalid or terminal calls are
+rejected. These APIs are local extensions, not upstream PJPROJECT interfaces.
+
+The multi-call regression observes media-transport creation transitions while
+forwarding the production callback. With both leases occupied, all five
+queued incoming calls (including an offerless INVITE) leave the creation
+counter unchanged. The pre-fix run failed each assertion. The post-fix run
+also establishes an offerless promoted call and checks five full lifecycles,
+FIFO, rejection, CANCEL, timeout, native-ID reuse and heap/arena cleanup.

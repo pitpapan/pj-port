@@ -64,14 +64,12 @@ Error PjsuaCallManager::AdmitIncoming(CallHandle logical, AgentHandle agent,
     if (context == nullptr || !logical.IsValid() ||
         context->agent.slot != agent.slot || context->agent.generation != agent.generation ||
         context->phase != PjsuaCallPhase::queued_incoming ||
-        !OwnsNativeUserData(*context) || api_.call_setting_default == nullptr ||
+        !OwnsNativeUserData(*context) ||
         api_.call_answer2 == nullptr)
         return Error::invalid_handle;
     context->logical = logical;
     context->logical_bound = true;
-    pjsua_call_setting setting{};
-    api_.call_setting_default(&setting);
-    if (api_.call_answer2(context->native_id, &setting, 180, nullptr, nullptr) != PJ_SUCCESS)
+    if (api_.call_answer2(context->native_id, nullptr, 180, nullptr, nullptr) != PJ_SUCCESS)
         return Error::signaling_failed;
     context->phase = PjsuaCallPhase::admitted_incoming;
     return Error::ok;
@@ -87,6 +85,14 @@ Error PjsuaCallManager::PromoteIncoming(CallHandle logical, AgentHandle agent,
         context->phase != PjsuaCallPhase::admitted_incoming ||
         !OwnsNativeUserData(*context))
         return Error::invalid_handle;
+    if (context->promoted) return Error::ok;
+    if (api_.call_prepare_media == nullptr) return Error::unsupported_configuration;
+    context->promoted = true;
+    const pj_status_t prepared = api_.call_prepare_media(context->native_id);
+    if (prepared != PJ_SUCCESS && prepared != PJ_EPENDING) {
+        context->promoted = false;
+        return prepared == PJ_ENOMEM ? Error::resource_exhausted : Error::media_failed;
+    }
     return Error::ok;
 }
 
@@ -107,7 +113,8 @@ Error PjsuaCallManager::Native(pjsua_call_id native_id,
 
 Error PjsuaCallManager::Answer(std::uint32_t token) noexcept {
     PjsuaCallContext *context = FindToken(token);
-    if (context == nullptr || context->terminal_seen || !OwnsNativeUserData(*context) ||
+    if (context == nullptr || context->terminal_seen ||
+        (context->incoming && !context->promoted) || !OwnsNativeUserData(*context) ||
         api_.call_setting_default == nullptr || api_.call_answer2 == nullptr)
         return Error::invalid_handle;
     pjsua_call_setting setting{};
@@ -200,6 +207,7 @@ PjsuaCallContext *PjsuaCallManager::ReserveOutgoing(CallHandle logical,
         context.logical_bound = true;
         context.agent = agent;
         context.phase = PjsuaCallPhase::calling;
+        context.promoted = true;
         ++count_;
         return &context;
     }

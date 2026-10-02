@@ -243,6 +243,7 @@ void IncomingCancelAndConfirmation() {
     f.Media(id,PJMEDIA_DIR_NONE); f.Pop(RuntimeNotification::Type::call_finished,incoming.token);
     f.calls.OnIncomingCall(2,id); assert(f.calls.TryGetNotification(&incoming));
     assert(f.calls.AdmitIncoming({1,2},f.agent_handle,incoming.token)==Error::ok);
+    assert(f.calls.PromoteIncoming({1,2},f.agent_handle,incoming.token)==Error::ok);
     assert(f.calls.Answer(incoming.token)==Error::ok);
     f.State(id,PJSIP_INV_STATE_CONFIRMED);
     f.Pop(RuntimeNotification::Type::call_accepted,incoming.token);

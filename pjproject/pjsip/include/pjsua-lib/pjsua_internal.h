@@ -158,6 +158,9 @@ struct pjsua_call
     pjsua_call_setting   opt;       /**< Call setting.                      */
     pj_bool_t            opt_inited;/**< Initial call setting has been set,
                                          to avoid different opt in answer.  */
+    pj_bool_t            media_deferred; /**< Incoming media awaits promotion. */
+    pj_status_t          media_prepare_status; /**< Idempotent prepare result. */
+    pjmedia_sdp_session *deferred_offer; /**< Dialog-pool-owned remote offer. */
     pjsip_inv_session   *inv;       /**< The invite session.                */
     void                *user_data; /**< User/application data.             */
     pjsip_status_code    last_code; /**< Last status code seen.             */
@@ -1072,4 +1075,3 @@ void pjsua_acc_end_ip_change(pjsua_acc *acc);
 PJ_END_DECL
 
 #endif  /* __PJSUA_INTERNAL_H__ */
-

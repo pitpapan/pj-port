@@ -39,6 +39,7 @@ Error PjsuaRuntime::CreateAndInitialize(const pjsua_callback &callbacks,
     pjsua_config ua{}; pjsua_logging_config log{}; pjsua_media_config media{};
     api_.config_default(&ua); api_.logging_config_default(&log); api_.media_config_default(&media);
     ua.cb = callbacks; ua.max_calls = 7; ua.thread_cnt = 0; ua.stun_srv_cnt = 0;
+    ua.defer_incoming_media = PJ_TRUE;
     ua.enable_unsolicited_mwi = PJ_FALSE;
     ua.enable_upnp = PJ_FALSE; ua.use_srtp = PJMEDIA_SRTP_DISABLED;
     media.thread_cnt = 0; media.has_ioqueue = PJ_FALSE; media.max_media_ports = 12;

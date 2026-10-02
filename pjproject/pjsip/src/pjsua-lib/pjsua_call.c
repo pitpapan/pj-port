@@ -2079,6 +2079,10 @@ pj_bool_t pjsua_call_on_incoming(pjsip_rx_data *rdata)
     call->async_call.dlg = dlg;
     pj_list_init(&call->async_call.call_var.inc_call.answers);
 
+    call->media_deferred = pjsua_var.ua_cfg.defer_incoming_media && !replaced_dlg;
+    if (call->media_deferred && offer)
+        call->deferred_offer = pjmedia_sdp_session_clone(dlg->pool, offer);
+
     pjsip_dlg_inc_session(dlg, &pjsua_var.mod);
     should_dec_dlg = PJ_TRUE;
 
@@ -2117,6 +2121,7 @@ pj_bool_t pjsua_call_on_incoming(pjsip_rx_data *rdata)
             call->async_call.dlg = NULL;
             goto on_return;
         }
+        if (!call->media_deferred) {
         status = pjsua_media_channel_init(call->index, PJSIP_ROLE_UAS,
                                           call->secure_level,
                                           rdata->tp_info.pool,
@@ -2181,6 +2186,7 @@ pj_bool_t pjsua_call_on_incoming(pjsip_rx_data *rdata)
             call->inv = NULL;
             call->async_call.dlg = NULL;
             goto on_return;
+        }
         }
     }
 
@@ -2798,7 +2804,7 @@ on_answer_call_med_tp_complete(pjsua_call_id call_id,
 
     status = pjsua_media_channel_create_sdp(call_id,
                                             call->async_call.dlg->pool,
-                                            NULL, &sdp, &sip_err_code);
+                                            call->deferred_offer, &sdp, &sip_err_code);
     if (status != PJ_SUCCESS) {
         pjsua_perror(THIS_FILE, "Error creating SDP answer", status);
         goto on_return;
@@ -2840,7 +2846,9 @@ on_return:
     call->med_ch_cb = NULL;
 
     /* Finish any pending process */
+    call->media_prepare_status = status;
     if (status == PJ_SUCCESS) {
+        call->deferred_offer = NULL;
         /* Process pending call answers */
         process_pending_call_answer(call);
     }
@@ -2849,6 +2857,38 @@ on_return:
     return status;
 }
 
+
+/* Prepare an admitted, promoted incoming call without answering it. */
+PJ_DEF(pj_status_t) pjsua_call_prepare_media(pjsua_call_id call_id)
+{
+    pjsua_call *call;
+    pjsip_dialog *dlg = NULL;
+    pj_status_t status;
+    PJ_ASSERT_RETURN(call_id >= 0 && call_id < (int)pjsua_var.ua_cfg.max_calls,
+                     PJ_EINVAL);
+    status = acquire_call("pjsua_call_prepare_media()", call_id, &call, &dlg);
+    if (status != PJ_SUCCESS) return status;
+    if (!call->inv || dlg->role != PJSIP_ROLE_UAS ||
+        call->inv->state == PJSIP_INV_STATE_DISCONNECTED || call->hanging_up) {
+        status = PJ_EINVALIDOP;
+    } else if (!call->media_deferred) {
+        status = call->media_prepare_status;
+    } else {
+        PJSUA_LOCK();
+        call->media_deferred = PJ_FALSE;
+        call->opt_inited = PJ_TRUE;
+        status = pjsua_media_channel_init(call_id,
+                     call->deferred_offer ? PJSIP_ROLE_UAS : PJSIP_ROLE_UAC,
+                     call->secure_level, dlg->pool, call->deferred_offer,
+                     NULL, PJ_TRUE, &on_answer_call_med_tp_complete);
+        if (status == PJ_SUCCESS)
+            status = on_answer_call_med_tp_complete(call_id, NULL);
+        call->media_prepare_status = status;
+        PJSUA_UNLOCK();
+    }
+    pjsip_dlg_dec_lock(dlg);
+    return status;
+}
 
 /*
  * Send response to incoming INVITE request.
@@ -2921,7 +2961,12 @@ PJ_DEF(pj_status_t) pjsua_call_answer2(pjsua_call_id call_id,
      * - call setting has just been set, or SDP offer needs to be sent, i.e:
      *   answer code 183 or 2xx is issued
      */
-    if (!call->med_ch_cb &&
+    if (call->media_deferred && code >= 183 && code < 300) {
+        PJSUA_UNLOCK();
+        status = PJ_EINVALIDOP;
+        goto on_return;
+    }
+    if (!call->media_deferred && !call->med_ch_cb &&
         (call->opt_inited || (code==183 || code/100==2)) &&
         (!call->inv->neg ||
          pjmedia_sdp_neg_get_state(call->inv->neg) ==

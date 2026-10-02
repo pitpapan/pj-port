@@ -53,6 +53,7 @@ struct PjsuaApi {
                                const pj_str_t *, const pjsua_msg_data *) = nullptr;
     pj_status_t (*call_hangup)(pjsua_call_id, unsigned,
                                const pj_str_t *, const pjsua_msg_data *) = nullptr;
+    pj_status_t (*call_prepare_media)(pjsua_call_id) = nullptr;
 };
 
 const PjsuaApi &NativePjsuaApi() noexcept;

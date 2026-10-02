@@ -2299,6 +2299,10 @@ typedef struct pjsua_config
      */
     unsigned        thread_cnt;
 
+    /** Port extension: retain incoming SIP/SDP without media transports until
+     * pjsua_call_prepare_media(). Disabled by default. */
+    pj_bool_t       defer_incoming_media;
+
     /**
      * Number of nameservers. If no name server is configured, the SIP SRV
      * resolution would be disabled, and domain will be resolved with
@@ -6208,7 +6212,9 @@ PJ_DECL(pj_status_t) pjsua_call_get_rem_nat_type(pjsua_call_id call_id,
  *
  * @return              PJ_SUCCESS on success, or the appropriate error code.
  */
-PJ_DECL(pj_status_t) pjsua_call_answer(pjsua_call_id call_id, 
+PJ_DECL(pj_status_t) pjsua_call_prepare_media(pjsua_call_id call_id);
+
+PJ_DECL(pj_status_t) pjsua_call_answer(pjsua_call_id call_id,
                                        unsigned code,
                                        const pj_str_t *reason,
                                        const pjsua_msg_data *msg_data);

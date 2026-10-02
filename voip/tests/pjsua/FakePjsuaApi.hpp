@@ -12,7 +12,7 @@ class FakePjsuaApi final {
 public:
     enum class Stage { arena, create, init, no_sound, transport, start, destroy };
     enum class CallEntry { make_call, set_user_data, get_info, answer2,
-                           set_hold2, reinvite2, answer, hangup, count };
+                           set_hold2, reinvite2, answer, hangup, prepare_media, count };
     FakePjsuaApi() noexcept { active_ = this; }
     ~FakePjsuaApi() noexcept { if (active_ == this) active_ = nullptr; }
     void Activate() noexcept { active_ = this; }
@@ -525,7 +525,11 @@ private:
     // creates a bounded fake call record.
     static pj_status_t CallAnswer(pjsua_call_id, unsigned status, const pj_str_t *, const pjsua_msg_data *) { FakePjsuaApi &fake = Active(); fake.answer_count_.fetch_add(1, std::memory_order_release); fake.answer_status_.store(status, std::memory_order_release); fake.Record("answer"); return fake.CallFailure(CallEntry::answer); }
     static pj_status_t CallHangup(pjsua_call_id, unsigned status, const pj_str_t *, const pjsua_msg_data *) { FakePjsuaApi &fake = Active(); fake.hangup_count_.fetch_add(1, std::memory_order_release); fake.hangup_status_.store(status, std::memory_order_release); fake.Record("hangup"); return fake.CallFailure(CallEntry::hangup); }
-    PjsuaApi api_{ArenaInstall, ArenaReset, Create, ThreadIsRegistered, ThreadRegister, ConfigDefault, LogDefault, MediaDefault, TransportDefault, Init, NoSound, TransportCreate, TransportClose, Start, Pump, Destroy, AccountConfigDefault, AccountAdd, AccountSetUserData, AccountGetUserData, AccountDelete, AccountSetRegistration, CallSettingDefault, CallMakeCall, CallSetUserData, CallGetUserData, CallGetInfo, CallAnswer2, CallSetHold2, CallReinvite2, CallAnswer, CallHangup};
+    static pj_status_t CallPrepareMedia(pjsua_call_id id) {
+        FakePjsuaApi &fake = Active(); fake.Record("prepare-media");
+        return fake.ValidCallId(id) ? fake.CallFailure(CallEntry::prepare_media) : PJ_EINVAL;
+    }
+    PjsuaApi api_{ArenaInstall, ArenaReset, Create, ThreadIsRegistered, ThreadRegister, ConfigDefault, LogDefault, MediaDefault, TransportDefault, Init, NoSound, TransportCreate, TransportClose, Start, Pump, Destroy, AccountConfigDefault, AccountAdd, AccountSetUserData, AccountGetUserData, AccountDelete, AccountSetRegistration, CallSettingDefault, CallMakeCall, CallSetUserData, CallGetUserData, CallGetInfo, CallAnswer2, CallSetHold2, CallReinvite2, CallAnswer, CallHangup, CallPrepareMedia};
 };
 inline FakePjsuaApi *FakePjsuaApi::active_ = nullptr;
 } // namespace voip::test
