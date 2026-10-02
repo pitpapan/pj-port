@@ -1287,6 +1287,12 @@ typedef struct pjsua_callback
      */
     void (*on_call_media_state)(pjsua_call_id call_id);
 
+    /** Port extension: final SDP/media update result, including failures
+     * which leave an established dialog alive without a media-state callback.
+     * Optional; callback arguments are borrowed for this invocation only.
+     */
+    void (*on_call_media_update_result)(pjsua_call_id call_id, pj_status_t status);
+
 
     /**
      * Notify application when a call has just created a local SDP (for 

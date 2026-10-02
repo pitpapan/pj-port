@@ -2007,9 +2007,19 @@ void test_task6_media_results_complete_once() {
             voip::RuntimeNotification n{};
             n.token=810;
             n.type=held ? voip::RuntimeNotification::Type::call_held : voip::RuntimeNotification::Type::call_resumed;
-            n.error=failure ? voip::Error::media_failed : voip::Error::ok;
+            n.error=failure ? voip::Error::negotiation_failed : voip::Error::ok;
+            n.sip_status=failure ? 488 : 200;
+            n.status.sip_status=n.sip_status;
+            std::strcpy(n.status.reason, failure ? "Not Acceptable Here" : "OK");
             assert(f.runtime.InjectNotification(n)==voip::Error::ok); f.Step(f.now);
             assert(f.Completions(operation,n.error)==1);
+            for (unsigned i=0; i<f.count; ++i) {
+                if (f.events[i].type==voip::EventType::operation_terminal &&
+                    f.events[i].operation==operation) {
+                    assert(f.events[i].status.sip_status==n.sip_status);
+                    assert(std::strcmp(f.events[i].status.reason,n.status.reason)==0);
+                }
+            }
             voip::CallSnapshot state{}; assert(f.runtime.GetCallSnapshot(call,&state)==voip::Error::ok);
             assert(state.state==((held != failure) ? voip::CallState::hold : voip::CallState::established));
             const auto before=f.count;

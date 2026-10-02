@@ -2,6 +2,7 @@
 #define VOIP_PJSUA_CALLBACK_ROUTER_HPP
 
 #include "PjsuaApi.hpp"
+#include "PjsuaCallRecords.hpp"
 #include <voip/VoipTypes.hpp>
 #include <array>
 #include <cstdint>
@@ -29,6 +30,8 @@ public:
     virtual void OnIncomingCall(pjsua_acc_id, pjsua_call_id) noexcept = 0;
     virtual void OnCallState(pjsua_call_id) noexcept = 0;
     virtual void OnCallMediaState(pjsua_call_id) noexcept = 0;
+    virtual void OnCallTransaction(const PjsuaCallTransactionRecord &) noexcept {}
+    virtual void OnCallMediaUpdateResult(pjsua_call_id, pj_status_t) noexcept {}
 };
 class PjsuaCallbackRouter final {
 public:
@@ -54,6 +57,8 @@ private:
     static void OnIncomingCall(pjsua_acc_id, pjsua_call_id, pjsip_rx_data *) noexcept;
     static void OnCallState(pjsua_call_id, pjsip_event *) noexcept;
     static void OnCallMediaState(pjsua_call_id) noexcept;
+    static void OnCallTransaction(pjsua_call_id, pjsip_transaction *, pjsip_event *) noexcept;
+    static void OnCallMediaUpdateResult(pjsua_call_id, pj_status_t) noexcept;
     void ForwardStarted(pjsua_acc_id, const pjsua_reg_info *) noexcept;
     void ForwardState(pjsua_acc_id, const pjsua_reg_info *) noexcept;
     void ForwardIncoming(pjsua_acc_id, pjsua_call_id) noexcept;

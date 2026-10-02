@@ -163,6 +163,7 @@ Error PjsuaCallManager::SetHeld(std::uint32_t token, bool held) noexcept {
     // Install before entering PJSUA: media callbacks may be synchronous.
     context->media_control = held ? PjsuaCallContext::MediaControl::hold
                                   : PjsuaCallContext::MediaControl::resume;
+    context->control_cseq = 0;
     Error result = Error::unsupported_configuration;
     if (held) {
         if (api_.call_set_hold2 != nullptr) result = Native(context->native_id,
@@ -496,6 +497,65 @@ void PjsuaCallManager::OnCallMediaState(pjsua_call_id native_id) noexcept {
             }
         }
     }
+    FinishCallback(*context);
+}
+
+void PjsuaCallManager::FailMediaControl(PjsuaCallContext &context, Error error,
+                                       const pjsua_call_info &info) noexcept {
+    if (context.media_control != PjsuaCallContext::MediaControl::hold &&
+        context.media_control != PjsuaCallContext::MediaControl::resume) return;
+    const auto type = context.media_control == PjsuaCallContext::MediaControl::hold
+        ? RuntimeNotification::Type::call_held : RuntimeNotification::Type::call_resumed;
+    context.media_control = PjsuaCallContext::MediaControl::result;
+    // Keep the business phase and previous negotiated direction unchanged.
+    (void)EnqueueCall(context, type, info, error);
+}
+
+void PjsuaCallManager::OnCallTransaction(const PjsuaCallTransactionRecord &record) noexcept {
+    PjsuaCallContext *context = Find(record.native_id);
+    if (context == nullptr || !OwnsNativeUserData(*context) ||
+        record.role != PJSIP_ROLE_UAC || record.method != PJSIP_INVITE_METHOD ||
+        record.cseq <= 0) return;
+    const bool pending = context->media_control == PjsuaCallContext::MediaControl::hold ||
+                         context->media_control == PjsuaCallContext::MediaControl::resume;
+    // Only a newly dispatched local INVITE can bind a control. A late final
+    // response cannot bind itself to a later command; retries use a new CSeq.
+    if (record.state == PJSIP_TSX_STATE_CALLING &&
+        record.cseq > context->last_local_invite_cseq) {
+        context->last_local_invite_cseq = record.cseq;
+        if (pending && !context->terminal_seen) context->control_cseq = record.cseq;
+    }
+    if (!pending || context->terminal_seen || record.cseq != context->control_cseq ||
+        record.state < PJSIP_TSX_STATE_COMPLETED ||
+        ((record.sip_status == 401 || record.sip_status == 407) && record.auth_retry)) return;
+    Error error = Error::ok;
+    if (record.timeout || record.transport_result == PJ_ETIMEDOUT) error = Error::timed_out;
+    else if (record.transport_result != PJ_SUCCESS) error = Error::signaling_failed;
+    else if (record.sip_status == 488 || record.sip_status == 415 || record.sip_status == 606)
+        error = Error::negotiation_failed;
+    else if (record.sip_status >= 300) error = Error::remote_rejected;
+    else if (record.sip_status < 200) error = Error::signaling_failed;
+    if (error == Error::ok) return; // 2xx waits for negotiated media, not SIP alone.
+    ++context->callback_depth;
+    pjsua_call_info info{};
+    if (api_.call_get_info != nullptr && api_.call_get_info(record.native_id, &info) == PJ_SUCCESS) {
+        info.last_status = static_cast<pjsip_status_code>(record.sip_status);
+        info.last_status_text = {const_cast<char *>(record.reason),
+                                static_cast<pj_ssize_t>(std::strlen(record.reason))};
+        FailMediaControl(*context, error, info);
+    }
+    FinishCallback(*context);
+}
+
+void PjsuaCallManager::OnCallMediaUpdateResult(pjsua_call_id id, pj_status_t status) noexcept {
+    if (status == PJ_SUCCESS) return;
+    PjsuaCallContext *context = Find(id);
+    if (context == nullptr || !OwnsNativeUserData(*context) || context->terminal_seen ||
+        context->control_cseq == 0 || api_.call_get_info == nullptr) return;
+    ++context->callback_depth;
+    pjsua_call_info info{};
+    if (api_.call_get_info(id, &info) == PJ_SUCCESS)
+        FailMediaControl(*context, Error::negotiation_failed, info);
     FinishCallback(*context);
 }
 

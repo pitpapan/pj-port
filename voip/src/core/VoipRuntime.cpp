@@ -371,10 +371,10 @@ void VoipRuntime::BindCallOperation(CallContext &context,
 }
 
 void VoipRuntime::CompleteCallOperations(CallContext &context,
-                                         Error error) noexcept {
+                                         Error error, const Status *status) noexcept {
     const OperationId signaling = context.signaling_operation;
     const OperationId current = context.operation;
-    CompleteOperationIds(signaling, current, error);
+    CompleteOperationIds(signaling, current, error, status);
     context.signaling_operation = 0;
     context.operation = 0;
     context.pending_operation = CallContext::PendingOperation::none;
@@ -382,10 +382,12 @@ void VoipRuntime::CompleteCallOperations(CallContext &context,
 
 void VoipRuntime::CompleteOperationIds(OperationId signaling,
                                        OperationId current,
-                                       Error error) noexcept {
-    if (signaling != 0) (void)operations_.Complete(signaling, error);
+                                       Error error, const Status *status) noexcept {
+    const std::uint16_t sip = status == nullptr ? 0 : status->sip_status;
+    const char *reason = status == nullptr ? nullptr : status->reason;
+    if (signaling != 0) (void)operations_.Complete(signaling, error, sip, reason);
     if (current != 0 && current != signaling)
-        (void)operations_.Complete(current, error);
+        (void)operations_.Complete(current, error, sip, reason);
 }
 
 void VoipRuntime::FinalizeTerminal(CallHandle handle,
@@ -636,14 +638,14 @@ void VoipRuntime::ProcessNotification(const RuntimeNotification &notification) n
     case RuntimeNotification::Type::call_resumed:
         if (context->pending_operation != CallContext::PendingOperation::set_held) break;
         if (notification.error != Error::ok) {
-            CompleteCallOperations(*context, notification.error);
+            CompleteCallOperations(*context, notification.error, &call_status);
             break;
         }
         error = scheduler_.SetHeld(context->handle,
             notification.type == RuntimeNotification::Type::call_held, &transition);
         if (error == Error::ok) {
             PublishTransition(transition, &call_status);
-            CompleteCallOperations(*context, Error::ok);
+            CompleteCallOperations(*context, Error::ok, &call_status);
         }
         break;
     case RuntimeNotification::Type::incoming_call:
@@ -729,10 +731,9 @@ void VoipRuntime::ProcessCommand(const VoipCommand &command) noexcept {
     }
     // A second command while native negotiation is pending reports busy rather
     // than cancelling the first operation. Hangup is the one exception: PJSUA
-    // emits no media callback when a peer rejects a hold/resume re-INVITE
-    // without terminating the dialog, so without this escape the call and one
-    // of the two global promoted leases stay wedged until remote BYE or
-    // shutdown. BindCallOperation still completes the superseded media
+    // may still have an in-flight negotiation when hangup arrives. The
+    // transaction/result callbacks normally resolve rejection, but hangup
+    // remains available before that result. BindCallOperation completes the superseded media
     // operation exactly once, as cancelled.
     if (context->pending_operation != CallContext::PendingOperation::none &&
         !(command.type == CommandType::hangup &&

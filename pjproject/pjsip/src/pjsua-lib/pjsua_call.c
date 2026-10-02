@@ -5487,6 +5487,14 @@ static void pjsua_call_on_media_update(pjsip_inv_session *inv,
         /* Revert back provisional media. */
         pjsua_media_prov_revert(call->index);
 
+        /* A failed answer to a local control must also restore the hold
+         * intent used for future offers, not only the live media stream.
+         */
+        if (call->hold_msg)
+            call->local_hold = PJ_FALSE;
+        else if (call->opt.flag & PJSUA_CALL_UNHOLD)
+            call->local_hold = PJ_TRUE;
+
         /* Do not deinitialize media since this may be a re-INVITE or
          * UPDATE (which in this case the media should not get affected
          * by the failed re-INVITE/UPDATE). The media will be shutdown
@@ -5585,6 +5593,9 @@ static void pjsua_call_on_media_update(pjsip_inv_session *inv,
         pjsua_var.ua_cfg.cb.on_call_media_state(call->index);
 
 on_return:
+    if (call && !call->hanging_up &&
+        pjsua_var.ua_cfg.cb.on_call_media_update_result)
+        pjsua_var.ua_cfg.cb.on_call_media_update_result(call->index, status);
     pj_log_pop_indent();
 }
 

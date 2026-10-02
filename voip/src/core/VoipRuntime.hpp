@@ -99,9 +99,9 @@ private:
     void RefreshResources() noexcept;
     void CompleteCallOperation(const CallContext &, Error) noexcept;
     void BindCallOperation(CallContext &, OperationId) noexcept;
-    void CompleteCallOperations(CallContext &, Error) noexcept;
+    void CompleteCallOperations(CallContext &, Error, const Status * = nullptr) noexcept;
     void CompleteOperationIds(OperationId signaling, OperationId current,
-                              Error) noexcept;
+                              Error, const Status * = nullptr) noexcept;
     void FinalizeTerminal(CallHandle, SchedulerEffects &) noexcept;
     void CancelAllCalls() noexcept;
     void ApplyTimers(std::uint64_t now_ms) noexcept;

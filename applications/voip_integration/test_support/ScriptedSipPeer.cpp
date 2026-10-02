@@ -153,6 +153,8 @@ void Handle(Connection &connection) {
         connection.bye_sent = false;
         if (connection.script == SipPeerScript::close_transport) { Close(connection); return; }
         if (connection.script == SipPeerScript::reject_486) { Reply(connection, 486, "Busy Here", nullptr); return; }
+        if (connection.script == SipPeerScript::reject_488) { Reply(connection, 488, "Not Acceptable Here", nullptr); return; }
+        if (connection.script == SipPeerScript::reject_500) { Reply(connection, 500, "Server Internal Error", nullptr); return; }
         Reply(connection, 100, "Trying", nullptr); atomic_inc(&state.trying);
         connection.response_stage = 1;
         connection.response_at = k_uptime_get() + 50;
@@ -338,7 +340,10 @@ void PumpPeer() {
                         connection.response_stage = 0;
                         continue;
                     }
-                    Reply(connection, 200, "OK", Sdp(connection.script != SipPeerScript::malformed_sdp));
+                    const char *sdp = connection.script == SipPeerScript::unusable_sdp ?
+                        "v=0\r\no=peer 1 1 IN IP4 127.0.0.1\r\ns=peer\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 4002 RTP/AVP 126\r\na=rtpmap:126 L16/44100\r\na=sendrecv\r\n" :
+                        Sdp(connection.script != SipPeerScript::malformed_sdp);
+                    Reply(connection, 200, "OK", sdp);
                     connection.response_stage = 0;
                 } else {
                     char invite[message_bytes]{};

@@ -35,6 +35,8 @@ Error PjsuaCallbackRouter::Attach(pjsua_callback *callbacks) noexcept {
     callbacks->on_incoming_call = &OnIncomingCall;
     callbacks->on_call_state = &OnCallState;
     callbacks->on_call_media_state = &OnCallMediaState;
+    callbacks->on_call_tsx_state = &OnCallTransaction;
+    callbacks->on_call_media_update_result = &OnCallMediaUpdateResult;
     return Error::ok;
 }
 void PjsuaCallbackRouter::BeginQuiescence() noexcept {
@@ -70,8 +72,40 @@ void PjsuaCallbackRouter::OnIncomingCall(pjsua_acc_id account, pjsua_call_id cal
 #endif
     if (active_ != nullptr) active_->ForwardIncoming(account, call);
 }
-void PjsuaCallbackRouter::OnCallState(pjsua_call_id call, pjsip_event *) noexcept {
+void PjsuaCallbackRouter::OnCallState(pjsua_call_id call, pjsip_event *event) noexcept {
+    // A transport error can disconnect the dialog before its normal
+    // transaction callback. Copy the pending INVITE result before release.
+    if (event != nullptr && event->type == PJSIP_EVENT_TSX_STATE)
+        OnCallTransaction(call, event->body.tsx_state.tsx, event);
     if (active_ != nullptr) active_->ForwardCallState(call);
+}
+void PjsuaCallbackRouter::OnCallTransaction(pjsua_call_id call,
+        pjsip_transaction *tsx, pjsip_event *event) noexcept {
+    if (active_ == nullptr || active_->calls_ == nullptr || tsx == nullptr) return;
+    active_->AssertActor();
+    PjsuaCallTransactionRecord record{};
+    record.native_id = call; record.method = tsx->method.id;
+    record.role = tsx->role; record.cseq = tsx->cseq;
+    record.state = tsx->state; record.sip_status = tsx->status_code;
+    record.transport_result = tsx->transport_err;
+    record.auth_retry = tsx->last_tx != nullptr && tsx->last_tx->auth_retry;
+    if (event != nullptr && event->type == PJSIP_EVENT_TSX_STATE) {
+        record.timeout = event->body.tsx_state.type == PJSIP_EVENT_TIMER;
+        if (event->body.tsx_state.type == PJSIP_EVENT_TRANSPORT_ERROR)
+            record.transport_result = event->body.tsx_state.src.status;
+    }
+    if (tsx->status_text.ptr != nullptr && tsx->status_text.slen > 0) {
+        const auto length = static_cast<std::size_t>(tsx->status_text.slen);
+        const auto copied = length > max_reason_length ? max_reason_length : length;
+        std::memcpy(record.reason, tsx->status_text.ptr, copied);
+    }
+    active_->calls_->OnCallTransaction(record);
+}
+void PjsuaCallbackRouter::OnCallMediaUpdateResult(pjsua_call_id call,
+                                                pj_status_t status) noexcept {
+    if (active_ == nullptr || active_->calls_ == nullptr) return;
+    active_->AssertActor();
+    active_->calls_->OnCallMediaUpdateResult(call, status);
 }
 void PjsuaCallbackRouter::OnCallMediaState(pjsua_call_id call) noexcept {
     if (active_ != nullptr) active_->ForwardCallMediaState(call);

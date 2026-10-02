@@ -91,6 +91,61 @@ void UnsolicitedMediaCannotOverflow() {
     f.Pop(RuntimeNotification::Type::call_finished,token);
     f.Empty(); assert(f.calls.Count()==0 && f.fake.CallUserData(0)==nullptr);
 }
+void TransactionFailureMatrix() {
+    Fixture f; const auto token=f.Outgoing(0);
+    f.State(0,PJSIP_INV_STATE_CONFIRMED,200,true);
+    f.Pop(RuntimeNotification::Type::call_accepted,token);
+    pj_int32_t sequence=100;
+    for (bool held : {true,false}) {
+        for (unsigned fault=0; fault<5; ++fault) {
+            assert(f.calls.SetHeld(token,held)==Error::ok);
+            PjsuaCallTransactionRecord record{};
+            record.native_id=0; record.method=PJSIP_INVITE_METHOD;
+            record.role=PJSIP_ROLE_UAC; record.cseq=++sequence;
+            record.state=PJSIP_TSX_STATE_CALLING;
+            f.calls.OnCallTransaction(record);
+            auto unrelated=record;
+            unrelated.state=PJSIP_TSX_STATE_COMPLETED; unrelated.sip_status=488;
+            unrelated.cseq--; f.calls.OnCallTransaction(unrelated);
+            unrelated.cseq=record.cseq; unrelated.role=PJSIP_ROLE_UAS;
+            f.calls.OnCallTransaction(unrelated); f.Empty();
+            record.state=PJSIP_TSX_STATE_COMPLETED;
+            record.sip_status=fault==0 ? 488 : fault==1 ? 500 : fault==4 ? 200 : 408;
+            record.transport_result=fault==2 ? PJ_EEOF : fault==3 ? PJ_ETIMEDOUT : PJ_SUCCESS;
+            record.timeout=fault==3;
+            std::strcpy(record.reason,"control failed");
+            if (fault==4) {
+                f.calls.OnCallTransaction(record); f.Empty(); // 200 is not media success.
+                f.calls.OnCallMediaUpdateResult(0,PJ_EUNKNOWN);
+            } else f.calls.OnCallTransaction(record);
+            const Error errors[]={Error::negotiation_failed,Error::remote_rejected,
+                Error::signaling_failed,Error::timed_out,Error::negotiation_failed};
+            auto n=f.Pop(held ? RuntimeNotification::Type::call_held : RuntimeNotification::Type::call_resumed,token);
+            assert(n.error==errors[fault]);
+            if (fault!=4) assert(n.sip_status==record.sip_status);
+            f.calls.OnCallTransaction(record);
+            f.calls.OnCallMediaUpdateResult(0,PJ_EUNKNOWN); f.Empty();
+        }
+        assert(f.calls.SetHeld(token,held)==Error::ok); // failure kept the prior phase.
+        f.Media(0,held ? PJMEDIA_DIR_ENCODING : PJMEDIA_DIR_ENCODING_DECODING);
+        f.Pop(held ? RuntimeNotification::Type::call_held : RuntimeNotification::Type::call_resumed,token);
+    }
+    // Authentication retry must bind the newer INVITE and ignore the old final.
+    assert(f.calls.SetHeld(token,true)==Error::ok);
+    PjsuaCallTransactionRecord record{};
+    record.native_id=0; record.method=PJSIP_INVITE_METHOD; record.role=PJSIP_ROLE_UAC;
+    record.cseq=++sequence; record.state=PJSIP_TSX_STATE_CALLING;
+    f.calls.OnCallTransaction(record);
+    record.state=PJSIP_TSX_STATE_COMPLETED; record.sip_status=401; record.auth_retry=true;
+    f.calls.OnCallTransaction(record); f.Empty();
+    auto retry=record; retry.cseq=++sequence; retry.state=PJSIP_TSX_STATE_CALLING;
+    retry.sip_status=0; retry.auth_retry=false; f.calls.OnCallTransaction(retry);
+    record.auth_retry=false; record.sip_status=488; f.calls.OnCallTransaction(record); f.Empty();
+    retry.state=PJSIP_TSX_STATE_COMPLETED; retry.sip_status=500; f.calls.OnCallTransaction(retry);
+    assert(f.Pop(RuntimeNotification::Type::call_held,token).error==Error::remote_rejected);
+    f.State(0,PJSIP_INV_STATE_DISCONNECTED); f.Pop(RuntimeNotification::Type::call_finished,token);
+    f.calls.OnCallTransaction(retry); f.Empty();
+}
 void LifecycleAndControlMatrix() {
     Fixture f; const auto token=f.Outgoing(0);
     f.State(0,PJSIP_INV_STATE_CALLING); f.State(0,PJSIP_INV_STATE_EARLY); f.Empty();
@@ -314,6 +369,7 @@ void LiveShutdownRetainsStorageAndOrdersCleanup() {
 }
 }
 void RunPjsuaCallStateTests() {
+    TransactionFailureMatrix();
     HeldDisconnectRetainsLeaseUntilMediaStops();
     UnsolicitedMediaCannotOverflow(); LifecycleAndControlMatrix();
     RejectionsAndCopiedPressure(); TransportEof503IsNotRemote503(); OnePendingControlBoundsStorage();

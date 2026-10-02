@@ -224,3 +224,8 @@ queued incoming calls (including an offerless INVITE) leave the creation
 counter unchanged. The pre-fix run failed each assertion. The post-fix run
 also establishes an offerless promoted call and checks five full lifecycles,
 FIFO, rejection, CANCEL, timeout, native-ID reuse and heap/arena cleanup.
+
+The optional port-local `on_call_media_update_result(call_id, status)` reports
+failed SDP negotiation even when the established dialog and its previous
+stream remain alive. The service correlates local INVITE CSeqs through
+`on_call_tsx_state`; SIP 200 alone is not a successful media operation.

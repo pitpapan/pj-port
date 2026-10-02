@@ -42,6 +42,7 @@ struct Seen {
     CallEvidence calls[16]{}; unsigned count{}, incoming{}, accepted{}, finished{};
     struct OperationEvidence {
         voip::OperationId id{}; voip::Error expected{}; voip::Error actual{}; unsigned completions{};
+        unsigned sip{};
     } operations[64]{};
     unsigned operation_count{}, observed_operations{}, full_capacity_proofs{};
     bool registered[5]{}; voip::CallHandle last_incoming{};
@@ -66,6 +67,7 @@ void Record(const voip::Event &event, Seen &seen) {
             CHECK(operation.completions == 0);
             CHECK(event.status.error == operation.expected);
             operation.actual = event.status.error;
+            operation.sip = event.status.sip_status;
             ++operation.completions;
             ++seen.observed_operations;
             return;
@@ -574,10 +576,35 @@ int main() {
                 while (peer.Stats().reinvite_acks < peer.Stats().reinvites && k_uptime_get() < reinvite_deadline)
                     Poll(service, seen);
                 CHECK(peer.Stats().reinvite_acks == peer.Stats().reinvites);
+                peer.SetNextOutgoing(SipPeerScript::reject_488);
+                submission = service.SetHeld(queued_a, true, &operation);
+                Submitted(seen, submission, operation, voip::Error::negotiation_failed);
+                CHECK(WaitOperation(service, seen, operation, voip::Error::negotiation_failed));
+                CHECK(WaitState(service, seen, queued_a, voip::CallState::established));
+                for (unsigned i=0; i<seen.operation_count; ++i)
+                    if (seen.operations[i].id==operation) CHECK(seen.operations[i].sip==488);
+                for (auto script : {SipPeerScript::reject_500, SipPeerScript::unusable_sdp}) {
+                    const auto expected = script==SipPeerScript::reject_500 ?
+                        voip::Error::remote_rejected : voip::Error::negotiation_failed;
+                    peer.SetNextOutgoing(script);
+                    submission = service.SetHeld(queued_a, true, &operation);
+                    Submitted(seen, submission, operation, expected);
+                    CHECK(WaitOperation(service, seen, operation, expected));
+                    CHECK(WaitState(service, seen, queued_a, voip::CallState::established));
+                }
+                peer.SetNextOutgoing(SipPeerScript::answer);
                 submission = service.SetHeld(queued_a, true, &operation);
                 Submitted(seen, submission, operation, voip::Error::ok);
                 CHECK(WaitState(service, seen, queued_a, voip::CallState::hold));
                 CHECK(WaitOperation(service, seen, operation, voip::Error::ok));
+                peer.SetNextOutgoing(SipPeerScript::reject_488);
+                submission = service.SetHeld(queued_a, false, &operation);
+                Submitted(seen, submission, operation, voip::Error::negotiation_failed);
+                CHECK(WaitOperation(service, seen, operation, voip::Error::negotiation_failed));
+                CHECK(WaitState(service, seen, queued_a, voip::CallState::hold));
+                for (unsigned i=0; i<seen.operation_count; ++i)
+                    if (seen.operations[i].id==operation) CHECK(seen.operations[i].sip==488);
+                peer.SetNextOutgoing(SipPeerScript::answer);
                 submission = service.SetHeld(queued_a, false, &operation);
                 Submitted(seen, submission, operation, voip::Error::ok);
                 CHECK(WaitState(service, seen, queued_a, voip::CallState::established));

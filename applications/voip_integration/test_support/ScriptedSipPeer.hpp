@@ -5,7 +5,7 @@
 
 namespace voip_integration {
 
-enum class SipPeerScript : std::uint8_t { answer, malformed_sdp, reject_486, close_transport, cancel_incoming, bye_after_ack, no_final, shared_stream, offerless };
+enum class SipPeerScript : std::uint8_t { answer, malformed_sdp, reject_486, close_transport, cancel_incoming, bye_after_ack, no_final, shared_stream, offerless, reject_488, reject_500, unusable_sdp };
 
 struct SipPeerStats {
     unsigned invites;
