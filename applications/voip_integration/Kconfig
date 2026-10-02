@@ -75,6 +75,10 @@ config VOIP_PJSUA_PLAN4_COMPONENT_TEST
 	bool "PJSUA Plan 4 call API component validation"
 	depends on PJSUA && PJSIP_TCP_TRANSPORT
 
+config VOIP_PJSUA_PLAN5_COMPONENT_TEST
+	bool "PJSUA Plan 5 audio component validation"
+	depends on PJSUA && PJMEDIA
+
 config VOIP_PJSUA_REGISTRATION_TEST
 	bool "PJSUA Plan 3 five-account TCP Digest registration validation"
 	depends on VOIP_SERVICE && VOIP_PJSUA && PJSUA && PJSIP_REGC && PJSIP_TCP_TRANSPORT

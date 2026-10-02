@@ -45,6 +45,7 @@ if(CONFIG_VOIP_SERVICE)
   )
   zephyr_library_sources_ifdef(CONFIG_VOIP_PJSUA
     ../src/pjsua/PjsuaApi.cpp
+    ../src/pjsua/PjsuaAudioPort.cpp
     ../src/pjsua/PjsuaRuntime.cpp
     ../src/pjsua/PjsuaTransportManager.cpp
     ../src/pjsua/PjsuaCallbackRouter.cpp

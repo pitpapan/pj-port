@@ -297,6 +297,31 @@ void test_rejects_non_integral_audio_frame_duration() {
     assert(registry.Initialize(fixtures.service) == voip::Error::invalid_argument);
 }
 
+void test_pcm_format_boundaries() {
+    Fixtures fixtures;
+    voip::AgentRegistry registry;
+    const voip::PcmFormat formats[] = {
+        {8000,80,1,voip::SampleFormat::signed_16},
+        {8000,160,1,voip::SampleFormat::signed_16},
+        {65535000,65535,1,voip::SampleFormat::signed_16},
+        {0,160,1,voip::SampleFormat::signed_16},
+        {8000,0,1,voip::SampleFormat::signed_16},
+        {0xffffffffU,65535,1,voip::SampleFormat::signed_16},
+        {8000,160,1,static_cast<voip::SampleFormat>(99)}};
+    for (unsigned i=0; i<sizeof(formats)/sizeof(formats[0]); ++i) {
+        Source source(formats[i]); Sink sink(formats[i]);
+        fixtures.service.conference_format=formats[i];
+        fixtures.agent.audio={&source,&sink};
+        assert(registry.Initialize(fixtures.service)==
+            (i<3 ? voip::Error::ok : voip::Error::invalid_argument));
+        registry.Reset();
+    }
+    Source source({8000,80,1,voip::SampleFormat::signed_16});
+    fixtures.agent.audio={&source,&fixtures.sink};
+    fixtures.service.conference_format=kFormat;
+    assert(registry.Initialize(fixtures.service)==voip::Error::invalid_argument);
+}
+
 void test_copies_strings_and_maps_configuration_indexes_to_handles() {
     Fixtures fixtures;
     char caller_identity[] = "sip:a@example.test";
@@ -378,6 +403,7 @@ int main() {
     test_copies_all_four_sip_fields_independently();
     test_owned_credentials_can_be_erased_explicitly();
     test_rejects_null_endpoint_bad_format_and_security();
+    test_pcm_format_boundaries();
     test_rejects_non_integral_audio_frame_duration();
     test_copies_strings_and_maps_configuration_indexes_to_handles();
     test_failed_reinitialize_resets_and_invalidates_old_handle();

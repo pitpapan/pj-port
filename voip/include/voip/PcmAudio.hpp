@@ -19,6 +19,12 @@ struct PcmFormat {
 
 // These application-owned objects are borrowed from successful Initialize()
 // through completed Shutdown(). Methods are non-blocking and noexcept.
+// timestamp is a conference sample tick (at Format().sample_rate_hz), not a
+// millisecond time or an encoded RTP timestamp. Each callback covers exactly
+// Format().samples_per_frame mono samples. busy/resource_exhausted denotes
+// transient capture underrun/playout overflow; another error is fatal to the
+// affected call. A failed Read may have written a partial frame: the runtime
+// discards the whole frame and transmits silence.
 class PcmSource {
 public:
     virtual ~PcmSource() noexcept = default;
